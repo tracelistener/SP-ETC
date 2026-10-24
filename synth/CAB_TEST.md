@@ -57,3 +57,11 @@ feed read: `diag_rx` is now a naked entry that takes the packet from the audio t
 those instructions, bounce's bridge and the feed keep r6 and r9). The cabinet still takes the feed's copy. The test:
 the A/B lines while playing on ExtIn with EXT SOURCE on and off, on Mix, and with the Gt Amp Sim's GAIN changed, to
 find the pair with the input after the input FX that EXT SOURCE does not mute. APP1 `4c3acaf8...d1f`; 80 checks.
+
+## Test 2 on the unit (2026-10-24)
+
+The A/B lines while playing (Gt Amp Sim, SP SW off): ExtIn with EXT SOURCE on `A 27 14 0 0  B 0 0 0 0`; ExtIn with EXT
+SOURCE off all zero; Mix with EXT SOURCE on `A 28 13 0 0  B 0 0 0 0`. Only pairs 0 and 1 carry the guitar, and EXT
+SOURCE off silences both: the input is muted before the effects chip sends it on, so no pair has it then. Still open:
+which of the two is after the Gt Amp Sim (its GAIN), and whether MUTE BUS (the input on BUS 1) or the input LEVEL at 0
+silences the output but leaves a pair carrying the input.
