@@ -60,3 +60,8 @@ plus exactly the echo), the gate (23 on, anything else off, one read per 0.1 s),
   count from SDRAM.
 - Whether the effects chip passes the DRY return as the stems' scale says, whether the capture is after the
   input FX, and whether EXT SOURCE off stops the capture too.
+
+## Test 2 (ir-diag-test2)
+
+The same module on combined-test10 (v9.49 plus FX deep edit test9: hold VALUE and press EXT SOURCE on the main
+screen for the input FX's extra screens), so one flash tries all three. APP1 `bb6eee9d...6bce3`; 59 checks pass.
