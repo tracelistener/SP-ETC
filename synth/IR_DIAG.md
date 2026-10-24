@@ -28,7 +28,7 @@ processor would face, before one is written:
 
 ## Sites
 
-The input is v9.49 (combined-test9, `fbcff606...` is v9.48's; v9.49 is `8f285b01...4750`). T0's own jumps at
+The input is v9.49 (combined-test9, APP1 `8f285b01...4750`); the output is `687502de...46a2`. T0's own jumps at
 the audio task's mixer call and at the popup tick are taken by bounce in place, so those two go behind
 bounce's bridges; the rest is T0's.
 
