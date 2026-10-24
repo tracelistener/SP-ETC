@@ -73,3 +73,8 @@ started the cycle counter); no echo. Test 3 is on combined-test11 (FX deep edit 
 dispatcher's handlers). The echo is on while the readout is shown and EXT SOURCE is on (no longer the Gt Amp Sim gate),
 and a sixth readout line says what the unit has: `IN23 LV45 E1` = system 0x27c[0], the capture peak in percent per
 readout, the echo on or off. APP1 `751ddd92...b8b2`; 59 checks pass.
+
+On the unit (test 3, 2026-10-24): the echo comes right away. Main screen `IN32 LV90 E1` (after a restart the input
+FX read `IN0`, Bypass, which is why test 2's Gt Amp Sim gate never opened), with the Gt Amp Sim `IN23 LV42 E1`. So the
+capture holds the input outside sampling and a return added to the DRY pair is heard: the path an IR or NAM stage
+needs works. VALUE + EXT SOURCE (combined-test11) went out as v9.50.
