@@ -102,3 +102,14 @@ serve the pool services). NAM's data stays in the SDRAM pool.
 - SLOW: a step over the whole block, or mixer + NAM over 9/10 of it twice in a row. NAM's window is 75 blocks and is
   published when it stops, so the box says how fast it was. The DTCM census is gone.
 - APP1 `4c808fc4...dc6bb`; module 40,128 bytes; pool block 143,520 bytes; 94 checks pass.
+
+## Test 2 on the unit (2026-10-24)
+
+`MIX 8/10 T105`, `NAM 72/94 SLOW`, `IN0 LV0 X1`, `POOL 2527/2527`, `MAX 105 F1`, `CLK 599* OVR 2`. The prewarm ran
+(NAM's window was published): NAM alone averages 72% of a block and peaks at 94%, about 9,000 cycles a sample
+(TONE3000: 4,059 on a Daisy Seed with its code in ITCM and its hot data in DTCM). With the mixer's 8-10% two wakes in a
+row went over 90%, and the guard stopped it. At about 250k instructions a step that is 2.3 cycles an instruction: the
+code and all of NAM's data are in SDRAM, the only memory free for it (the DTCM tail holds the audio DMA buffers, the
+OCRAM heap is the kernel's). Inline FMAs and the real-input cabinet did not change the conclusion: A2-Lite needs
+most of the main processor, more than the SP can spare beside its own audio. The cabinet alone (64-frame partitioned
+convolution, about 30k instructions a block) is the part that fits.
