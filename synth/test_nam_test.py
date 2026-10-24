@@ -733,7 +733,7 @@ def readout(img, man):
 
 
 # ---------------------------------------------------------------------------------------------
-def ui(img, man):
+def ui(img, man, head='MIX '):
     sym = man['symbols']
     S = sym['meter']
     m = Machine(img)
@@ -781,7 +781,7 @@ def ui(img, man):
     check(st['shown'] == 0 and st['posts'] == 0, 'EXIT held just under a second: no toggle')
     st = tick(2000)
     first = text()
-    check(st['shown'] == 1 and st['posts'] == 1 and m.get(POPUP_PENDING) == 3 and first.startswith('MIX ') and
+    check(st['shown'] == 1 and st['posts'] == 1 and m.get(POPUP_PENDING) == 3 and first.startswith(head) and
           first.count('\n') == 5 and m.get(0x802458A4) == 1500,
           f'EXIT held a second on the main screen: readout posted through the stock popup ({first!r}, 1500 ms)')
     built()
@@ -801,7 +801,7 @@ def ui(img, man):
     check(st['posts'] == 3 and text() == 'Same EFX\non other BUS', 'a stock popup on screen: not covered')
     m.put(POPUP_SHOWN, 0, '<I')
     st = tick(10)
-    check(st['posts'] == 4 and text().startswith('MIX '), 'stock popup gone: the readout comes back')
+    check(st['posts'] == 4 and text().startswith(head), 'stock popup gone: the readout comes back')
     built()
     m.put(POPUP_PENDING, 3)
     m.put(S + 4 * 25, st['seq'] + 2)

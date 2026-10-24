@@ -1,4 +1,4 @@
-"""Cabinet test 1: a cabinet IR on the captured input, with the CPU meter, on v9.50 (test only).
+"""Cabinet test 2: a cabinet IR on the captured input, with the CPU meter and the RX pairs' levels, on v9.50 (test only).
 
 NAM tests 1 and 2 showed that a NAM amp does not fit beside the SP's own audio. The cabinet alone does: while the
 meter's readout is shown, the captured input (the RX pair the recorder feed copies) goes through a 1,024-tap cabinet
@@ -46,7 +46,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'cab-test1'
+REVISION = 'cab-test2'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -64,7 +64,8 @@ PENDSV, CUR_TASK = 0x0000DD3C, 0x202BBBFC
 
 EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', 'meter_sg_end',
            'meter_mix_begin', 'meter_mix_end', 'meter_ui_tick', 'meter_format', 'diag_ui', 'diag_rx',
-           'cab_tx', 'cab_rx', 'cab_ui', 'cab_fp_call', 'cab_fp_step', 'cab_prepare', 'cab_process', 'memset', 'memcpy',
+           'cab_tx', 'cab_rx', 'cab_ui', 'cab_pairs', 'diag_rx_c', 'cab_fp_call', 'cab_fp_step', 'cab_prepare',
+           'cab_process', 'memset', 'memcpy',
            'meter', 'ct', 'ct_block', 'ct_layout')
 DATA = ('meter', 'ct', 'ct_block', 'ct_layout')
 
@@ -91,6 +92,9 @@ GUARDS = [
     (UI_TICK, 12, ['movw ip, #0x8081', 'movt ip, #0x83fe', 'bx ip', 'nop'],
      "popup tick entry: bounce's jump to its ui bridge, which re-creates the four stock instructions"),
     (UI_CALLER, 4, ['b.w #0x8006b950'], 'the popup tick is reached from the UI timer tick'),
+    (0x0001D0B4, 14, ['ldr r0, [r6, #4]', 'subs r1, r0, #1', 'it ne', 'addne r1, r0, #1', 'str r1, [r6, #4]',
+                      'add.w r0, sb, r1, lsl #11'],
+     'audio task RX site: this block\'s bank to [r6 + 4], the packet r9 + bank << 11 (diag_rx recomputes it)'),
     (POPUP_POST, 0x36, ['push {r4, lr}', 'mov r4, r1', 'mov r1, r0', 'movw r0, #0x68d8', 'movt r0, #0x8024',
                         'bl #0x800d31da', 'movw r0, #0x589c', 'movt r0, #0x8024', 'ldrb r1, [r0]', 'str r4, [r0, #8]',
                         'cmp r1, #0', 'it eq', 'popeq {r4, pc}', 'movs r1, #3', 'str r1, [r0, #4]',
@@ -731,7 +735,8 @@ def build(inp: Path, out: Path, zig: Path, base: int, ir_wav: Path = None, build
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='Cabinet test 1 (NAM tests 1 and 2: a NAM amp does not fit beside the SP\'s own audio): while the '
+        description='Cabinet test 2 (test 1 on the unit: CAB 15-17%, but LV0 on ROUTING ExtIn and nothing with EXT '
+                    'SOURCE off; the readout now shows the peak of all 8 RX pairs): while the '
                     'CPU meter\'s readout is shown, the captured input through a 1,024-tap cabinet to the DRY pair at '
                     '-6 dB, with its cost per block, the worst wake, the input FX, EXT SOURCE and the audio task\'s '
                     'FPU attribute in the readout',

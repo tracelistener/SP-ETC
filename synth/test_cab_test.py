@@ -1,4 +1,4 @@
-"""Checks for cabinet test 1 (build_cab_test.py): the CPU meter as in IR diagnostic test 3, and the cabinet.
+"""Checks for cabinet test 2 (build_cab_test.py): the CPU meter as in IR diagnostic test 3, and the cabinet.
 
 usage: python synth/test_cab_test.py OUT_DIR --kits KITS_MANIFEST [--seeds N] [--blocks N] [--mixer-runs N] [--only ...]
 
@@ -48,18 +48,20 @@ report = base.report
 class Layout:
     """ct_t and ct_block_t offsets, from the module's ct_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<14I', m.bytes(sym['ct_layout'], 56))
+        v = struct.unpack('<15I', m.bytes(sym['ct_layout'], 60))
         (self.ct_bytes, self.state, self.out, self.peak, self.pub, self.tot_max_ever, self.reset_ack,
-         self.block_bytes, self.b_cab, self.b_ir, self.b_in, self.b_out, self.b_stack, self.cab_bytes) = v
+         self.block_bytes, self.b_cab, self.b_ir, self.b_in, self.b_out, self.b_stack, self.cab_bytes,
+         self.pair_peak) = v
         check(self.state == 4 * (len(CT_NAMES) - 2) and self.out == self.state + 8 and self.peak == self.out + 256 and
-              self.reset_ack == self.peak + 4 * (len(CT_TAIL) - 1) and self.ct_bytes == self.reset_ack + 4,
-              'ct_t layout as the test reads it')
+              self.reset_ack == self.peak + 4 * (len(CT_TAIL) - 1) and self.pair_peak == self.reset_ack + 4 and
+              self.ct_bytes == self.pair_peak + 32, 'ct_t layout as the test reads it')
 
 
 def ct_state(m, sym, lay):
     head = dict(zip(CT_NAMES, struct.unpack(f'<{len(CT_NAMES)}I', m.bytes(sym['ct'], 4 * len(CT_NAMES)))))
     head.update(zip(CT_TAIL, struct.unpack(f'<{len(CT_TAIL)}I', m.bytes(sym['ct'] + lay.peak, 4 * len(CT_TAIL)))))
     head['out'] = list(struct.unpack('<64i', m.bytes(sym['ct'] + lay.out, 256)))
+    head['pairs'] = list(struct.unpack('<8I', m.bytes(sym['ct'] + lay.pair_peak, 32)))
     return head
 
 
@@ -108,18 +110,23 @@ def readout(img, man):
 
     def ct_put(**kw):
         for k, v in kw.items():
-            if k in CT_NAMES:
+            if k == 'pairs':
+                m.uc.mem_write(C + lay.pair_peak, struct.pack('<8I', *v))
+            elif k in CT_NAMES:
                 m.put(C + 4 * CT_NAMES.index(k), v, '<I')
             else:
                 m.put(C + lay.peak + 4 * CT_TAIL.index(k), v, '<I')
     cases = {
         'idle': ((60000, 90000, 0, 0, 0, 0, 0, 800000, 800000, 800000), (375, 0, 0, 60000),
-                 dict(state=CT_OFF, fx=0, peak=0, ext=1, task_attr=0x1001, tot_max_ever=90000, over=0)),
+                 dict(state=CT_OFF, fx=0, peak=0, ext=1, task_attr=0x1001, tot_max_ever=90000, over=0,
+                      pairs=[0] * 8)),
         'typical': ((184000, 328000, 0, 0, 0, 0, 0, 800000, 799000, 801000), (75, 32000, 40000, 360000),
-                    dict(state=CT_RUN, fx=23, peak=16384, ext=1, task_attr=0x1001, tot_max_ever=368000, over=0)),
+                    dict(state=CT_RUN, fx=23, peak=16384, ext=1, task_attr=0x1001, tot_max_ever=368000, over=0,
+                         pairs=[0, 16384, 0, 3277, 0, 0, 32767, 100])),
         'worst': ((9999999, 9999999, 9999999, 9999999, 9999999, 9999999, 4000, 5000000, 0, 5000000),
                   (75, 9999999, 9999999, 9999999),
-                  dict(state=CT_SLOW, fx=99, peak=32768, ext=0, task_attr=0x1001, tot_max_ever=9999999, over=99999)),
+                  dict(state=CT_SLOW, fx=99, peak=32768, ext=0, task_attr=0x1001, tot_max_ever=9999999, over=99999,
+                       pairs=[32768] * 8)),
     }
     texts = {}
     for name, (w, cw, ctv) in cases.items():
@@ -130,14 +137,12 @@ def readout(img, man):
         m.call(sym['meter_format'], SCRATCH, SCRATCH + 0x80, SCRATCH + 0x100)
         texts[name] = m.bytes(SCRATCH + 0x100, 0x80).split(b'\0')[0].decode('ascii')
     lines = {k: v.split('\n') for k, v in texts.items()}
-    kind = 'W' if man['assets']['ir'].get('source') else 'S'
-    taps = man['assets']['ir']['taps']
-    check(texts['typical'] == f'MIX 23/41 T45\nCAB 4/5 RUN\nIN23 LV50 X1\nIR {taps} {kind}\nMAX 46 F1\nCLK 600 OVR 0',
+    check(texts['typical'] == 'CAB 4/5 RUN\nIN23 LV50 X1\nA 0 50 0 10\nB 0 0 99 0\nMIX 23/41 T45\nMAX 46 OVR 0',
           f"typical readout reads {texts['typical']!r}")
-    check(texts['idle'] == f'MIX 8/11 T8\nCAB 0/0 OFF\nIN0 LV0 X1\nIR {taps} {kind}\nMAX 11 F1\nCLK 600 OVR 0',
+    check(texts['idle'] == 'CAB 0/0 OFF\nIN0 LV0 X1\nA 0 0 0 0\nB 0 0 0 0\nMIX 8/11 T8\nMAX 11 OVR 0',
           f"idle readout reads {texts['idle']!r}")
-    check(lines['worst'][1] == 'CAB 99/99 SLOW' and lines['worst'][5] == 'CLK 999* OVR 999',
-          f"worst-case lines read {lines['worst']!r}")
+    check(lines['worst'][0] == 'CAB 99/99 SLOW' and lines['worst'][2] == 'A 99 99 99 99' and
+          lines['worst'][5] == 'MAX 999 OVR 999', f"worst-case lines read {lines['worst']!r}")
     widest = max(sum(width(c) for c in ln) for v in lines.values() for ln in v)
     box_w, box_h = widest - 1 + 18, 6 * line - 1 + 8
     check(all(len(v) == 6 for v in lines.values()) and box_w <= 128 and box_h <= 64,
@@ -350,7 +355,41 @@ def cab_checks(parent_img, img, man):
             mism.append(n)
     check(not mism and loud, 'whole mixer with the cabinet\'s block ready: TX line 3 = the parent\'s + the block on DRY '
                              'L/R, the other words and lines 1/2 the parent\'s (4 blocks)')
-    # 7. diag_rx and diag_ui run bounce's own bnc_rx and bnc_ui (the cabinet off: same memory as the parent).
+    # 7. The RX pairs' peaks. The audio task's RX site leaves this block's bank in [r6 + 4] and the banks' base in r9
+    #    (guarded by the builder; bounce's bridge and the stock feed keep r6 and r9), so diag_rx is entered here with
+    #    them as the site leaves them (the feed's own consumers need the whole system, which this harness has not):
+    #    the packet is r9 + bank << 11, each pair's peak its own; the readout's refresh clears them.
+    mq = CabMachine(img, man)
+    rxbase, task = TXBUF + 0x4000, SCRATCH + 0x800
+    amps = [0, 20000, 0, 3000, 0, 0, 32767, 100]
+    packet = []
+    for f in range(64):
+        for k in range(8):
+            for c in range(2):
+                v = amps[k] if (f + c) % 2 else -amps[k]
+                packet.append(max(-32768, min(32767, v)))
+    mq.uc.mem_write(rxbase, b'\x55' * 0x800)                            # bank 0: not this block's
+    mq.uc.mem_write(rxbase + 0x800, struct.pack('<1024h', *packet))     # bank 1: this block's
+    mq.put(task + 4, 1, '<I')                                           # the RX site stored this block's bank: 1
+    mq.uc.reg_write(ar.UC_ARM_REG_R6, task)
+    mq.uc.reg_write(ar.UC_ARM_REG_R9, rxbase)
+    mq.call(sym['diag_rx'])
+    st = mq.ct()
+    check(st['pairs'] == [min(a, 32767) for a in amps] and mq.uc.reg_read(ar.UC_ARM_REG_R6) == task and
+          mq.uc.reg_read(ar.UC_ARM_REG_R9) == rxbase,
+          f"diag_rx with r6/r9 as the RX site leaves them: every pair's peak from this block's packet, not the other "
+          f"bank's ({st['pairs']}); r6 and r9 kept")
+    mq.put(sym['meter'] + M_SHOWN, 1)
+    mq.call(sym['meter_mix_begin'], 0)
+    mq.call(sym['meter_mix_end'])
+    mq.put(base.PAGE, 1, '<h')
+    mq.put(base.POPUP_PENDING, -1)
+    mq.cyc += 600_000_001
+    mq.call(sym['meter_ui_tick'], 1)
+    text = mq.bytes(base.POPUP_TEXT, 0x80).split(b'\0')[0].decode('latin-1')
+    check('\nA 0 61 0 9\nB 0 0 99 0\n' in text and mq.ct()['pairs'] == [0] * 8,
+          f'the readout shows them and its refresh clears them ({text!r})')
+    # 8. diag_rx and diag_ui run bounce's own bnc_rx and bnc_ui (the cabinet off: same memory as the parent).
     bb = man['bounce_bridges']
     for label, ours, theirs in (('diag_rx', sym['diag_rx'], bb['bnc_rx']), ('diag_ui', sym['diag_ui'], bb['bnc_ui'])):
         res = []
@@ -358,6 +397,9 @@ def cab_checks(parent_img, img, man):
         for image, fn in ((parent_img, theirs), (img, ours)):
             x = Machine(image)
             x.uc.mem_write(CAPTURE, cap)
+            x.put(SCRATCH + 0x804, 1, '<I')
+            x.uc.reg_write(ar.UC_ARM_REG_R6, SCRATCH + 0x800)
+            x.uc.reg_write(ar.UC_ARM_REG_R9, TXBUF + 0x4000)
             for _ in range(3):
                 x.call(fn, 1)
             res.append((x.digest(skip_spans(man)), x.log))
@@ -397,7 +439,7 @@ def main():
         base.entry_checks(parent_img, img, sym)
         base.arithmetic(img, man)
         readout(img, man)
-        base.ui(img, man)
+        base.ui(img, man, head='CAB ')
         base.voice_chain(parent_img, img, man, a.seeds)
         base.voice_chain(parent_img, img, man, 2, sabotage=True)
         base.whole_mixer(parent_img, img, man, kit_sym, a.blocks, a.mixer_runs)

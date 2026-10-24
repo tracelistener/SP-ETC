@@ -39,3 +39,21 @@ instruction NAM test 2 showed for SDRAM code.
 - Whether EXT SOURCE off keeps the capture while the direct sound goes, or failing that, whether the input on a
   muted bus (MUTE BUS) does.
 - The real cost on the unit (the CAB line).
+
+## Test 1 on the unit (2026-10-24)
+
+`MIX 10/11 T27`, `CAB 15/16 (17) RUN`, `IN23 LV0 X1`, `IR 1024 S`, `MAX 30 F1`, `CLK 599* OVR 0`; one sound heard,
+nothing with EXT SOURCE off. The cabinet costs 15-17% of a block (about 3.4 cycles an instruction) and fits. But LV0
+while playing, on ROUTING ExtIn: the capture was empty (IR test 3, before ROUTING was changed, read LV42 with the Gt
+Amp Sim). The recorder feed `0x1ca80` copies one of the 8 stereo pairs in the RX packet (32-byte frames): pair 1 when
+settings+0x64 is set, else the pair numbered by the byte at `0x82e0e974`; on ExtIn that pair is silent outside
+sampling, it seems.
+
+## Test 2 (cab-test2)
+
+The readout shows each RX pair's peak (`A` pairs 0-3, `B` pairs 4-7) since the last refresh, read from the packet the
+feed read: `diag_rx` is now a naked entry that takes the packet from the audio task's registers as its RX site
+`0x1d0b4..0x1d0be` leaves them (r9 the banks, [r6 + 4] this block's bank, packet = r9 + bank << 11; the builder guards
+those instructions, bounce's bridge and the feed keep r6 and r9). The cabinet still takes the feed's copy. The test:
+the A/B lines while playing on ExtIn with EXT SOURCE on and off, on Mix, and with the Gt Amp Sim's GAIN changed, to
+find the pair with the input after the input FX that EXT SOURCE does not mute. APP1 `4c3acaf8...d1f`; 80 checks.

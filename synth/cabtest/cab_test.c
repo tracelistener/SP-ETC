@@ -1,8 +1,14 @@
-/* Cabinet test 1: a cabinet IR on the captured input, on v9.50 with the CPU meter of IR diagnostic test 3. NAM tests
+/* Cabinet test 2: a cabinet IR on the captured input, on v9.50 with the CPU meter of IR diagnostic test 3. NAM tests
  * 1 and 2 showed that a NAM amp does not fit beside the SP's own audio (NAM alone 72% of a block on average, 94% at
  * its peak); the cabinet alone costs a fraction of that. With the Gt Amp Sim as the input FX (its own speaker, SP SW,
  * off) the SP's amp plays through the IR: the test is whether the capture follows the input FX, whether EXT SOURCE
  * off keeps the capture while the direct sound goes, how it sounds, and what it costs.
+ *
+ * Test 1 on the unit: CAB 15-17% of a block, T27, MAX 30, no overrun; but LV0 while playing on ROUTING ExtIn, one
+ * sound, and nothing with EXT SOURCE off. The recorder feed (0x1ca80) copies one of the 8 stereo pairs the effects
+ * chip sends back every block (32-byte frames; pair 1 when settings+0x64 is set, else the pair numbered by the byte at
+ * 0x82e0e974). Test 2 shows every pair's peak in the readout, to find the one that carries the input after the input
+ * FX whether or not EXT SOURCE plays it.
  *
  * While the meter's readout is shown (hold EXIT a second on the main screen), the UI task copies the IR from flash
  * into the module's cabinet memory and hands it to the audio task. After every RX block the audio task then runs one
@@ -12,19 +18,20 @@
  * takes over a whole block, or the mixer and the cabinet take over 9/10 of one twice in a row.
  *
  * Readout (the stock popup, refreshed every half second):
- *   MIX 8/10 T15      the mixer's average/peak in % of a block; the worst mixer + cabinet in one wake (T)
  *   CAB 4/5 RUN       the cabinet's average/peak per RX block over the last 75; OFF LOAD RUN BAD SLOW
  *   IN23 LV45 X1      the input FX's effect number, the capture's peak in % of full scale, EXT SOURCE
- *   IR 1024 S         the IR's taps; S: the stand-in made from filters, W: a WAV the builder was given
- *   MAX 18 F1         the worst wake since the readout came on (%), the audio task's FPU attribute (F1)
- *   CLK 599 OVR 0     the core clock the block length implies; wakes whose mixer + cabinet took over a block
+ *   A 0 45 0 0        test 2: the peak of RX pairs 0-3 in % of full scale since the last refresh
+ *   B 0 0 0 0         test 2: pairs 4-7
+ *   MIX 8/10 T15      the mixer's average/peak in % of a block; the worst mixer + cabinet in one wake (T)
+ *   MAX 18 OVR 0      the worst wake since the readout came on (%); wakes whose mixer + cabinet took over a block
  *
  * Hooks, as in IR diagnostic test 3:
  *   0x0001c2d0  mixer entry       -> meter_mix_entry (the return comes back to meter_mix_exit, which adds the block)
  *   0x80005870  per-voice stub    -> meter_voice
  *   0x0001fd84  SG stub's pre call -> meter_sg_pre
  *   bounce's ui bridge: its bnc_ui call -> diag_ui (bnc_ui, the meter's UI step, cab_ui)
- *   bounce's rx bridge: its bnc_rx call -> diag_rx (bnc_rx, cab_rx)
+ *   bounce's rx bridge: its bnc_rx call -> diag_rx (the RX packet from the audio task's r9 and [r6 + 4], as its
+ *                     RX site computed it; bnc_rx, the pair peaks, cab_rx)
  *
  * The CPU meter, as T0 had it: the DWT cycle counter times every 64-frame block (800,000 cycles at 600 MHz); MIX
  * the whole mixer 0x1c2d0, entry to return; PAD and SG are still kept (the readout no longer shows them). This file is
@@ -133,7 +140,7 @@ EXPORT const u32 ct_layout[] = {                          /* the tests read thes
     sizeof(ct_t), OFFSET(ct_t, state), OFFSET(ct_t, out), OFFSET(ct_t, peak), OFFSET(ct_t, pub),
     OFFSET(ct_t, tot_max_ever), OFFSET(ct_t, reset_ack),
     sizeof(ct_block_t), OFFSET(ct_block_t, cab), OFFSET(ct_block_t, ir), OFFSET(ct_block_t, in),
-    OFFSET(ct_block_t, out), OFFSET(ct_block_t, stack), sizeof(cab_t)};
+    OFFSET(ct_block_t, out), OFFSET(ct_block_t, stack), sizeof(cab_t), OFFSET(ct_t, pair_peak)};
 _Static_assert(IR_TAPS >= 1u && IR_TAPS <= CAB_TAPS, "the IR fits the cabinet");
 
 /* ---- the cabinet: what the UI and the audio task reach ---- */
@@ -544,13 +551,7 @@ EXPORT UI_SMALL void meter_format(const meter_window *w, const ct_window *cw, ch
     u32 b = m->budget ? m->budget : NOMINAL;
     u32 st = n->state;
     char *p = out;
-    p = put_str(p, "MIX ");
-    p = put_u(p, pct(w->mix_avg, b));
-    *p++ = '/';
-    p = put_u(p, pct(w->mix_max, b));
-    p = put_str(p, " T");
-    p = put_u(p, pct(cw->tot_max, b));
-    p = put_str(p, "\nCAB ");
+    p = put_str(p, "CAB ");
     p = put_u(p, pct(cw->cab_avg, b) > 99u ? 99u : pct(cw->cab_avg, b));    /* two digits: the box is narrow */
     *p++ = '/';
     p = put_u(p, pct(cw->cab_max, b) > 99u ? 99u : pct(cw->cab_max, b));
@@ -561,15 +562,19 @@ EXPORT UI_SMALL void meter_format(const meter_window *w, const ct_window *cw, ch
     p = put_str(p, " LV");
     p = put_u(p, (n->peak > 32768u ? 32768u : n->peak) * 100u / 32768u);
     p = put_str(p, n->ext ? " X1" : " X0");
-    p = put_str(p, "\nIR ");
-    p = put_u(p, IR_TAPS);
-    p = put_str(p, IR_KIND ? " W" : " S");
+    for (u32 k = 0; k < 8u; k++) {
+        if (!(k & 3u)) p = put_str(p, k ? "\nB" : "\nA");
+        *p++ = ' ';
+        p = put_u(p, (n->pair_peak[k] > 32767u ? 32767u : n->pair_peak[k]) * 100u / 32768u);
+    }
+    p = put_str(p, "\nMIX ");
+    p = put_u(p, pct(w->mix_avg, b));
+    *p++ = '/';
+    p = put_u(p, pct(w->mix_max, b));
+    p = put_str(p, " T");
+    p = put_u(p, pct(cw->tot_max, b));
     p = put_str(p, "\nMAX ");
     p = put_u(p, pct(n->tot_max_ever, b));
-    p = put_str(p, (n->task_attr & 0x1000u) ? " F1" : " F0");
-    p = put_str(p, "\nCLK ");
-    p = put_u(p, (w->period_avg > 1332000u ? 1332000u : w->period_avg) * 3u / 4000u);   /* up to 999 MHz */
-    if (m->dwt_fixed) *p++ = '*';
     p = put_str(p, " OVR ");
     p = put_u(p, cap(n->over));
     *p = 0;
@@ -622,6 +627,7 @@ static void post(meter_t *m, u32 now) {
     if (!read_window(&w) || !read_cab_window(&cw)) return;
     meter_format(&w, &cw, text);
     ct.peak = 0;                                        /* a peak per readout */
+    for (int k = 0; k < 8; ++k) ct.pair_peak[k] = 0;
     for (int i = 0; i < TEXT_MAX; ++i) {
         m->text[i] = text[i];
         if (!text[i]) break;
@@ -719,8 +725,36 @@ EXPORT void diag_ui(int elapsed) {
     cab_ui();
 }
 
+/* Every RX block: the peak of each of the packet's 8 stereo pairs (32-byte frames, 64 of them). The packet is in
+ * DTCM, which the D-cache does not cover. */
+EXPORT void cab_pairs(const volatile s16 *packet) {
+    ct_t *n = &ct;
+    for (u32 k = 0; k < 8u; k++) {
+        u32 peak = n->pair_peak[k];
+        for (u32 f = 0; f < FRAMES; f++) {
+            for (u32 c = 0; c < 2u; c++) {
+                s32 v = packet[f * 16u + k * 2u + c];
+                u32 a = (u32)(v < 0 ? -v : v);
+                if (a > peak) peak = a;
+            }
+        }
+        n->pair_peak[k] = peak;
+    }
+}
+
 /* Bounce's rx bridge (after the recorder feed, audio task) calls this in place of bnc_rx. */
-EXPORT void diag_rx(void) {
+EXPORT void diag_rx_c(const volatile s16 *packet) {
     ((void (*)(void))BNC_RX)();
+    cab_pairs(packet);
     cab_rx();
+}
+
+/* The bridge comes here with the audio task's registers as its RX site left them: r9 the RX banks, [r6 + 4] this
+ * block's bank (0x1d0b4..0x1d0be: r0 = r9 + bank << 11, 2,048 bytes a bank), so the packet the feed just read is
+ * r9 + ([r6 + 4] << 11). */
+__attribute__((naked, used)) void diag_rx(void) {
+    __asm__ volatile(
+        "ldr r0, [r6, #4]\n"
+        "add.w r0, r9, r0, lsl #11\n"
+        "b diag_rx_c\n");
 }

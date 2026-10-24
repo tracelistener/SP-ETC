@@ -1,35 +1,35 @@
-# Cabinet test 1: the Gt Amp Sim through a cab IR
+# Cabinet test 2: where does the SP keep your guitar?
 
-A test build: {{PARENT_REVISION}} (v9.50) plus a cab IR on the input and the CPU meter. NAM did not fit, so this is the
-cab-only route: the SP's own amp, your cabinet. Not for sharing. To go back, flash v9.50.
+A test build: {{PARENT_REVISION}} (v9.50) plus the cab IR, the CPU meter and new level meters. Not for sharing. To go
+back, flash v9.50.
 
 | File | SHA-256 |
 | --- | --- |
 | SP404MKII_APP1.bin ({{APP1_SIZE}} bytes) | `{{APP1_SHA256}}` |
 | SP404MKII_APP0.bin (stock 5.52) | `{{APP0_SHA256}}` |
 
-**Turn your volume down first, and set ROUTING to ExtIn** (REC, RECORD SETTING, CTRL 2 to ExtIn, EXIT). The box's IR
-line ends in S for the stand-in cabinet made from filters, or W for a WAV I was given.
+Every audio block the effects chip hands the main processor 8 stereo signals. The cab test listened to only one of
+them (the one sampling records), and on ROUTING ExtIn it was silent. This test shows all 8 levels, so we can find the
+one with your guitar after the Gt Amp Sim.
 
-1. Input FX to the Gt Amp Sim, and in its hidden pages (hold VALUE, press EXT SOURCE) turn SP SW off, its own
-   speaker. Guitar in, EXT SOURCE on.
-2. On the main screen hold EXIT on its own for about a second: the box appears and the cab starts. Play. You should
-   hear the amp twice: as the Gt Amp Sim makes it, and through the cab (a little quieter, a hair later). Does the cab
-   copy sound like the amp (distorted, if you use gain), or like your clean guitar?
-3. EXT SOURCE off while it runs: does the cab copy stay while the other one goes?
-   If both go quiet: EXT SOURCE back on, send the input to BUS 1 (hold REMAIN and press EXT SOURCE until it is lit),
-   then turn MUTE BUS on (SHIFT + BUS FX). Does the cab copy stay now?
-4. Send the box's six lines.
+**Volume down.** Input FX: the Gt Amp Sim (SP SW off, as before). Guitar in. On the main screen hold EXIT on its own
+for about a second: the box appears. Then, **while you keep playing** (the numbers are the loudest moment of the last
+half second), photograph the box or copy its A and B lines, in each of these:
 
-The box, in percent of one audio block (1.33 ms) unless said:
+1. ROUTING on ExtIn, EXT SOURCE on.
+2. ROUTING on ExtIn, EXT SOURCE off.
+3. ROUTING on Mix (REC, RECORD SETTING, CTRL 2), EXT SOURCE on.
+4. If you like: Gt Amp Sim GAIN way up, then way down (EXT SOURCE on): which numbers change?
+
+The box:
 
 ```
-MIX 8/10 T15      the whole audio mix: average / peak; T = the worst mix + cab in one block
-CAB 4/5 RUN       the cab: average / peak; OFF LOAD RUN, or BAD, SLOW
-IN23 LV45 X1      the input FX's number, the input level (% of full), EXT SOURCE on (1) or off (0)
-IR 1024 S         the IR's length in samples; S the stand-in, W a WAV
-MAX 18 F1         the worst block since the box came on; F is for me
-CLK 599 OVR 0     the processor's speed (MHz); blocks over 100% (a click) since the box came on
+CAB 15/16 RUN     the cab: average / peak, in % of one audio block
+IN23 LV45 X1      the input FX's number, the level the cab hears (% of full), EXT SOURCE on (1) or off (0)
+A 0 45 0 0        the 8 signals' levels in % of full scale: 1 to 4 ...
+B 0 0 0 0         ... and 5 to 8
+MIX 10/11 T27     the SP's own audio work; T = the worst block with the cab
+MAX 30 OVR 0      the worst block since the box came on; blocks over 100% (a click)
 ```
 
-To stop the cab, hold EXIT again.
+To stop, hold EXIT again.

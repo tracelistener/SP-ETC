@@ -1,4 +1,4 @@
-/* Cabinet test 1: what the integer side (cab_test.c: the meter, the UI, the RX/TX hooks) and the FPU side (cab_fp.c:
+/* Cabinet test: what the integer side (cab_test.c: the meter, the UI, the RX/TX hooks) and the FPU side (cab_fp.c:
  * the cabinet on the captured input) share. */
 #ifndef CAB_TEST_H
 #define CAB_TEST_H
@@ -55,6 +55,7 @@ typedef struct {
                                                the wake (mixer + cabinet) that stopped it */
     u32 hot;                                /* wakes in a row over 90% of a block */
     u32 reset_req, reset_ack;
+    u32 pair_peak[8];                       /* test 2: each RX pair's peak |sample| (the UI clears them per readout) */
 } ct_t;
 
 extern ct_t ct;
