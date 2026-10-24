@@ -2,10 +2,13 @@
  * captured input, to learn on the unit what an amp IR or NAM stage on the main processor would face.
  *
  * Echo: the RX block the recorder feed copies (the RX pair INPUT SETTING's ROUTING picks, 64 frames,
- * 16-bit, at the stems' scale) goes into a 7,168-frame ring as mono; while the input FX is the Gt Amp
- * Sim (system 0x27c[0] = 23) each TX block adds the ring's oldest block, at 1/4 (-12 dB), to the DRY
- * pair of TX line 3 after the mixer has packed it (20-bit words, clipped as the packer clips). So one
- * echo about 149 ms late; a return the capture takes in again comes back 12 dB quieter each time.
+ * 16-bit, at the stems' scale) goes into a 7,168-frame ring as mono; while the meter's readout is shown and EXT
+ * SOURCE is on (test3: tests 1 and 2 waited for the Gt Amp Sim as the input FX, system 0x27c[0] = 23, and on the
+ * unit no echo came) each TX block adds the ring's oldest block, at 1/4 (-12 dB), to the DRY pair of TX line 3
+ * after the mixer has packed it (20-bit words, clipped as the packer clips). So one echo about 149 ms late; a
+ * return the capture takes in again comes back 12 dB quieter each time. The readout's sixth line (test3) says what
+ * the unit has: "IN23 LV45 E1" = the input FX's effect number (system 0x27c[0]), the capture's peak in percent of
+ * full scale over the last half second, the echo on (1) or off.
  *
  * Hooks, as in T0 except where bounce in place (v9.49) already holds the site:
  *   0x0001c2d0  mixer entry       -> meter_mix_entry (stamps; the return comes back to meter_mix_exit,
@@ -148,8 +151,10 @@ EXPORT meter_t meter;
 #define CAPTURE ((const volatile s16 *)0x202AD0A0u)   /* the RX pair the recorder feed copies: 64 x 2 */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
 #define SYS_GET ((s32 (*)(u32, s32, s32))0x800DA011u)  /* system GetParam(object, ID, index) */
+#define SETTINGS 0x82E01144u                           /* the settings object */
+#define SET_GET ((s32 (*)(u32, s32, s32))0x800D94D9u)  /* settings GetParam(object, ID, index) */
+#define EXT_SOURCE 0x25                                /* settings: EXT SOURCE on */
 #define BUS_EFFECT 0x27C                               /* system, by slot: the effect (slot 0 = input FX) */
-#define GT_AMP_SIM 23
 #define CHECK_CYCLES 60000000u                         /* the input FX is read every 0.1 s (600 MHz) */
 #define FRAMES 64u
 #define TX_WORDS 16u                                   /* TX line 3: 16 words a frame, DRY = words 0/1 */
@@ -162,6 +167,8 @@ typedef struct {
     u32 fx;                        /* the input FX's effect at the last check */
     u32 checked, checks;           /* cycle count of the last check (UI), checks made */
     u32 rx, tx;                    /* blocks written to the ring, blocks echoed */
+    u32 peak;                      /* test3: the capture's peak |sample| since the readout last showed it */
+    u32 ext;                       /* test3: EXT SOURCE at the last check */
 } echo_t;
 
 EXPORT echo_t echo;
@@ -287,8 +294,14 @@ EXPORT void echo_rx(void) {
     u32 w = echo.w;
     volatile s16 *dst = (volatile s16 *)ECHO_RING + w;
     const volatile s16 *cap = CAPTURE;
-    for (u32 f = 0; f < FRAMES; f++)
-        dst[f] = (s16)(((s32)cap[2 * f] + cap[2 * f + 1]) >> 1);
+    u32 peak = echo.peak;
+    for (u32 f = 0; f < FRAMES; f++) {
+        s32 v = ((s32)cap[2 * f] + cap[2 * f + 1]) >> 1;
+        u32 a = (u32)(v < 0 ? -v : v);
+        dst[f] = (s16)v;
+        if (a > peak) peak = a;
+    }
+    echo.peak = peak;
     w += FRAMES;
     echo.w = w >= ECHO_FRAMES ? 0 : w;
     echo.rx++;
@@ -494,6 +507,11 @@ EXPORT UI_SMALL void meter_format(const meter_window *w, char *out) {
     p = put_str(p, " CLK ");
     p = put_u(p, (w->period_avg > 5000000u ? 5000000u : w->period_avg) * 3u / 4000u);
     if (m->dwt_fixed) *p++ = '*';
+    p = put_str(p, "\nIN");
+    p = put_u(p, echo.fx > 99u ? 99u : echo.fx);
+    p = put_str(p, " LV");
+    p = put_u(p, (echo.peak > 32768u ? 32768u : echo.peak) * 100u / 32768u);
+    p = put_str(p, echo.on ? " E1" : " E0");
     *p = 0;
 }
 
@@ -529,6 +547,7 @@ static void post(meter_t *m, u32 now) {
     if (POPUP_SHOWN && !ours_on_screen(m)) return;      /* leave a stock message alone */
     if (!read_window(&w)) return;
     meter_format(&w, text);
+    echo.peak = 0;                                     /* test3: a peak per readout */
     for (int i = 0; i < TEXT_MAX; ++i) {
         m->text[i] = text[i];
         if (!text[i]) break;
@@ -595,15 +614,17 @@ EXPORT UI_SMALL void meter_ui_tick(int elapsed) {
     if (m->shown && (m->posted_seq != m->seq || now - m->posted_at >= KEEPALIVE)) post(m, now);
 }
 
-/* The input FX, read from the UI task every 0.1 s: the echo is on while it is the Gt Amp Sim. */
+/* From the UI task every 0.1 s (test3): the echo is on while the readout is shown and EXT SOURCE is on; the input
+ * FX's effect number is only reported. */
 EXPORT UI_SMALL void echo_ui(void) {
     u32 now = DWT_CYCCNT;
     if (now - echo.checked < CHECK_CYCLES) return;
     echo.checked = now;
     echo.checks++;
     echo.fx = (u32)SYS_GET(SYSPRM, BUS_EFFECT, 0);
+    echo.ext = SET_GET(SETTINGS, EXT_SOURCE, 0) != 0;
     BARRIER();
-    echo.on = echo.fx == GT_AMP_SIM;
+    echo.on = meter.shown && echo.ext;
 }
 
 /* Bounce's ui bridge (the popup tick, UI task, every millisecond) calls this in place of bnc_ui. */

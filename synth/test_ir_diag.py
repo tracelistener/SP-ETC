@@ -651,6 +651,10 @@ def readout(img, man):
         'worst': ((9999999, 9999999, 9999999, 9999999, 9999999, 9999999, 4000, 5000000, 0, 5000000), (99999, 99999, 9999999)),
     }
     texts = {}
+    E = sym['echo']
+    m.put(E + E_FX, 23)
+    m.put(E + E_PEAK, 16384)
+    m.put(E + E_ON, 1)
     for name, (w, (hi_, over, mx)) in cases.items():
         m.uc.mem_write(SCRATCH, struct.pack('<11I', 375, *w))
         m.put(S + 4 * 40, hi_)
@@ -660,13 +664,14 @@ def readout(img, man):
         text = m.bytes(SCRATCH + 0x100, 0x80).split(b'\0')[0].decode('ascii')
         texts[name] = text
     lines = {k: v.split('\n') for k, v in texts.items()}
-    check(texts['typical'] == 'MIX 23/41\nPAD 15/30 12v\nSG 6/12\nHI 3 OVR 0\nMAX 57 CLK 600',
+    check(texts['typical'] == 'MIX 23/41\nPAD 15/30 12v\nSG 6/12\nHI 3 OVR 0\nMAX 57 CLK 600\nIN23 LV50 E1',
           f"typical readout reads {texts['typical']!r}")
-    check(texts['idle'] == 'MIX 8/11\nPAD 0/0 0v\nSG 0/0\nHI 0 OVR 0\nMAX 15 CLK 600', f"idle readout reads {texts['idle']!r}")
+    check(texts['idle'] == 'MIX 8/11\nPAD 0/0 0v\nSG 0/0\nHI 0 OVR 0\nMAX 15 CLK 600\nIN23 LV50 E1',
+          f"idle readout reads {texts['idle']!r}")
     widest = max(sum(width(c) for c in ln) for v in lines.values() for ln in v)
     # Stock popup (kind 5): box = text width - 1 + 2*8 + 2 must fit 128; height = lines*9 - 1 + 2*3 + 2.
-    box_w, box_h = widest - 1 + 18, 5 * line - 1 + 8
-    check(all(len(v) == 5 for v in lines.values()) and box_w <= 128 and box_h <= 64,
+    box_w, box_h = widest - 1 + 18, 6 * line - 1 + 8
+    check(all(len(v) == 6 for v in lines.values()) and box_w <= 128 and box_h <= 64,
           f'worst-case readout fits the popup: widest line {widest} px -> box {box_w}x{box_h} (screen 128x64)')
     stock = 'PATTERN SELECT'
     report['readout'] = dict(texts=texts, widest_line_px=widest, box=[box_w, box_h],
@@ -724,7 +729,7 @@ def ui(img, man):
     st = tick(2000)
     first = text()
     check(st['shown'] == 1 and st['posts'] == 1 and m.get(POPUP_PENDING) == 3 and first.startswith('MIX ') and
-          first.count('\n') == 4 and m.get(0x802458A4) == 1500,
+          first.count('\n') == 5 and m.get(0x802458A4) == 1500,
           f'EXIT held a second on the main screen: readout posted through the stock popup ({first!r}, 1500 ms)')
     built()
     st = tick(3 * second)
@@ -822,8 +827,9 @@ def ui(img, man):
 
 
 # ---------------------------------------------------------------------------------------------
-CAPTURE, SYSPRM, SYS_GET = 0x202AD0A0, 0x82DFEED0, 0x800DA010
-E_W, E_ON, E_FX, E_CHECKED, E_CHECKS, E_RX, E_TX = 0, 4, 8, 12, 16, 20, 24     # echo_t (irdiag/ir_diag.c)
+CAPTURE, SYSPRM, SYS_GET, SETTINGS_OBJ, SET_GET = 0x202AD0A0, 0x82DFEED0, 0x800DA010, 0x82E01144, 0x800D94D8
+E_W, E_ON, E_FX, E_CHECKED, E_CHECKS, E_RX, E_TX, E_PEAK, E_EXT = 0, 4, 8, 12, 16, 20, 24, 28, 32   # echo_t
+M_SHOWN = 4 * 47                                                                 # meter_t.shown
 
 
 def mono(cap):
@@ -871,7 +877,7 @@ def echo_checks(parent_img, img, man):
         sent.append(cap)
         m.uc.mem_write(CAPTURE, struct.pack('<128h', *cap))
         m.call(sym['echo_rx'])
-    st = struct.unpack('<7I', m.bytes(e, 28))
+    st = struct.unpack('<9I', m.bytes(e, 36))
     check(not bad and nonzero == blocks - delay and clipped > 0 and st[E_RX // 4] == blocks and st[E_TX // 4] == blocks,
           f'echo: {blocks} blocks, each TX block = its words + the RX block {delay} blocks back as mono at 1/4 on '
           f'DRY L/R only, clipped to 20 bits ({clipped} clipped words); silent before the ring fills')
@@ -907,24 +913,31 @@ def echo_checks(parent_img, img, man):
         md.call(sym['echo_rx'])
     check(not mismatch and loud, f'whole mixer with the echo on: TX line 3 = the parent\'s + the echo on DRY L/R, '
                                  f'the other words and lines 1/2 the parent\'s ({len(range(delay, delay + 6))} blocks)')
-    # 3. The gate: the input FX read every 0.1 s from the UI task.
+    # 3. The gate (test3): the readout shown and EXT SOURCE on, read every 0.1 s from the UI task; the input FX's
+    #    effect number reported.
     m = Machine(img)
-    answer, calls = [23], []
+    ext, calls = [1], []
 
-    def sysget(uc, a, s_, _):
-        calls.append((uc.reg_read(ar.UC_ARM_REG_R0), uc.reg_read(ar.UC_ARM_REG_R1), uc.reg_read(ar.UC_ARM_REG_R2)))
-        uc.reg_write(ar.UC_ARM_REG_R0, answer[0])
+    def getter(uc, a, s_, _):
+        calls.append((a, uc.reg_read(ar.UC_ARM_REG_R0), uc.reg_read(ar.UC_ARM_REG_R1), uc.reg_read(ar.UC_ARM_REG_R2)))
+        uc.reg_write(ar.UC_ARM_REG_R0, 23 if a == SYS_GET else ext[0])
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
-    m.uc.hook_add(UC_HOOK_CODE, sysget, begin=SYS_GET, end=SYS_GET)
+    for a in (SYS_GET, SET_GET):
+        m.uc.hook_add(UC_HOOK_CODE, getter, begin=a, end=a)
     step = 60_000_000
     seen = []
-    for cyc, value in ((step, 23), (step + 1000, 9), (2 * step + 5, 9), (3 * step + 10, 23), (3 * step + 20, 0)):
+    S = sym['meter']
+    for cyc, shown, value in ((step, 0, 1), (2 * step, 1, 1), (2 * step + 1000, 1, 0), (3 * step + 5, 1, 0),
+                              (4 * step + 10, 1, 1)):
         m.cyc = cyc
-        answer[0] = value
+        m.put(S + M_SHOWN, shown)
+        ext[0] = value
         m.call(sym['echo_ui'])
         seen.append(m.get(e + E_ON))
-    check(seen == [1, 1, 0, 1, 1] and calls == [(SYSPRM, 0x27C, 0)] * 3,
-          f'gate: system 0x27c[0] read every 0.1 s ({len(calls)} reads); Gt Amp Sim (23) on, anything else off ({seen})')
+    want_calls = [(SYS_GET, SYSPRM, 0x27C, 0), (SET_GET, SETTINGS_OBJ, 0x25, 0)] * 4
+    check(seen == [0, 1, 1, 0, 1] and calls == want_calls and m.get(e + E_FX) == 23,
+          f'gate (test3): on while the readout is shown and EXT SOURCE is on, checked every 0.1 s ({len(calls) // 2} '
+          f'checks); the input FX number reported ({seen})')
     # 4. Off, the TX block is untouched.
     m = Machine(img)
     m.uc.mem_write(ARGS, struct.pack('<3I', TXBUF, TXBUF + 0x1000, TXBUF + 0x2000))

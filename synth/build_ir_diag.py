@@ -37,7 +37,7 @@ TEST_PLAN = HERE / 'irdiag' / 'HARDWARE_TEST.md'
 FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'ir-diag-test2'
+REVISION = 'ir-diag-test3'
 BASE = 0x83FED000
 LIMIT = 0x83FEF000                  # the RESAMPLE start fix's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -501,10 +501,10 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='IR diagnostic test 1: the CPU meter (T0: the mixer, the pad voice loop and the SG/kit render '
+        description='IR diagnostic test 3: the CPU meter (T0: the mixer, the pad voice loop and the SG/kit render '
                     'timed with the DWT cycle counter, shown in the stock popup) and a test echo: the captured input '
-                    '(the RX pair ROUTING picks) back on the DRY pair 149 ms later at -12 dB while the input FX is '
-                    'the Gt Amp Sim',
+                    '(the RX pair ROUTING picks) back on the DRY pair 149 ms later at -12 dB while the readout is '
+                    'shown and EXT SOURCE is on; a sixth readout line for the input FX, the capture level and the echo',
         parent_app1=str(inp), parent_sha256=sha(inp.read_bytes()), parent_folder=inp.parent.name,
         parent_revision=parent.get('revision'), parent_parent_revision=parent.get('parent_revision'),
         sha256=sha(img), size=len(img), app0_sha256=APP0_SHA,
@@ -514,7 +514,10 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
                   gain='1/4 (-12 dB), mono (L+R)/2 onto DRY L and R, clipped to 20 bits as the packer clips',
                   source='the recorder feed\'s copy 0x202ad0a0 (the RX pair INPUT SETTING\'s ROUTING picks), after '
                          'every RX block', target='TX line 3 words 0/1 (DRY) of the block the mixer has just packed',
-                  gate='system 0x27c[0] (the input FX) = 23, Gt Amp Sim, read from the UI task every 0.1 s'),
+                  gate='test3: the readout shown and EXT SOURCE (settings 0x25) on, read from the UI task every '
+                       '0.1 s (tests 1 and 2: the input FX = Gt Amp Sim, system 0x27c[0] = 23; no echo on the unit)',
+                  readout='test3: a sixth line "IN23 LV45 E1": system 0x27c[0], the capture peak in percent of full '
+                          'scale per readout, the echo on or off'),
         bounce_bridges={k: v for k, v in bridges.items()},
         source_sha256=sha(SOURCE.read_bytes().replace(b'\r\n', b'\n')),
         test_plan_sha256=sha(TEST_PLAN.read_bytes().replace(b'\r\n', b'\n')),

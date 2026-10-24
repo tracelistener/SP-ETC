@@ -65,3 +65,11 @@ plus exactly the echo), the gate (23 on, anything else off, one read per 0.1 s),
 
 The same module on combined-test10 (v9.49 plus FX deep edit test9: hold VALUE and press EXT SOURCE on the main
 screen for the input FX's extra screens), so one flash tries all three. APP1 `bb6eee9d...6bce3`; 59 checks pass.
+
+## Test 3 (ir-diag-test3)
+
+On the unit (test 2): MIX 8/10 idle, about 18/25 with a busy pattern of rolls, MAX 30, CLK 599* (the meter
+started the cycle counter); no echo. Test 3 is on combined-test11 (FX deep edit test10: the input FX chord in the UI
+dispatcher's handlers). The echo is on while the readout is shown and EXT SOURCE is on (no longer the Gt Amp Sim gate),
+and a sixth readout line says what the unit has: `IN23 LV45 E1` = system 0x27c[0], the capture peak in percent per
+readout, the echo on or off. APP1 `751ddd92...b8b2`; 59 checks pass.
