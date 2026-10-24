@@ -65,3 +65,8 @@ SOURCE off all zero; Mix with EXT SOURCE on `A 28 13 0 0  B 0 0 0 0`. Only pairs
 SOURCE off silences both: the input is muted before the effects chip sends it on, so no pair has it then. Still open:
 which of the two is after the Gt Amp Sim (its GAIN), and whether MUTE BUS (the input on BUS 1) or the input LEVEL at 0
 silences the output but leaves a pair carrying the input.
+Then: the Gt Amp Sim's GAIN changes both pair 0 and pair 1 (both are after the input FX); MUTE BUS with the input on
+BUS 1, and the input LEVEL at 0, each leave all 8 pairs at 0. So every mute the user has silences what the main
+processor receives as well. Last cheap check: the input on BUS 1 with BUS 1's effect cutting everything (Isolator,
+all bands down) and MUTE BUS off: if the pairs keep the guitar while the speakers go quiet, they are taken before the
+bus effects and the cabinet can be heard alone.
