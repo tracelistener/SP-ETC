@@ -70,3 +70,14 @@ BUS 1, and the input LEVEL at 0, each leave all 8 pairs at 0. So every mute the 
 processor receives as well. Last cheap check: the input on BUS 1 with BUS 1's effect cutting everything (Isolator,
 all bands down) and MUTE BUS off: if the pairs keep the guitar while the speakers go quiet, they are taken before the
 bus effects and the cabinet can be heard alone.
+The check: the input on BUS 1, the Isolator on BUS 1 with all bands down, MUTE BUS off, ROUTING Mix: all 8 pairs at 0
+and nothing heard. The effects chip hands the main processor the input only after the bus effects, i.e. only what is
+played anyway.
+
+## Conclusion (2026-10-24)
+
+On this hardware a cabinet IR (or an amp) on the main processor cannot replace the Gt Amp Sim's sound: every way to
+silence the direct sound (EXT SOURCE, MUTE BUS, input LEVEL, a bus effect) also silences what the main processor
+receives, so the processed copy can only be heard on top of the original, 2-3 ms later. With NAM too heavy (72-94% of
+a block) the live "your own amp and cab" idea ends here. What the work leaves: the cabinet costs 15-17% of a block on
+the unit and works on anything the main processor renders itself (the pads); the CPU meter; the RX pair map.
