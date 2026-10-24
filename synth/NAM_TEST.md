@@ -80,3 +80,25 @@ with the code in ITCM. Here the code and the data are in SDRAM behind the caches
 - Whether EXT SOURCE off keeps the capture while the direct input goes (then NAM can replace the clean signal).
 - Whether the capture follows the input FX (test 3 read LV90 on the main screen, LV42 with the Gt Amp Sim).
 - How much of the pool the SP really has free (POOL), and whether the DTCM past its pools is unused (D: words not zero).
+
+## Test 1 on the unit (2026-10-24)
+
+NAM SLOW 109 at once, at the first prewarm step. The box: `MIX 8/10 T0`, `POOL 2528/2528`, `MAX 109 D999 F1`,
+`CLK 599* OVR 1`. So the audio task is an FPU task (F1), and the pool has 2.5 MB free in one piece. The DTCM past the
+stock pools is not empty (D999): the audio task programs the eDMA's TCDs (`0x400e9000`, +0x20, +0x40, +0x60) with
+buffers at `0x20000000 + (n << 12)` in 8 KB steps (ITCM `0x1cff6`, SDRAM `0x80003420`), so the audio DMA buffers live
+there. The OCRAM at `0x20200000..0x2023f000` is the kernel's own memory (the free-list primitives `0xd3e4..0xd5ba`
+serve the pool services). NAM's data stays in the SDRAM pool.
+
+## Test 2 (nam-test2)
+
+- The engine called `fmaf` about 9,800 times a block: Clang turns `__builtin_fmaf` into a library call under
+  math-errno (its default; TONE3000 builds with GCC and -ffast-math). `-fno-math-errno` makes it a VFMA: the k6 kernel
+  went from 7,986 to 5,560 bytes, a RUN step from 388k to 319k instructions, still bit-identical to the host engine.
+- The cabinet uses real-input transforms: each 128-point real FFT is a 64-point complex FFT and a fix-up, and only
+  the 65 non-redundant bins are kept and multiplied. A RUN step: 282k instructions; the spectra 32 to 16 KB.
+- WARM starts with 8, 16 and 32 samples (the caches start cold): 102 steps; the state still equals
+  `nam_a2lite_prewarm`'s byte for byte.
+- SLOW: a step over the whole block, or mixer + NAM over 9/10 of it twice in a row. NAM's window is 75 blocks and is
+  published when it stops, so the box says how fast it was. The DTCM census is gone.
+- APP1 `4c808fc4...dc6bb`; module 40,128 bytes; pool block 143,520 bytes; 94 checks pass.

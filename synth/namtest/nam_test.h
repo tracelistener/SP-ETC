@@ -1,4 +1,4 @@
-/* NAM test 1: what the integer side (nam_test.c: the meter, the UI, the RX/TX hooks) and the FPU side (nam_fp.c:
+/* NAM test: what the integer side (nam_test.c: the meter, the UI, the RX/TX hooks) and the FPU side (nam_fp.c:
  * the NAM amp and the cabinet on the captured input) share. */
 #ifndef NAM_TEST_H
 #define NAM_TEST_H
@@ -19,7 +19,7 @@ typedef unsigned char u8;
 enum {
     NT_OFF = 0,                             /* nothing allocated in use; the UI may free the block */
     NT_LOAD1, NT_LOAD2, NT_LOAD3,           /* one step per RX block: the capture, the cabinet, the engine */
-    NT_WARM,                                /* NAM_A2LITE_PREWARM_SAMPLES of silence, one block at a time */
+    NT_WARM,                                /* NAM_A2LITE_PREWARM_SAMPLES of silence: 8, 16, 32, then 64 a block */
     NT_RUN,                                 /* the captured input through the amp and the cabinet */
     NT_BAD,                                 /* the capture or the IR did not load: the block is left alone */
     NT_SLOW                                 /* one block took too long: stopped, the block is left alone */
@@ -52,7 +52,6 @@ typedef struct {
     u32 mem_fail;                           /* the last allocation failed: shown as MEM! */
     u32 fx, ext, checked, checks;           /* input FX, EXT SOURCE, last check (cycle count), checks made */
     u32 pool_free, pool_largest, pool_ok;   /* the pool's free bytes in all and in its largest piece */
-    u32 dtcm_nonzero;                       /* DTCM words past the stock pools that are not zero */
     u32 allocs, frees;
     /* written by the audio task */
     volatile u32 state;

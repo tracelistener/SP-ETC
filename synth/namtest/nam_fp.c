@@ -1,4 +1,4 @@
-/* NAM test 1, the FPU side: the NAM amp (TONE3000's A2-Lite engine for the Cortex-M7, MIT) and the cabinet on the
+/* NAM test, the FPU side: the NAM amp (TONE3000's A2-Lite engine for the Cortex-M7, MIT) and the cabinet on the
  * captured input. Everything here runs on the audio task through nam_fp_call: on the pool block's own stack, with
  * FPSCR and s0-s31 saved around it and FPSCR set to round to nearest, flush to zero and default NaN while it runs
  * (denormals are slow on the M7 FPU; TONE3000's integration notes ask for both). The audio task (inittsk, priority 1)
@@ -9,7 +9,8 @@
  *   NT_LOAD1  check the capture the UI copied into the block (A2-Lite, 48 kHz, CRC) and load it
  *   NT_LOAD2  transform the cabinet IR the UI copied into the block
  *   NT_LOAD3  bind the engine to the block (this clears the state, where both copies were)
- *   NT_WARM   NAM_A2LITE_PREWARM_SAMPLES of silence, 64 a block: the engine's prewarm, one call at a time
+ *   NT_WARM   NAM_A2LITE_PREWARM_SAMPLES of silence: the engine's prewarm, one call a block, of 8, 16 and 32
+ *             samples at first (the caches start cold; test 1's first 64-sample step took a whole block), then 64
  *   NT_RUN    the captured input, (L + R) / 2 at full scale = 1.0, through the amp (mode 0) and the cabinet, into
  *             nt.out at 1.0 = 8192 (-12 dB at the stems' scale, as IR diagnostic test 3's echo)
  */
@@ -92,9 +93,9 @@ u32 nam_fp_step(nt_t *n) {
         n->warm = 0;
         return NT_WARM;
     case NT_WARM: {
-        u32 k = NAM_A2LITE_PREWARM_SAMPLES - n->warm;
-        if (k > FRAMES)
-            k = FRAMES;
+        u32 k = NAM_A2LITE_PREWARM_SAMPLES - n->warm, step = n->warm < 8 ? 8 : n->warm < 24 ? 16 : n->warm < 56 ? 32 : FRAMES;
+        if (k > step)
+            k = step;
         for (u32 f = 0; f < k; f++)
             b->in[f] = 0.0f;
         amp(b, k);

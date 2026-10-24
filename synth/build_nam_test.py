@@ -1,4 +1,4 @@
-"""NAM test 1: a NAM amp and a cabinet IR on the captured input, with the CPU meter, on v9.50 (test only).
+"""NAM test 2: a NAM amp and a cabinet IR on the captured input, with the CPU meter, on v9.50 (test only).
 
 What it takes to run a NAM amp (TONE3000's A2-Lite engine for the Cortex-M7, MIT) and a cabinet IR on the main
 processor, heard and measured on the unit: while the meter's readout is shown, the captured input (the RX pair the
@@ -49,7 +49,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'nam-test1'
+REVISION = 'nam-test2'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -493,8 +493,10 @@ def compile_module(zig, folder, base, pre_target, bridges, assets):
         f'#define IR_TAPS {assets["ir"]["taps"]}u\n', encoding='ascii', newline='\n')
     tw = ',\n'.join(f'    {{{struct.unpack("<f", struct.pack("<f", math.cos(2 * math.pi * k / 128)))[0]!r}f, '
                     f'{struct.unpack("<f", struct.pack("<f", -math.sin(2 * math.pi * k / 128)))[0]!r}f}}'
-                    for k in range(64))
-    (folder / 'cab_tables.h').write_text(f'static const float CAB_TW[64][2] = {{\n{tw}\n}};\n', encoding='ascii',
+                    for k in range(65))
+    rev = ', '.join(str(int(f'{i:06b}'[::-1], 2)) for i in range(64))
+    (folder / 'cab_tables.h').write_text(f'static const float CAB_TW[65][2] = {{\n{tw}\n}};\n'
+                                         f'static const unsigned char CAB_REV[64] = {{{rev}}};\n', encoding='ascii',
                                          newline='\n')
     # The integer side (nam_test.o) first, from the base to nt_integer_end; then the FPU side. Unused sections go
     # (--gc-sections: Zig links its compiler_rt, of which only what something calls may stay).
@@ -514,7 +516,7 @@ SECTIONS {{
     if subprocess.check_output([str(zig), 'version'], text=True).strip() != '0.13.0':
         raise ValueError('needs Zig 0.13.0')
     target = ['-target', 'thumb-freestanding-eabihf', '-mcpu=cortex_m7+fp_armv8d16sp']
-    common = target + ['-O2', '-ffreestanding', '-fno-stack-protector', '-ffunction-sections', '-fdata-sections',
+    common = target + ['-O2', '-ffreestanding', '-fno-math-errno', '-fno-stack-protector', '-ffunction-sections', '-fdata-sections',
                        '-DNAM_A2LITE_MAX_BUFFER_SIZE=64', '-I', str(folder), '-I', str(inc), '-I', str(SRC)]
     objs = []
     for src in SOURCES:
@@ -681,7 +683,9 @@ def build(inp: Path, out: Path, zig: Path, base: int, model_path: Path, build_di
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='NAM test 1: while the CPU meter\'s readout is shown, the captured input through a NAM amp '
+        description='NAM test 2 (test 1 stopped at its first prewarm step, NAM SLOW 109; the engine\'s FMAs now '
+                    'inline, a real-input cabinet, a prewarm that starts small, a whole-block guard): while the CPU '
+                    'meter\'s readout is shown, the captured input through a NAM amp '
                     '(TONE3000 A2-Lite engine, example capture) and a 1,024-tap stand-in cabinet to the DRY pair at '
                     '-12 dB (the cabinet alone when the input FX is the Gt Amp Sim), with its cost per block, the '
                     'worst wake, the memory pool and the audio task\'s FPU attribute in the readout',
@@ -701,10 +705,11 @@ def build(inp: Path, out: Path, zig: Path, base: int, model_path: Path, build_di
         patches=patches, guards={hex(k) if isinstance(k, int) else k: v for k, v in guards.items()},
         nam=dict(block='one pool block of nt_block_bytes + 32 from the first application pool (get 0x800d2f1e, '
                        'wait 0; release 0x800d2f28), taken while the readout is shown',
-                 steps='LOAD1 capture, LOAD2 cabinet, LOAD3 engine, WARM 6,347 samples of silence (100 blocks), '
+                 steps='LOAD1 capture, LOAD2 cabinet, LOAD3 engine, WARM 6,347 samples of silence (8, 16, 32, '
+                       'then 64 a block: 102 blocks), '
                        'RUN: (L + R) / 2 / 32768 -> amp (not with the Gt Amp Sim) -> cabinet -> x 8192 to DRY L/R',
-                 slow='a WARM or RUN step over 3/4 of the block, or mixer + NAM over 9/10 of it in two wakes in '
-                      'a row, stops NAM (SLOW)',
+                 slow='a WARM or RUN step over the whole block, or mixer + NAM over 9/10 of it in two wakes in '
+                      'a row, stops NAM (SLOW); NAM\'s 75-block window is published then',
                  fpu='nam_fp_call: the block\'s own 4 KB stack, FPSCR and d0-d15 saved, FPSCR = nearest, FZ, DN'),
         readout='main screen: hold EXIT alone for 1 s to show or hide; stock popup 0x800d3ff0, refreshed every 0.5 s',
         tool='synth/build_nam_test.py')

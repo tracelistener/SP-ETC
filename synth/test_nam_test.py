@@ -81,11 +81,12 @@ CAPTURE, SYSPRM, SYS_GET, SETTINGS_OBJ, SET_GET = 0x202AD0A0, 0x82DFEED0, 0x800D
 POOL_ID, POOL_GET, POOL_RELEASE, POOL_QUERY, CUR_TASK = 0x80245820, 0x800D2F1E, 0x800D2F28, 0x000020A4, 0x202BBBFC
 M_SHOWN = 4 * 47                                                                 # meter_t.shown
 NT_OFF, NT_LOAD1, NT_LOAD2, NT_LOAD3, NT_WARM, NT_RUN, NT_BAD, NT_SLOW = range(8)
-NT_NAMES = ('req mode blk raw mem_fail fx ext checked checks pool_free pool_largest pool_ok dtcm_nonzero allocs '
+NT_NAMES = ('req mode blk raw mem_fail fx ext checked checks pool_free pool_largest pool_ok allocs '
             'frees state warm fresh').split()
 NT_TAIL = ('peak rx tx steps task_attr last_mix w_n w_sum w_max w_tot seq p_blocks p_nam_avg p_nam_max p_tot_max '
            'tot_max_ever over slow_cycles hot reset_req reset_ack').split()
 PREWARM = 6347
+WARM_STEPS = 3 + -(-(PREWARM - 56) // 64)       # 8, 16 and 32 samples, then 64 a step: 102
 
 fails = []
 report = {}
@@ -687,20 +688,17 @@ def readout(img, man):
     cases = {
         'idle': ((60000, 90000, 0, 0, 0, 0, 0, 800000, 800000, 800000), (375, 0, 0, 60000),
                  dict(state=NT_OFF, fx=0, peak=0, ext=1, mode=0, pool_ok=1, pool_free=2950 * 1024,
-                      pool_largest=2900 * 1024, dtcm_nonzero=0, task_attr=0x1001, tot_max_ever=90000, over=0, mem_fail=0)),
+                      pool_largest=2900 * 1024, task_attr=0x1001, tot_max_ever=90000, over=0, mem_fail=0)),
         'typical': ((184000, 328000, 0, 0, 0, 0, 0, 800000, 799000, 801000), (375, 248000, 272000, 600000),
                     dict(state=NT_RUN, fx=0, peak=16384, ext=1, mode=0, pool_ok=1, pool_free=2794 * 1024,
-                         pool_largest=2744 * 1024, dtcm_nonzero=0, task_attr=0x1001, tot_max_ever=616000, over=0,
-                         mem_fail=0)),
+                         pool_largest=2744 * 1024, task_attr=0x1001, tot_max_ever=616000, over=0, mem_fail=0)),
         'cabinet': ((184000, 328000, 0, 0, 0, 0, 0, 800000, 799000, 801000), (375, 24000, 26000, 354000),
                     dict(state=NT_RUN, fx=23, peak=8000, ext=0, mode=1, pool_ok=1, pool_free=2794 * 1024,
-                         pool_largest=2744 * 1024, dtcm_nonzero=12, task_attr=0x1001, tot_max_ever=380000, over=0,
-                         mem_fail=0)),
+                         pool_largest=2744 * 1024, task_attr=0x1001, tot_max_ever=380000, over=0, mem_fail=0)),
         'worst': ((9999999, 9999999, 9999999, 9999999, 9999999, 9999999, 4000, 5000000, 0, 5000000),
                   (375, 9999999, 9999999, 9999999),
                   dict(state=NT_SLOW, fx=99, peak=32768, ext=1, mode=0, pool_ok=1, pool_free=0xFFFFFFFF,
-                       pool_largest=0xFFFFFFFF, dtcm_nonzero=99999, task_attr=0x1001, tot_max_ever=9999999,
-                       over=99999, mem_fail=1)),
+                       pool_largest=0xFFFFFFFF, task_attr=0x1001, tot_max_ever=9999999, over=99999, mem_fail=1)),
     }
     texts = {}
     for name, (w, nw, ntv) in cases.items():
@@ -717,13 +715,13 @@ def readout(img, man):
     m.call(sym['meter_format'], SCRATCH, SCRATCH + 0x80, SCRATCH + 0x100)
     texts['no pool'] = m.bytes(SCRATCH + 0x100, 0x80).split(b'\0')[0].decode('ascii')
     lines = {k: v.split('\n') for k, v in texts.items()}
-    check(texts['typical'] == 'MIX 23/41 T75\nNAM 31/34 RUN\nIN0 LV50 X1\nPOOL 2794/2744\nMAX 77 D0 F1\nCLK 600 OVR 0',
+    check(texts['typical'] == 'MIX 23/41 T75\nNAM 31/34 RUN\nIN0 LV50 X1\nPOOL 2794/2744\nMAX 77 F1\nCLK 600 OVR 0',
           f"typical readout reads {texts['typical']!r}")
-    check(texts['idle'] == 'MIX 8/11 T8\nNAM 0/0 OFF\nIN0 LV0 X1\nPOOL 2950/2900\nMAX 11 D0 F1\nCLK 600 OVR 0',
+    check(texts['idle'] == 'MIX 8/11 T8\nNAM 0/0 OFF\nIN0 LV0 X1\nPOOL 2950/2900\nMAX 11 F1\nCLK 600 OVR 0',
           f"idle readout reads {texts['idle']!r}")
     check(texts['cabinet'].startswith('MIX 23/41 T44\nCAB 3/3 RUN\nIN23 LV24 X0\n') and
           texts['worst'].split('\n')[1].endswith(' MEM!') and lines['no pool'][1].endswith(' LOAD') and
-          lines['slow'][1] == 'NAM SLOW 65' and lines['worst'][1] == 'NAM 99/99 MEM!' and
+          lines['slow'][1] == 'NAM 99/99 SLOW' and lines['worst'][1] == 'NAM 99/99 MEM!' and
           lines['worst'][5] == 'CLK 999* OVR 999' and
           lines['no pool'][3] == 'POOL ?',
           f"cabinet, MEM!, LOAD and no-pool lines ({texts['cabinet']!r}, {lines['worst'][1]!r}, {lines['no pool']!r})")
@@ -1051,8 +1049,8 @@ def nam_checks(parent_img, img, man, zig, out):
         m.rx()
         warm += 1
     st = m.nt()
-    check(warm == 100 and st['state'] == NT_RUN and st['warm'] == PREWARM and st['fresh'] == 0,
-          f'prewarm: {warm} blocks ({PREWARM} samples), then RUN')
+    check(warm == WARM_STEPS and st['state'] == NT_RUN and st['warm'] == PREWARM and st['fresh'] == 0,
+          f'prewarm: {warm} blocks ({PREWARM} samples: 8, 16, 32, then 64 a block), then RUN')
     # The engine's own prewarm on a second machine gives the same instance and state.
     m2 = NamMachine(img, man)
     m2.ui(1)
@@ -1195,9 +1193,15 @@ def nam_checks(parent_img, img, man, zig, out):
     m.cyc_step = 650_000
     m.capture([1000] * 64)
     st = m.rx()
+    check(st['state'] == NT_RUN and st['hot'] == 0, 'one 650k step (81% of the block) alone: still RUN')
+    m.cyc_step = 850_000
+    m.capture([1000] * 64)
+    st = m.rx()
     m.cyc_step = 0
-    check(st['state'] == NT_SLOW and st['slow_cycles'] == 650_000 and st['fresh'] == 0,
-          'one step over 3/4 of the 800,000-cycle block (650k > 600k): SLOW at once, nothing for TX')
+    pub = struct.unpack('<4I', m.bytes(sym['nt'] + lay.pub, 16))
+    check(st['state'] == NT_SLOW and st['slow_cycles'] == 850_000 and st['fresh'] == 0 and pub[2] == 850_000,
+          'one step over the whole 800,000-cycle block (850k): SLOW at once, nothing for TX; the window so far '
+          'published (its peak is that step)')
     steps = st['steps']
     m.ui(1)
     st = m.nt()

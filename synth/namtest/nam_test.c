@@ -1,24 +1,27 @@
-/* NAM test 1: a NAM amp and a cabinet IR on the captured input, on v9.50 with the CPU meter of IR diagnostic test 3,
- * to hear on the unit whether the main processor runs them in time, and to read what they cost.
+/* NAM test 2: a NAM amp and a cabinet IR on the captured input, on v9.50 with the CPU meter of IR diagnostic test 3,
+ * to hear on the unit whether the main processor runs them in time, and to read what they cost. Test 1 stopped at its
+ * first prewarm step (NAM SLOW 109): test 2 has the engine's FMAs inline (-fno-math-errno: test 1 called fmaf about
+ * 9,800 times a block), a real-input cabinet (half the work), a prewarm that starts with small steps, a guard that only
+ * stops on a whole block, and NAM's numbers every 75 blocks, kept when it stops.
  *
  * While the meter's readout is shown (hold EXIT a second on the main screen), the UI task takes one block of about
  * 160 KB from the SP's first memory pool (the pool's own get call, which fails without the stock malloc's error
  * report), copies in the capture (TONE3000's example A2-Lite capture) and the stand-in cabinet IR from flash, and
  * hands it to the audio task. After every RX block the audio task then runs one step of nam_fp.c: three loading
- * steps, 100 blocks of prewarm, then the captured input (the RX pair the recorder feed copies, as the echo had it)
+ * steps, 102 blocks of prewarm, then the captured input (the RX pair the recorder feed copies, as the echo had it)
  * through the amp and the cabinet. TX adds each block to the DRY pair of TX line 3 one block later, at -12 dB,
  * clipped to 20 bits as the packer clips. With the Gt Amp Sim as the input FX (system 0x27c[0] = 23) the amp is
  * left out: the Gt Amp Sim's own amp then plays through the cabinet. Hiding the readout stops it; the UI task gives
- * the block back once the audio task has let go of it. NAM stops itself (SLOW) when one step takes over 3/4 of a
+ * the block back once the audio task has let go of it. NAM stops itself (SLOW) when one step takes over a whole
  * block, or the mixer and NAM take over 9/10 of one twice in a row, so the audio task cannot starve the others.
  *
  * Readout (the stock popup, refreshed every half second):
  *   MIX 8/10 T44      the mixer's average/peak in % of a block; the worst mixer + NAM in one wake (T)
- *   NAM 30/34 RUN     NAM's average/peak per RX block (CAB in cabinet-only mode); OFF LOAD WARM RUN BAD SLOW MEM!
+ *   NAM 30/34 RUN     NAM's average/peak per RX block over the last 75 (CAB in cabinet-only mode); OFF LOAD WARM
+ *                     RUN BAD SLOW MEM!
  *   IN0 LV45 X1       the input FX's effect number, the capture's peak in % of full scale, EXT SOURCE
  *   POOL 2880/2800    the pool's free kilobytes in all and in its largest piece (after this test took its block)
- *   MAX 52 D0 F1      the worst wake since the readout came on (%), DTCM words past the stock pools that are not
- *                     zero (D, for a later build), the audio task's FPU attribute (F1)
+ *   MAX 52 F1         the worst wake since the readout came on (%), the audio task's FPU attribute (F1)
  *   CLK 599 OVR 0     the core clock the block length implies; wakes whose mixer + NAM took over a block
  *
  * Hooks, as in IR diagnostic test 3:
@@ -66,6 +69,7 @@
 
 #define MAGIC 0x4D455452u          /* "METR" */
 #define WINDOW 375u                /* blocks: 0.5 s */
+#define NAM_WINDOW 75u             /* NAM's window: 0.1 s, so the prewarm already gives numbers */
 #define NOMINAL 800000u            /* cycles per block at 600 MHz */
 #define CLAMP 10000000u            /* per-block clamp, keeps 375-block sums in 32 bits */
 #define HOLD_CYCLES 600000000u     /* EXIT held this long toggles the readout (1 s at 600 MHz) */
@@ -156,8 +160,6 @@ _Static_assert(IR_TAPS <= CAB_TAPS, "the IR fits the cabinet");
 #define POOL_QUERY ((s32 (*)(s32, u32 *))0x000020A5u)           /* (pool, out[4]): [2] free, [3] largest piece */
 #define CUR_TASK (*(volatile u32 *)0x202BBBFCu)        /* the kernel's running task (its TCB) */
 #define TCB_ATTR 0x10
-#define DTCM_TAIL 0x2000B4D8u                          /* past the DTCM pool (0x200094d8 + 8 KB) */
-#define DTCM_END 0x20020000u
 #define TX_WORDS 16u                                   /* TX line 3: 16 words a frame, DRY = words 0/1 */
 #define DRY_MAX 0x7FFFF                                /* the packer clips every stem to 20 bits */
 #define DRY_MIN (-0x80000)
@@ -332,6 +334,18 @@ EXPORT u32 meter_mix_end(void) {
     return m->mix_ret;
 }
 
+static void nam_publish(nt_t *n) {
+    n->seq++;
+    BARRIER();
+    n->pub.blocks = n->w_n;
+    n->pub.nam_avg = n->w_sum / n->w_n;
+    n->pub.nam_max = n->w_max;
+    n->pub.tot_max = n->w_tot;
+    BARRIER();
+    n->seq++;
+    n->w_n = n->w_sum = n->w_max = n->w_tot = 0;
+}
+
 /* A processing step's cycles (WARM or RUN), with this wake's mixer: the NAM window, the worst wake, overruns.
  * Returns the wake's cycles (mixer + NAM). */
 static u32 nam_account(nt_t *n, u32 dt, u32 budget) {
@@ -349,17 +363,7 @@ static u32 nam_account(nt_t *n, u32 dt, u32 budget) {
     n->w_sum += dt;
     if (dt > n->w_max) n->w_max = dt;
     if (tot > n->w_tot) n->w_tot = tot;
-    if (n->w_n >= WINDOW) {
-        n->seq++;
-        BARRIER();
-        n->pub.blocks = n->w_n;
-        n->pub.nam_avg = n->w_sum / n->w_n;
-        n->pub.nam_max = n->w_max;
-        n->pub.tot_max = n->w_tot;
-        BARRIER();
-        n->seq++;
-        n->w_n = n->w_sum = n->w_max = n->w_tot = 0;
-    }
+    if (n->w_n >= NAM_WINDOW) nam_publish(n);
     return tot;
 }
 
@@ -393,14 +397,15 @@ EXPORT void nam_rx(void) {
     u32 dt = DWT_CYCCNT - t0;
     n->steps++;
     if (st >= NT_WARM) {
-        /* Stop before the audio task can starve the others: one step over 3/4 of a block, or two wakes in a row
-         * whose mixer + NAM took over 9/10 of one. */
+        /* Stop before the audio task can starve the others: one step over a whole block, or two wakes in a row
+         * whose mixer + NAM took over 9/10 of one. What the window has so far is published, to be read. */
         u32 tot = nam_account(n, dt, budget);
         n->hot = tot > budget / 10u * 9u ? n->hot + 1u : 0u;
-        if (dt > budget / 4u * 3u || n->hot >= 2u) {
+        if (dt > budget || n->hot >= 2u) {
             next = NT_SLOW;
             n->slow_cycles = tot;
             n->fresh = 0;
+            if (n->w_n) nam_publish(n);
         }
     }
     n->state = next;
@@ -563,18 +568,11 @@ EXPORT UI_SMALL void meter_format(const meter_window *w, const nt_window *nw, ch
     p = put_str(p, " T");
     p = put_u(p, pct(nw->tot_max, b));
     p = put_str(p, n->mode ? "\nCAB " : "\nNAM ");
-    if (st == NT_SLOW && !n->mem_fail) {
-        /* Stopped: the wake (mixer + NAM) that stopped it. */
-        p = put_str(p, "SLOW ");
-        p = put_u(p, pct(n->slow_cycles, b));
-    } else {
-        /* Over 3/4 a step stops NAM, so two digits are enough. */
-        p = put_u(p, pct(nw->nam_avg, b) > 99u ? 99u : pct(nw->nam_avg, b));
-        *p++ = '/';
-        p = put_u(p, pct(nw->nam_max, b) > 99u ? 99u : pct(nw->nam_max, b));
-        *p++ = ' ';
-        p = put_str(p, n->mem_fail ? "MEM!" : STATE_NAMES[st < 8u ? st : 0u]);
-    }
+    p = put_u(p, pct(nw->nam_avg, b) > 99u ? 99u : pct(nw->nam_avg, b));    /* two digits: the box is narrow */
+    *p++ = '/';
+    p = put_u(p, pct(nw->nam_max, b) > 99u ? 99u : pct(nw->nam_max, b));
+    *p++ = ' ';
+    p = put_str(p, n->mem_fail ? "MEM!" : STATE_NAMES[st < 8u ? st : 0u]);
     p = put_str(p, "\nIN");
     p = put_u(p, n->fx > 99u ? 99u : n->fx);
     p = put_str(p, " LV");
@@ -590,8 +588,6 @@ EXPORT UI_SMALL void meter_format(const meter_window *w, const nt_window *nw, ch
     }
     p = put_str(p, "\nMAX ");
     p = put_u(p, pct(n->tot_max_ever, b));
-    p = put_str(p, " D");
-    p = put_u(p, cap(n->dtcm_nonzero));
     p = put_str(p, (n->task_attr & 0x1000u) ? " F1" : " F0");
     p = put_str(p, "\nCLK ");
     p = put_u(p, (w->period_avg > 1332000u ? 1332000u : w->period_avg) * 3u / 4000u);   /* up to 999 MHz */
@@ -763,12 +759,6 @@ EXPORT UI_SMALL void nam_ui(void) {
         n->pool_ok = POOL_QUERY(POOL_ID, q) == 0;
         n->pool_free = q[2];
         n->pool_largest = q[3];
-    }
-    if (n->checks % 5u == 0) {
-        u32 count = 0;
-        for (const volatile u32 *p = (const volatile u32 *)DTCM_TAIL; p < (const volatile u32 *)DTCM_END; p++)
-            count += *p != 0;
-        n->dtcm_nonzero = count;
     }
 }
 

@@ -1,10 +1,12 @@
-/* NAM test 1: the cabinet, a uniformly partitioned convolution (64-frame partitions, 128-point FFTs, overlap-add),
- * mono float. The algorithm of Codex's sp_cab_partitioned.c (offline prototype), sized for this test. */
+/* NAM test: the cabinet, a uniformly partitioned convolution (64-frame partitions, overlap-add), mono float. The
+ * algorithm of Codex's sp_cab_partitioned.c (offline prototype), with real-input transforms: each 128-point real FFT
+ * is a 64-point complex FFT and a fix-up, and only the 65 non-redundant bins are kept and multiplied. */
 #ifndef CAB_H
 #define CAB_H
 
 #define CAB_PARTS 16                         /* 64-tap partitions: up to 1,024 taps, 21 ms at 48 kHz */
 #define CAB_TAPS (CAB_PARTS * 64)
+#define CAB_BINS 65                          /* bins 0..64 of a 128-point real FFT */
 
 typedef struct {
     float re, im;
@@ -12,9 +14,10 @@ typedef struct {
 
 typedef struct __attribute__((aligned(32))) {
     unsigned parts, slot;                    /* partitions in use; the newest input block's slot */
-    cab_cpx h[CAB_PARTS][128];               /* the IR's partitions, transformed */
-    cab_cpx x[CAB_PARTS][128];               /* the last `parts` input blocks, transformed */
-    cab_cpx sum[128];
+    cab_cpx h[CAB_PARTS][CAB_BINS];          /* the IR's partitions, transformed */
+    cab_cpx x[CAB_PARTS][CAB_BINS];          /* the last `parts` input blocks, transformed */
+    cab_cpx sum[CAB_BINS];
+    cab_cpx z[64];                           /* the 64-point transform's work space */
     float overlap[64];
 } cab_t;
 
