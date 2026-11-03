@@ -1,4 +1,4 @@
-/* Note tracker test 1: which note the guitar plays, on the screen, on v9.52 (combined-test17) with the CPU meter of
+/* Note tracker test 2: which note the guitar plays, on the screen, on v9.52 (combined-test17) with the CPU meter of
  * IR diagnostic test 3. The first step towards a guitar synth (the Sound Generator played from the guitar): how well
  * and how fast the SP's main processor can follow the note from the input the effects chip hands back (RX pair 0,
  * after the input FX: cabinet test 2 on the unit found the input only in pairs 0 and 1).
@@ -12,7 +12,8 @@
  *   E2 +3c Q92        the steady note (-- none); the newest analysis: cents off its nearest note, quality
  *   82.4Hz LV45 X1    the newest analysis' frequency (--Hz unvoiced), pair 0's peak in % of full scale, EXT SOURCE
  *   1ST 21 LCK 27     the last pluck: ms to the first estimate, ms to the steady note
- *   AVG 25 N12 IN23   the average ms to the steady note over N plucks since the readout came on; the input FX
+ *   AVG 25 N12 P14    the average ms to the steady note over N plucks since the readout came on; P plucks heard
+ *                     (a hand stopping a string may count; test 1 showed the input FX here instead)
  *   TRK 4/6 MIX 9     the tracker's average/peak per RX block over the last 75 (OFF, SLOW), the mixer's average, in %
  *                     of a block
  *   MAX 30 OVR 0      the worst wake since the readout came on (%); wakes whose mixer + tracker took over a block
@@ -132,7 +133,7 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
     sizeof(tt_t), OFFSET(tt_t, state), OFFSET(tt_t, peak), OFFSET(tt_t, in), OFFSET(tt_t, w_n), OFFSET(tt_t, pub),
     OFFSET(tt_t, tot_max_ever), OFFSET(tt_t, reset_ack), OFFSET(tt_t, rseq), OFFSET(tt_t, res), sizeof(tt_result),
     sizeof(tt_block_t), OFFSET(tt_block_t, ring), OFFSET(tt_block_t, span), OFFSET(tt_block_t, d6),
-    OFFSET(tt_block_t, energy), OFFSET(tt_block_t, z), OFFSET(tt_block_t, started), OFFSET(tt_block_t, stack),
+    OFFSET(tt_block_t, peaks), OFFSET(tt_block_t, z), OFFSET(tt_block_t, started), OFFSET(tt_block_t, stack),
     OFFSET(tt_t, posted_rseq)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
@@ -554,8 +555,8 @@ EXPORT UI_SMALL void tune_format(const meter_window *w, const tt_window *tw, con
     p = put_u(p, r->locks ? cap(r->lock_sum / r->locks) : 0u);
     p = put_str(p, " N");
     p = put_u(p, two(r->locks));
-    p = put_str(p, " IN");
-    p = put_u(p, two(t->fx));
+    p = put_str(p, " P");
+    p = put_u(p, two(r->onsets));                       /* test 1's IN (the input FX) made room for it */
     p = put_str(p, "\nTRK ");
     if (st == TT_RUN) {
         p = put_u(p, two(pct(tw->avg, b)));

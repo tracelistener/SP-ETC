@@ -1,4 +1,4 @@
-"""Checks for note tracker test 1 (build_tune_test.py): the CPU meter as in cabinet test 2, and the tracker.
+"""Checks for note tracker test 2 (build_tune_test.py): the CPU meter as in cabinet test 2, and the tracker.
 
 usage: python synth/test_tune_test.py OUT_DIR --kits KITS_MANIFEST [--seeds N] [--blocks N] [--mixer-runs N] [--only ...]
 
@@ -13,7 +13,10 @@ image. On top of them:
    - plucked strings (tunetest/tune_ref.py's) from 62 Hz to 1.3 kHz, clean and overdriven, through the module and
      through tune_ref.py's tracker: after every block the same steady note, voiced flag, plucks, times to the first
      estimate and to the steady note; the frequency within 0.1%; the note right and within 3 cents of the string;
-     noise alone gives no note;
+     one pluck a note; noise alone gives no note;
+   - the hardware test's run: six open strings through a pickup (tune_ref.py's open_strings), each rung 1.5 s and
+     stopped by hand: one pluck and one steady note a string, the right notes (tune-test1's pluck test took the
+     ringing for new plucks: N51 from six notes on the unit, 14-15 here);
    - the FPU registers, FPSCR and the callee-saved registers are as they were after every step; the step runs on the
      module's own stack (its depth measured), the task's stack sees only tune_rx's frame; the instructions a step
      takes, by phase;
@@ -55,7 +58,7 @@ class Layout:
     def __init__(self, m, sym):
         v = struct.unpack('<20I', m.bytes(sym['tt_layout'], 80))
         (self.tt_bytes, self.state, self.peak, self.inp, self.w_n, self.pub, self.tot_max_ever, self.reset_ack,
-         self.rseq, self.res, self.res_bytes, self.block_bytes, self.b_ring, self.b_span, self.b_d6, self.b_energy,
+         self.rseq, self.res, self.res_bytes, self.block_bytes, self.b_ring, self.b_span, self.b_d6, self.b_peaks,
          self.b_z, self.b_started, self.b_stack, self.posted_rseq) = v
         check(self.state == 4 * TT_HEAD.index('state') and self.posted_rseq == 4 * TT_HEAD.index('posted_rseq') and
               self.peak == 4 * len(TT_HEAD) and self.inp == self.peak + 8 and self.w_n == self.inp + 128 and
@@ -136,12 +139,12 @@ def readout(img, man):
                     dict(state=TT_RUN, fx=23, ext=1, tot_max_ever=368000, over=0, peak=[14746, 7000])),
         'high': ((184000, 328000, 0, 0, 0, 0, 0, 800000, 799000, 801000), (75, 32000, 48000, 360000),
                  res(note=88, cents=-50, freq10=13185, quality=100, voiced=1, first_ms=5, lock_ms=16, locks=3,
-                     lock_sum=48, analyses=60),
+                     onsets=3, lock_sum=48, analyses=60),
                  dict(state=TT_RUN, fx=0, ext=0, tot_max_ever=368000, over=0, peak=[32768, 0])),
         'worst': ((9999999, 9999999, 9999999, 9999999, 9999999, 9999999, 4000, 5000000, 0, 5000000),
                   (75, 9999999, 9999999, 9999999),
                   res(note=70, cents=-50, freq10=99999, quality=100, voiced=1, first_ms=9999, lock_ms=9999,
-                      locks=9999, lock_sum=99999999, analyses=9999),
+                      locks=9999, onsets=9999, lock_sum=99999999, analyses=9999),
                   dict(state=TT_SLOW, fx=99, ext=1, tot_max_ever=9999999, over=99999, peak=[32768, 32768])),
     }
     texts = {}
@@ -153,17 +156,18 @@ def readout(img, man):
         m.call(sym['tune_format'], SCRATCH, SCRATCH + 0x80, SCRATCH + 0xC0, SCRATCH + 0x100)
         texts[name] = m.bytes(SCRATCH + 0x100, 0x80).split(b'\0')[0].decode('ascii')
     lines = {k: v.split('\n') for k, v in texts.items()}
-    check(texts['typical'] == 'E2 +3c Q92\n82.4Hz LV45 X1\n1ST 21 LCK 27\nAVG 25 N12 IN23\nTRK 4/6 MIX 23\nMAX 46 OVR 0',
+    check(texts['typical'] ==
+          'E2 +3c Q92\n82.4Hz LV45 X1\n1ST 21 LCK 27\nAVG 25 N12 P14\nTRK 4/6 MIX 23\nMAX 46 OVR 0',
           f"typical readout reads {texts['typical']!r}")
-    check(texts['idle'] == '-- Q0\n--Hz LV0 X1\n1ST 0 LCK 0\nAVG 0 N0 IN0\nTRK OFF MIX 8\nMAX 11 OVR 0',
+    check(texts['idle'] == '-- Q0\n--Hz LV0 X1\n1ST 0 LCK 0\nAVG 0 N0 P0\nTRK OFF MIX 8\nMAX 11 OVR 0',
           f"idle readout reads {texts['idle']!r}")
     m.uc.mem_write(SCRATCH + 0xC0, bytes(4 * len(ref.RESULT)))         # never started: all zero, note 0
     m.call(sym['tune_format'], SCRATCH, SCRATCH + 0x80, SCRATCH + 0xC0, SCRATCH + 0x100)
     zero = m.bytes(SCRATCH + 0x100, 0x80).split(b'\0')[0].decode('ascii')
     check(zero.startswith('-- Q0\n'), f'a result never started (all zero) shows no note, not C-1 ({zero!r})')
-    check(lines['high'][:2] == ['E6 -50c Q100', '1318Hz LV100 X0'] and lines['high'][3] == 'AVG 16 N3 IN0',
+    check(lines['high'][:2] == ['E6 -50c Q100', '1318Hz LV100 X0'] and lines['high'][3] == 'AVG 16 N3 P3',
           f"a high note: no decimal from 1 kHz up ({lines['high'][:4]!r})")
-    check(lines['worst'][0] == 'A#4 -50c Q100' and lines['worst'][3] == 'AVG 999 N99 IN99' and
+    check(lines['worst'][0] == 'A#4 -50c Q100' and lines['worst'][3] == 'AVG 999 N99 P99' and
           lines['worst'][4] == 'TRK SLOW MIX 99' and lines['worst'][5] == 'MAX 999 OVR 999',
           f"worst-case lines read {lines['worst']!r}")
     widest = max(sum(width(c) for c in ln) for v in lines.values() for ln in v)
@@ -227,6 +231,12 @@ SIGNALS = [  # (label, MIDI notes, overdrive, legato): one at a time, or legato 
     ('overdriven', (40, 52, 64, 76), 4.0, False),
     ('legato', (40, 43, 45, 47), 0.0, True),
 ]
+OPEN = (40, 45, 50, 55, 59, 64)    # E2 A2 D3 G3 B3 E4
+GUITAR = [  # the hardware test's run: open strings through a pickup, each rung 1.5 s and stopped by hand
+    ('open strings', dict()),
+    ('open strings, overdriven, neck pickup', dict(drive=3.0, p=0.12, q=0.25, seed=7)),
+]
+GUITAR_CENTS = 15                  # a stiff wound string's overtones run sharp: it reads up to 12 cents sharp
 
 
 def signal(notes, drive, seed, legato=False):
@@ -258,13 +268,16 @@ def tracker_checks(parent_img, img, man):
     check(st['state'] == TT_RUN and st['steps'] == 1 and m.get(blk + lay.b_started, '<I') == 1,
           'RUN from the first block')
     # 2. Plucked strings through the module and through tune_ref.py.
-    found, mism, wrong = [], [], []
-    for si, (label, notes, drive, legato) in enumerate(SIGNALS):
+    runs = [(label, notes, ref.to_blocks(signal(notes, drive, 10 * si, legato), noise=1e-4, seed=si), legato, 3)
+            for si, (label, notes, drive, legato) in enumerate(SIGNALS)]
+    runs += [(label, OPEN, ref.to_blocks(ref.open_strings(OPEN, **kw)), False, GUITAR_CENTS) for label, kw in GUITAR]
+    found, mism, wrong, open_counts = [], [], [], []
+    for label, notes, blocks, legato, tol in runs:
         mm = TuneMachine(img, man)
         mm.ui(1)
         tr = ref.Tracker()
         locks, probe = [], None
-        for b, values in enumerate(ref.to_blocks(signal(notes, drive, 10 * si, legato), noise=1e-4, seed=si)):
+        for b, values in enumerate(blocks):
             st = mm.rx(values)
             tr.step(values)
             got, want = st['res'], tr.res
@@ -280,18 +293,25 @@ def tracker_checks(parent_img, img, man):
             if b == probe and got['voiced'] and got['note'] == locks[-1][0]:
                 locks[-1][3] = got['cents']
         found.append((label, [(ref.name(n), lk, fs) for n, lk, fs, _ in locks]))
+        if notes is OPEN:
+            open_counts.append((label, st['res']['onsets'], st['res']['locks']))
         if legato:                                                   # C = Python there; no claim on the notes
             continue
         if [n for n, _, _, _ in locks] != list(notes):
             wrong.append((label, [ref.name(n) for n, _, _, _ in locks], [ref.name(n) for n in notes]))
-        off = [(ref.name(n), c) for n, _, _, c in locks if c is None or abs(c) > 3]   # within 3 cents, 150 ms on
+        off = [(ref.name(n), c) for n, _, _, c in locks if c is None or abs(c) > tol]   # 150 ms after the lock
         if off:
             wrong.append((label, 'cents', off))
+        if st['res']['onsets'] != len(notes):
+            wrong.append((label, 'plucks', st['res']['onsets']))
     check(not mism, f'C and tune_ref.py agree after every block: notes, plucks, times, counts; frequency within 0.1%, '
                     f'cents within 1 ({mism})')
-    check(not wrong, f'every pluck played one at a time gives its string\'s note, within 3 cents 150 ms after '
-                     f'it went steady '
-                     f'({wrong})')
+    check(not wrong, f'every pluck played one at a time is one pluck and gives its string\'s note, within 3 cents '
+                     f'150 ms after it went steady ({GUITAR_CENTS} for the pickup-like strings: a stiff string\'s '
+                     f'overtones run sharp) ({wrong})')
+    check(open_counts and all(p == n == len(OPEN) for _, p, n in open_counts),
+          f'the hardware test\'s run, six open strings rung 1.5 s and stopped by hand: one pluck and one steady note '
+          f'a string ({open_counts}; tune-test1 counted 14-15 plucks on the clean run)')
     lock_times = [lk for label, ls in found if label != 'legato' for _, lk, _ in ls]
     first_times = [fs for label, ls in found if label != 'legato' for _, _, fs in ls]
     check(lock_times and max(lock_times) <= 40, f'steady note {min(lock_times)}-{max(lock_times)} ms after a pluck, '

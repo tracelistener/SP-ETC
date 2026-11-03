@@ -1,4 +1,4 @@
-"""Note tracker test 1: which note the guitar plays, on the screen, with the CPU meter, on v9.52 (test only).
+"""Note tracker test 2: which note the guitar plays, on the screen, with the CPU meter, on v9.52 (test only).
 
 The first step towards a guitar synth: while the meter's readout is shown, the input the effects chip hands back (RX
 pair 0, after the input FX) goes through a note tracker on the main processor (YIN, an analysis every 5.3 ms), and the
@@ -43,7 +43,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'tune-test1'
+REVISION = 'tune-test2'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -603,11 +603,13 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='Note tracker test 1: while the CPU meter\'s readout is shown, the input the effects chip hands '
+        description='Note tracker test 2: while the CPU meter\'s readout is shown, the input the effects chip hands '
                     'back (RX pair 0, after the input FX) through a note tracker (YIN at 6 kHz refined at 12 kHz, an '
                     'analysis every 4 RX blocks); the readout shows the steady note, the newest frequency and cents, '
-                    'the ms from a pluck to a first estimate and to the steady note, and the tracker\'s cost. Nothing '
-                    'goes to the output. The first step towards a guitar synth.',
+                    'the ms from a pluck to a first estimate and to the steady note, the plucks heard, and the '
+                    'tracker\'s cost. Test 2: a pluck is a block peak twice the highest of the 21 ms before (test 1\'s '
+                    'block energies took a ringing string for new plucks). Nothing goes to the output. The first step '
+                    'towards a guitar synth.',
         parent_app1=str(inp), parent_sha256=sha(inp.read_bytes()), parent_folder=inp.parent.name,
         parent_revision=parent.get('revision'), parent_parent_revision=parent.get('parent_revision'),
         sha256=sha(img), size=len(img), app0_sha256=APP0_SHA,

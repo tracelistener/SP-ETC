@@ -3,16 +3,17 @@ double precision here and in float32 (some fused) there, so frequencies agree to
 the notes, plucks and times agree.
 
 Also the test signals: a plucked string as a sum of decaying harmonics with a noise burst at the attack, at an exact
-frequency (unlike Karplus-Strong's integer delays), clean or overdriven."""
+frequency (unlike Karplus-Strong's integer delays), clean or overdriven; and a string through a magnetic pickup, rung
+long and stopped by hand, as the hardware test plays it (tune-test1's pluck test took its ringing for new plucks)."""
 import math
 
 import numpy as np
 
 FRAMES, RING, W6, T6MIN, T6MAX, W12 = 64, 512, 100, 4, 100, 200
 SPAN = W12 + 2 * T6MAX + 4
-SLICE, HIST = 25, 16
+SLICE, PEAKS = 25, 32
 LEVEL_MIN = 0.0019952622
-E_MIN = 16 * LEVEL_MIN * LEVEL_MIN
+P_MIN, P_RATIO, P_FROM, P_TO = 0.0039810717, 2.0, 3, 18   # a pluck: -48 dBFS, twice the peaks 3..18 blocks back
 THRESHOLD, APER_MAX = 0.2, 0.35
 REFRACTORY, AGREE, RELEASE = 24, 2, 4
 BQ = ((0.009165618568658829, 0.018331237137317657, 0.009165618568658829, -1.641069769859314, 0.6777322292327881),
@@ -39,7 +40,7 @@ class Tracker:
         self.ring = np.zeros(RING)
         self.span = np.zeros(SPAN)
         self.d6 = np.zeros(T6MAX + 1)
-        self.energy = np.zeros(HIST)
+        self.peaks = np.zeros(PEAKS)
         self.z = [[0.0, 0.0], [0.0, 0.0]]
         self.w = self.blk = 0
         self.last_onset, self.onset_blk, self.prev_note = -1000, 0, -1
@@ -52,7 +53,7 @@ class Tracker:
     def step(self, block):
         """block: the 64 int16 values the integer side copies, (L + R) >> 1 of pair 0."""
         z = self.z
-        e = 0.0
+        pk = 0.0
         for f, s in enumerate(block):
             v = s / 32768.0
             for k in (0, 1):
@@ -64,12 +65,12 @@ class Tracker:
             if f & 3 == 3:
                 self.ring[self.w & (RING - 1)] = v
                 self.w += 1
-                e += v * v
+                pk = max(pk, abs(v))
         blk = self.blk
-        self.energy[blk & (HIST - 1)] = e
-        if blk >= 12:
-            ref = sum(self.energy[(blk - k) & (HIST - 1)] for k in range(5, 13)) * 0.125
-            if e >= E_MIN and e > 4 * ref and blk - self.last_onset >= REFRACTORY:
+        self.peaks[blk & (PEAKS - 1)] = pk
+        if blk >= P_TO:
+            ref = max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(P_FROM, P_TO + 1))
+            if pk >= P_MIN and pk >= P_RATIO * ref and blk - self.last_onset >= REFRACTORY:
                 self.last_onset = self.onset_blk = blk
                 self.first_pending = self.lock_pending = True
                 self.agree = 0
@@ -205,6 +206,45 @@ def phrase(notes, drive=0.0, seed=0, legato=False, fs=48000):
             x = np.concatenate([x, np.zeros(int(0.12 * fs))])
         parts.append(x)
     return np.concatenate(parts)
+
+
+def guitar(freq, secs, amp=0.45, p=0.2, q=0.1, B=1e-4, seed=0, fs=48000, drive=0.0, beat=0.1):
+    """A string through a magnetic pickup: released from rest at p of its length, the pickup at q sensing its velocity
+    (every harmonic in sine phase: the pulse-like wave of a real pickup, whose blocks swing far within a period),
+    stiff-string inharmonicity B, higher harmonics dying faster, the pickup's resonance near 4 kHz, a slow beat of the
+    two polarisations; peak `amp` in the first 50 ms; drive > 0 overdrives it (tanh)."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(int(secs * fs)) / fs
+    x = np.zeros_like(t)
+    tau1 = 3.0 if freq < 150 else (2.0 if freq < 300 else 1.2)
+    for n in range(1, 80):
+        fn = n * freq * math.sqrt(1 + B * n * n)
+        if fn > 7000:
+            break
+        r = fn / 4000.0
+        a = math.sin(n * math.pi * p) * math.sin(n * math.pi * q) / n / math.sqrt((1 - r * r) ** 2 + (r / 1.5) ** 2)
+        x += a * np.sin(2 * np.pi * fn * t) * np.exp(-t * (1 + fn / 400.0) / tau1)
+    x *= 1 + beat * np.sin(2 * np.pi * rng.uniform(0.5, 2.0) * t + rng.uniform(0, 2 * np.pi))
+    x *= amp / np.max(np.abs(x[:int(0.05 * fs)]))
+    if drive:
+        x = np.tanh(drive * x / amp) / math.tanh(drive) * amp
+    return x
+
+
+def open_strings(notes=(40, 45, 50, 55, 59, 64), ring=1.5, gap=0.4, drive=0.0, seed=0, p=0.2, q=0.1, fs=48000):
+    """The hardware test's run: 0.2 s of quiet, then each string rung `ring` seconds and stopped by hand over 50 ms,
+    `gap` seconds before the next; over hiss (-74 dBFS) and 60 Hz hum (-66 dBFS)."""
+    rng = np.random.default_rng(seed)
+    parts = [np.zeros(fs // 5)]
+    for k, n in enumerate(notes):
+        x = guitar(440 * 2 ** ((n - 69) / 12), ring + 0.05, p=p, q=q, B=1e-4 if n < 55 else 3e-5, seed=seed + k,
+                   fs=fs, drive=drive)
+        d = int(0.05 * fs)
+        x[-d:] *= np.linspace(1, 0, d)
+        parts += [x, np.zeros(int(gap * fs))]
+    x = np.concatenate(parts)
+    t = np.arange(len(x)) / fs
+    return x + rng.normal(0, 2e-4, len(x)) + 5e-4 * np.sin(2 * np.pi * 60 * t + rng.uniform(0, 2 * np.pi))
 
 
 def to_blocks(x, noise=0.0, seed=1):

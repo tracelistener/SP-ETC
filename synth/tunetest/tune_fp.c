@@ -1,4 +1,4 @@
-/* Note tracker test 1, the FPU side: the note the guitar plays, from the input the effects chip hands back (RX pair 0,
+/* Note tracker test 2, the FPU side: the note the guitar plays, from the input the effects chip hands back (RX pair 0,
  * after the input FX). Everything here runs on the audio task through tune_fp_call: on the module's own 2 KB stack,
  * with FPSCR and d0-d15 saved around it and FPSCR set to round to nearest, flush to zero and default NaN, as cabinet
  * test 2's cab_fp_call.
@@ -6,8 +6,10 @@
  * One step per RX block (tune_rx in tune_test.c decides when):
  *   - the block's 64 frames (48 kHz, (L + R) / 2 of pair 0) through a 4th-order Butterworth low-pass at 1.6 kHz,
  *     every 4th sample into a 512-sample ring at 12 kHz;
- *   - the block's energy at 12 kHz for the pluck test: over 4 x the average of blocks 5-12 back, at least -54 dBFS,
- *     and 24 blocks (32 ms) after the last pluck;
+ *   - the block's peak at 12 kHz for the pluck test: at least -48 dBFS and twice the highest of blocks 3-18 back,
+ *     24 blocks (32 ms) after the last pluck. Those 16 blocks (21 ms) are longer than the lowest string's period, so
+ *     a ringing string's peaks never jump (test 1 compared energies over a block, a ninth of the low E's period: on
+ *     the unit a ringing string kept making new plucks, N51 from six notes);
  *   - one analysis every 4 blocks (5.3 ms), its work spread over them: YIN at 6 kHz on every other sample of the
  *     newest 400 (copied at the first block): the difference function for lags 1..100 (6 kHz..60 Hz) over a
  *     100-sample window, 25 lags a block; at the fourth block its cumulative-mean normalisation, the first dip under
@@ -25,10 +27,13 @@
 #include "tune_test.h"
 
 #define RING_MASK (TT_RING - 1u)
-#define HIST_MASK (TT_HIST - 1u)
+#define PEAK_MASK (TT_PEAKS - 1u)
 #define IN_SCALE (1.0f / 32768.0f)
 #define LEVEL_MIN 0.0019952622f          /* -54 dBFS */
-#define E_MIN (16.0f * LEVEL_MIN * LEVEL_MIN)
+#define P_MIN 0.0039810717f              /* a pluck's peak: -48 dBFS */
+#define P_RATIO 2.0f                     /* over the peaks P_FROM..P_TO blocks back */
+#define P_FROM 3u
+#define P_TO 18u
 #define THRESHOLD 0.2f                   /* YIN's dip */
 #define APER_MAX 0.35f                   /* voiced below this */
 #define REFRACTORY 24                    /* blocks between plucks */
@@ -217,7 +222,7 @@ u32 tune_fp_step(tt_t *t) {
         b->prev_note = -1;
         b->unvoiced = 99;
     }
-    float z00 = b->z[0][0], z01 = b->z[0][1], z10 = b->z[1][0], z11 = b->z[1][1], e = 0.0f;
+    float z00 = b->z[0][0], z01 = b->z[0][1], z10 = b->z[1][0], z11 = b->z[1][1], pk = 0.0f;
     for (u32 f = 0; f < FRAMES; f++) {
         float v = (float)t->in[f] * IN_SCALE;
         float y = BQ[0][0] * v + z00;
@@ -230,7 +235,8 @@ u32 tune_fp_step(tt_t *t) {
         if ((f & 3u) == 3u) {
             b->ring[b->w & RING_MASK] = y;
             b->w++;
-            e += y * y;
+            float a = __builtin_fabsf(y);
+            pk = a > pk ? a : pk;
         }
     }
     b->z[0][0] = z00;
@@ -238,13 +244,14 @@ u32 tune_fp_step(tt_t *t) {
     b->z[1][0] = z10;
     b->z[1][1] = z11;
     u32 blk = b->blk;
-    b->energy[blk & HIST_MASK] = e;
-    if (blk >= 12u) {
+    b->peaks[blk & PEAK_MASK] = pk;
+    if (blk >= P_TO) {
         float ref = 0.0f;
-        for (u32 k = 5; k <= 12u; k++)
-            ref += b->energy[(blk - k) & HIST_MASK];
-        ref *= 0.125f;
-        if (e >= E_MIN && e > 4.0f * ref && (s32)blk - b->last_onset >= REFRACTORY) {
+        for (u32 k = P_FROM; k <= P_TO; k++) {
+            float v = b->peaks[(blk - k) & PEAK_MASK];
+            ref = v > ref ? v : ref;
+        }
+        if (pk >= P_MIN && pk >= P_RATIO * ref && (s32)blk - b->last_onset >= REFRACTORY) {
             b->last_onset = b->onset_blk = (s32)blk;
             b->first_pending = b->lock_pending = 1;
             b->agree = 0;

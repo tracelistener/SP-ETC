@@ -18,7 +18,7 @@ typedef unsigned char u8;
 #define TT_W12 200u                         /* the refinement at 12 kHz: window */
 #define TT_SPAN (TT_W12 + 2u * TT_T6MAX + 4u)   /* the newest samples an analysis reads */
 #define TT_SLICE 25u                        /* lags a block: an analysis takes 4 blocks (5.3 ms) */
-#define TT_HIST 16u                         /* block energies kept for the pluck test */
+#define TT_PEAKS 32u                        /* block peaks kept for the pluck test */
 
 /* tt.state, written by the audio task only */
 enum {
@@ -70,7 +70,7 @@ typedef struct __attribute__((aligned(32))) {
     float span[TT_SPAN];                    /* an analysis' newest samples, newest first */
     float d6[TT_T6MAX + 1];                 /* the difference function at 6 kHz, lags 1..TT_T6MAX */
     float dn6[TT_T6MAX + 1];                /* its cumulative-mean normalisation */
-    float energy[TT_HIST];                  /* the blocks' energies at 12 kHz */
+    float peaks[TT_PEAKS];                  /* the blocks' peaks at 12 kHz */
     float z[2][2];                          /* the low-pass's two biquads (transposed direct form II) */
     u32 started, w, blk;                    /* ring writes, blocks */
     s32 last_onset, onset_blk, prev_note;
