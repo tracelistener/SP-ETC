@@ -1,24 +1,22 @@
-# Guitar synth test 6: letting notes go, and chords
+# SY synth test 1: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
-A test build: {{PARENT_REVISION}} (v9.52) plus a guitar synth. Not for sharing. To go back, patch v9.52 again.
+A test build: {{PARENT_REVISION}} (v9.52) plus the SY synth, and guitar synth test 6 on the Sound Generator page. Not
+for sharing. To go back, patch v9.52 again.
 
 | File | SHA-256 |
 | --- | --- |
 | SP404MKII_APP1.bin ({{APP1_SIZE}} bytes) | `{{APP1_SHA256}}` |
 | SP404MKII_APP0.bin (stock 5.52) | `{{APP0_SHA256}}` |
 
-What changed since test 5:
+What's new: on every screen except the Sound Generator's, the guitar plays a synth that follows each string on its
+own, so chords and bends come through. The sound is a saw through a filter that opens the harder you pick. Like
+tests 5 and 6, it needs EXT SOURCE on and ROUTING on ExtIn. The Sound Generator page still plays guitar synth test 6,
+unchanged.
 
-- Letting a fretted note go no longer plays a second note. That second note was the open string ringing for a
-  moment. The synth note also stops sooner when you stop the strings.
-- On a held chord, each string you pick plays its note. In test 5 the strings ringing together sounded murky, so the
-  synth played nothing. A string an octave above one that's still ringing may come out an octave off.
+1. Volume low at first. Guitar in, EXT SOURCE on, input FX Bypass, ROUTING ExtIn. Stay on the main screen.
+2. Play single notes, chords and bends. You hear the synth along with your guitar.
+3. To hear the synth alone: hold REMAIN and press EXT SOURCE until it's lit, which puts the input on BUS 1. Then put
+   the Isolator on BUS 1 with all three bands down, as you did for test 4's check.
 
-ROUTING stays on ExtIn, as in test 5.
-
-1. Volume low at first. Guitar in, EXT SOURCE on, input FX Bypass, Sound Generator open.
-2. Pick single notes and let each one go right away: one note each, no second note.
-3. Hold a chord and pick its strings one by one: each one plays.
-4. Play as you did in test 5 (melodies, riffs): it should be no worse.
-
-Tell me: are there any second notes left? Which chord notes still don't play, or play wrong? Did anything get worse?
+Tell me: do chords come out as chords? Do low notes come in too late? Any wrong notes, warbling or crackles? If it
+stutters, hold EXIT for a second on the main screen and tell me the SY and MAX numbers.

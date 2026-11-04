@@ -114,4 +114,70 @@ extern tt_block_t tt_block;
 u32 tune_fp_call(u32 (*fn)(tt_t *), tt_t *arg, void *stack_top);
 u32 tune_fp_step(tt_t *t);
 
+/* ---- SY synth test 1 (sy_fp.c): 49 semitone bands, an oscillator each, to the DRY pair ---- */
+#define SY_BANDS 49u
+#define SY_SUB 16u                          /* 12 kHz samples a block */
+
+/* A band's constants (sy_tables.h, from sy_ref.py): b0, -a1, -a2 of both band-pass stages, the energy follower,
+ * the centre period, the periods that count, the periods the band owns (12 kHz samples). */
+typedef struct {
+    float b0, na1, na2, lc, pc, plo, phi, olo, ohi;
+} sy_band_t;
+
+/* sy.state, written by the audio task only */
+enum {
+    SY_OFF = 0,                             /* not running; the UI may clear the block */
+    SY_RUN,                                 /* a step every RX block (fading out once req is 0) */
+    SY_SLOW                                 /* too slow: stopped */
+};
+
+typedef struct {
+    u32 blocks, avg, max, tot_max;          /* cycles: the engine per RX block, worst mixer + tracker + engine */
+} sy_window;
+
+typedef struct {
+    /* written by the UI task */
+    volatile u32 req;                       /* 1: run; 0: fade out and stop */
+    u32 starts, stops;
+    u32 reset_req;
+    /* written by the audio task */
+    volatile u32 state;
+    u32 rx, steps, tx, fresh;               /* fresh: out[] holds a block TX has not added yet */
+    u32 stopping;                           /* the FPU side fades out (req went 0 while it ran) */
+    u32 sounding;                           /* bands sounding in the newest block */
+    u32 last_mix;                           /* this wake's mixer (cycles), for the accounting */
+    s32 out[FRAMES];                        /* the next block for the DRY pair, at the 16-bit stems' scale */
+    u32 w_n, w_sum, w_max, w_tot;           /* the window being collected */
+    volatile u32 seq;                       /* odd while pub is written */
+    sy_window pub;
+    u32 tot_max_ever, over, slow_cycles, hot, reset_ack;
+} sy_t;
+
+/* The engine's memory, in the module. The UI clears it before a start. */
+typedef struct __attribute__((aligned(32))) {
+    float dz[2][2];                         /* the 48 -> 12 kHz low-pass's two biquads */
+    float xh[2];                            /* the block before's last two 12 kHz samples */
+    float ua1[SY_BANDS], ua2[SY_BANDS];     /* the first band-pass stage's last two outputs */
+    float yb1[SY_BANDS], yb2[SY_BANDS];     /* the second's */
+    float e[SY_BANDS];                      /* the band's energy */
+    float tl[SY_BANDS];                     /* its last positive crossing, from this block's start (12 kHz samples) */
+    float per[SY_BANDS], trend[SY_BANDS];   /* its period (alpha-beta tracked) and the period's trend */
+    float ph[SY_BANDS], amp[SY_BANDS];      /* its oscillator: the ramp (-1..1) and the amplitude */
+    u8 armed[SY_BANDS];                     /* went below -ARM x its level since the last crossing */
+    u8 nper[SY_BANDS];                      /* periods counted since it woke (to 255) */
+    u8 owned[SY_BANDS];                     /* sounding in the last block */
+    u8 pad[5];                              /* the stack 8-byte aligned */
+    float env, s1, s2, mg;                  /* the input's peak follower, the output filter, the stop's fade */
+    u32 started, blocks, crossings, pad2;
+    u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
+} sy_block_t;
+_Static_assert((__builtin_offsetof(sy_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");
+
+extern sy_t sy;
+extern sy_block_t sy_block;
+
+/* sy_fp.c */
+u32 sy_fp_call(u32 (*fn)(sy_t *), sy_t *arg, void *stack_top);
+u32 sy_fp_step(sy_t *s);
+
 #endif

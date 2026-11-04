@@ -1,5 +1,8 @@
-/* Guitar synth test 6 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52
- * (combined-test17) with the CPU meter of IR diagnostic test 3 and note tracker test 2's readout. The SP's main
+/* SY synth test 1, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
+ * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
+ * BOSS's SY pedals work: 49 semitone bands, each with its own oscillator, from RX pair 0, added to the DRY pair of
+ * TX line 3 one block later, on every page but the Sound Generator's while EXT SOURCE is on and ROUTING on ExtIn.
+ * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
  * ExtIn the input alone, on Mix the mix as heard, the synth's own note included, so test 5 plays only on ExtIn.
@@ -19,20 +22,23 @@
  * Readout (the stock popup; every 0.1 s while the tracker runs, else with the meter's half-second window):
  *   E2 +3c Q92        the steady note (-- none); the newest analysis: cents off its nearest note, quality
  *   82.4Hz LV45 X1    the newest analysis' frequency (--Hz unvoiced), pair 0's peak in % of full scale, EXT SOURCE
- *   1ST 21 LCK 27     the last pluck: ms to the first estimate, ms to the steady note
+ *   SY 9/12 B14       SY test 1: the engine's average/peak per RX block over the last 75 (OFF, SLOW), in % of a
+ *                     block, and the bands sounding (test 6 showed the last pluck's times to the note here)
  *   AVG 25 N12 P14    the average ms to the steady note over N plucks since the readout came on; P plucks heard
  *                     (a hand stopping a string may count; test 1 showed the input FX here instead)
  *   TRK 4/6 MIX 9     the tracker's average/peak per RX block over the last 75 (OFF, SLOW), the mixer's average, in %
  *                     of a block
- *   MAX 30 OVR 0      the worst wake since the readout came on (%); wakes whose mixer + tracker took over a block
+ *   MAX 30 OVR 0      the worst wake since the readout came on (%); wakes whose mixer + tracker (+ SY engine) took
+ *                     over a block
  *
  * Hooks, as in cabinet test 2:
  *   0x0001c2d0  mixer entry       -> meter_mix_entry (the return comes back to meter_mix_exit)
  *   0x80005870  per-voice stub    -> meter_voice
  *   0x0001fd84  SG stub's pre call -> meter_sg_pre
- *   bounce's ui bridge: its bnc_ui call -> diag_ui (bnc_ui, the meter's UI step, tune_ui, syn_ui)
+ *   bounce's ui bridge: its bnc_ui call -> diag_ui (bnc_ui, the meter's UI step, tune_ui, syn_ui, sy_ui)
  *   bounce's rx bridge: its bnc_rx call -> diag_rx (the RX packet from the audio task's r9 and [r6 + 4], as its
- *                     RX site computed it; bnc_rx, the pairs, tune_rx)
+ *                     RX site computed it; bnc_rx, the pairs, tune_rx, sy_rx)
+ *   the meter's mixer exit (meter_mix_end): sy_tx adds the engine's newest block to TX line 3's DRY pair
  *
  * The CPU meter, as T0 had it: the DWT cycle counter times every 64-frame block (800,000 cycles at 600 MHz); MIX
  * the whole mixer 0x1c2d0, entry to return; PAD and SG are still kept (the readout does not show them). This file is
@@ -136,6 +142,8 @@ _Static_assert(__builtin_offsetof(meter_t, sg_ret) == OFF_SG_RET, "layout");
 EXPORT meter_t meter;
 EXPORT tt_t tt;
 EXPORT tt_block_t tt_block;
+EXPORT sy_t sy;
+EXPORT sy_block_t sy_block;
 #define OFFSET(t, f) ((u32)__builtin_offsetof(t, f))
 EXPORT const u32 tt_layout[] = {                          /* the tests read these */
     sizeof(tt_t), OFFSET(tt_t, state), OFFSET(tt_t, peak), OFFSET(tt_t, in), OFFSET(tt_t, w_n), OFFSET(tt_t, pub),
@@ -143,6 +151,11 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
     sizeof(tt_block_t), OFFSET(tt_block_t, ring), OFFSET(tt_block_t, span), OFFSET(tt_block_t, d6),
     OFFSET(tt_block_t, peaks), OFFSET(tt_block_t, z), OFFSET(tt_block_t, started), OFFSET(tt_block_t, stack),
     OFFSET(tt_t, posted_rseq), OFFSET(tt_block_t, pick_peak), OFFSET(tt_block_t, env)};
+EXPORT const u32 sy_layout[] = {                          /* SY test 1: the tests read these */
+    sizeof(sy_t), OFFSET(sy_t, state), OFFSET(sy_t, out), OFFSET(sy_t, w_n), OFFSET(sy_t, pub),
+    OFFSET(sy_t, tot_max_ever), sizeof(sy_block_t), OFFSET(sy_block_t, e), OFFSET(sy_block_t, per),
+    OFFSET(sy_block_t, ph), OFFSET(sy_block_t, amp), OFFSET(sy_block_t, owned), OFFSET(sy_block_t, env),
+    OFFSET(sy_block_t, started), OFFSET(sy_block_t, stack), OFFSET(sy_block_t, nper)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
@@ -160,6 +173,9 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
 #define REFRESH_CYCLES 60000000u                       /* the readout follows the tracker every 0.1 s */
 #define CUR_TASK (*(volatile u32 *)0x202BBBFCu)        /* the kernel's running task (its TCB) */
 #define TCB_ATTR 0x10
+#define TX_WORDS 16u                                   /* TX line 3: 16 words a frame, DRY = words 0/1 */
+#define DRY_MAX 0x7FFFF                                /* the packer clips every stem to 20 bits */
+#define DRY_MIN (-0x80000)
 
 /* ---- the synth: the tracker's note on the Sound Generator ---- */
 #define SG_PAGE 0x1E                                   /* the Sound Generator page (the kits' and the arp's) */
@@ -241,10 +257,12 @@ static void totals_clear(meter_t *m) {
 
 /* ---- audio task ---- */
 
+static const volatile u32 *mix_bufs;   /* the mixer's argument: TX line 3, line 1, line 2 */
+
 EXPORT void meter_mix_begin(u32 ret, const volatile u32 *bufs) {
     u32 now = DWT_CYCCNT;
     meter_t *m = &meter;
-    (void)bufs;
+    mix_bufs = bufs;
     if (m->magic != MAGIC) {
         /* The stock tempo clock reads this counter, so it should be running; start
          * it if not (as the Oct 10 voice load test did) and say so in the readout. */
@@ -306,6 +324,24 @@ static void publish(meter_t *m) {
     window_clear(m);
 }
 
+static s32 clip20(s32 v) { return v > DRY_MAX ? DRY_MAX : v < DRY_MIN ? DRY_MIN : v; }
+
+/* After the mixer: the SY engine's newest block, if TX has not added it yet, onto the DRY pair of the TX line 3 block
+ * the mixer has just packed (as cabinet test 2's cab_tx). */
+EXPORT void sy_tx(const volatile u32 *bufs, u32 mix) {
+    sy_t *s = &sy;
+    s->last_mix = mix;
+    if (!s->fresh || !bufs) return;
+    volatile s32 *p = (volatile s32 *)bufs[0];
+    for (u32 f = 0; f < FRAMES; f++, p += TX_WORDS) {
+        s32 e = s->out[f];
+        p[0] = clip20(p[0] + e);
+        p[1] = clip20(p[1] + e);
+    }
+    s->fresh = 0;
+    s->tx++;
+}
+
 EXPORT u32 meter_mix_end(void) {
     u32 now = DWT_CYCCNT;
     meter_t *m = &meter;
@@ -334,6 +370,7 @@ EXPORT u32 meter_mix_end(void) {
     if (voices > m->w_voices) m->w_voices = voices;
     if (m->w_n >= WINDOW) publish(m);
     tt.last_mix = mix;
+    sy_tx(mix_bufs, mix);
     return m->mix_ret;
 }
 
@@ -369,9 +406,12 @@ static u32 tt_account(tt_t *t, u32 dt, u32 budget) {
     return tot;
 }
 
+static u32 trk_cycles;                 /* this wake's tracker step (cycles), 0 when it did not run */
+
 /* After the recorder feed and tune_pairs (audio task): one tracker step while the UI wants it. */
 EXPORT void tune_rx(void) {
     tt_t *t = &tt;
+    trk_cycles = 0;
     t->rx++;
     t->task_attr = *(volatile u32 *)(CUR_TASK + TCB_ATTR);
     u32 st = t->state;
@@ -386,6 +426,7 @@ EXPORT void tune_rx(void) {
     tune_fp_call(tune_fp_step, t, &tt_block.stack[STACK_BYTES / 4]);
     u32 dt = DWT_CYCCNT - t0;
     t->steps++;
+    trk_cycles = clamp(dt);
     /* Stop before the audio task can starve the others: one step over a whole block, or two wakes in a row whose
      * mixer + tracker took over 9/10 of one. What the window has so far is published, to be read. */
     u32 tot = tt_account(t, dt, budget);
@@ -395,6 +436,76 @@ EXPORT void tune_rx(void) {
         t->slow_cycles = tot;
         if (t->w_n) tt_publish(t);
     }
+}
+
+static void sy_publish(sy_t *s) {
+    s->seq++;
+    BARRIER();
+    s->pub.blocks = s->w_n;
+    s->pub.avg = s->w_sum / s->w_n;
+    s->pub.max = s->w_max;
+    s->pub.tot_max = s->w_tot;
+    BARRIER();
+    s->seq++;
+    s->w_n = s->w_sum = s->w_max = s->w_tot = 0;
+}
+
+/* An engine step's cycles, with this wake's mixer and tracker: the window, the worst wake, overruns. Returns the
+ * wake's cycles. */
+static u32 sy_account(sy_t *s, u32 dt, u32 budget) {
+    u32 tot = clamp(clamp(dt) + s->last_mix + trk_cycles);
+    dt = clamp(dt);
+    s->last_mix = 0;
+    if (s->reset_ack != s->reset_req) {
+        s->tot_max_ever = s->over = 0;
+        s->w_n = s->w_sum = s->w_max = s->w_tot = 0;
+        s->reset_ack = s->reset_req;
+    }
+    if (tot > budget) s->over++;
+    if (tot > s->tot_max_ever) s->tot_max_ever = tot;
+    s->w_n++;
+    s->w_sum += dt;
+    if (dt > s->w_max) s->w_max = dt;
+    if (tot > s->w_tot) s->w_tot = tot;
+    if (s->w_n >= TT_WINDOW) sy_publish(s);
+    return tot;
+}
+
+/* After the tracker (audio task): one SY engine step while the UI wants it, and on through the fade once it stops
+ * wanting it (8 blocks). It stops itself (SLOW) when one step takes over a whole block, or the mixer, the tracker and
+ * the engine take over 9/10 of one twice in a row. */
+EXPORT void sy_rx(void) {
+    sy_t *s = &sy;
+    s->rx++;
+    u32 st = s->state;
+    if (!s->req) {
+        if (st != SY_RUN) {
+            if (st != SY_OFF) s->state = SY_OFF;
+            s->fresh = 0;
+            return;
+        }
+        s->stopping = 1;
+    }
+    if (st == SY_SLOW) return;
+    if (st == SY_OFF) {
+        s->state = st = SY_RUN;
+        s->stopping = 0;
+    }
+    u32 budget = meter.budget ? meter.budget : NOMINAL;
+    u32 t0 = DWT_CYCCNT;
+    u32 next = sy_fp_call(sy_fp_step, s, &sy_block.stack[STACK_BYTES / 4]);
+    u32 dt = DWT_CYCCNT - t0;
+    s->steps++;
+    s->fresh = 1;
+    u32 tot = sy_account(s, dt, budget);
+    s->hot = tot > budget / 10u * 9u ? s->hot + 1u : 0u;
+    if (dt > budget || s->hot >= 2u) {
+        next = SY_SLOW;
+        s->slow_cycles = tot;
+        s->fresh = 0;
+        if (s->w_n) sy_publish(s);
+    }
+    s->state = next;
 }
 
 /* Mixer entry (0x1c2d0 jumps here). r0 = the TX buffers, lr = bounce's tx bridge.
@@ -537,7 +648,7 @@ UI_SMALL static u32 pct(u32 cycles, u32 budget) {
 
 static u32 cap(u32 v) { return v > 999u ? 999u : v; }
 
-static const char *const STATE_NAMES[] = {"OFF", "RUN", "SLOW"};
+static const char *const STATE_NAMES[] = {"OFF", "RUN", "SLOW"};    /* the tracker's and the SY engine's */
 static const char *const NOTE_NAMES[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 
 UI_SMALL static char *put_s(char *p, s32 v) {
@@ -547,14 +658,30 @@ UI_SMALL static char *put_s(char *p, s32 v) {
 
 UI_SMALL static u32 two(u32 v) { return v > 99u ? 99u : v; }
 
+static int read_sy_window(sy_window *out) {
+    sy_t *s = &sy;
+    for (int tries = 0; tries < 4; ++tries) {
+        u32 q = s->seq;
+        BARRIER();
+        if (q & 1u) continue;
+        *out = s->pub;
+        BARRIER();
+        if (s->seq == q) return 1;
+    }
+    return 0;
+}
+
 /* Six lines in the popup's font (PBold, 9 px lines): test_tune_test.py checks that the widest worst case leaves the
  * popup box inside the 128 x 64 screen. */
 EXPORT UI_SMALL void tune_format(const meter_window *w, const tt_window *tw, const tt_result *r, char *out) {
     const meter_t *m = &meter;
     const tt_t *t = &tt;
+    const sy_t *s = &sy;
     u32 b = m->budget ? m->budget : NOMINAL;
-    u32 st = t->state;
+    u32 st = t->state, sst = s->state;
+    sy_window sw;
     char *p = out;
+    if (!read_sy_window(&sw)) sw.avg = sw.max = 0;
     if (r->analyses && r->note >= 0 && r->note < 128) {   /* none before the first analysis: the readout's first
                                                             post comes before tune_ui starts the tracker */
         p = put_str(p, NOTE_NAMES[(u32)r->note % 12u]);
@@ -587,10 +714,16 @@ EXPORT UI_SMALL void tune_format(const meter_window *w, const tt_window *tw, con
     p = put_str(p, "Hz LV");
     p = put_u(p, (t->peak[0] > 32768u ? 32768u : t->peak[0]) * 100u / 32768u);
     p = put_str(p, t->ext ? " X1" : " X0");
-    p = put_str(p, "\n1ST ");
-    p = put_u(p, cap(r->first_ms));
-    p = put_str(p, " LCK ");
-    p = put_u(p, cap(r->lock_ms));
+    p = put_str(p, "\nSY ");                             /* test 6 showed the last pluck's times here */
+    if (sst == SY_RUN) {
+        p = put_u(p, two(pct(sw.avg, b)));
+        *p++ = '/';
+        p = put_u(p, two(pct(sw.max, b)));
+        p = put_str(p, " B");
+        p = put_u(p, two(s->sounding));
+    } else {
+        p = put_str(p, STATE_NAMES[sst < 3u ? sst : 0u]);
+    }
     p = put_str(p, "\nAVG ");
     p = put_u(p, r->locks ? cap(r->lock_sum / r->locks) : 0u);
     p = put_str(p, " N");
@@ -607,10 +740,10 @@ EXPORT UI_SMALL void tune_format(const meter_window *w, const tt_window *tw, con
     }
     p = put_str(p, " MIX ");
     p = put_u(p, two(pct(w->mix_avg, b)));
-    p = put_str(p, "\nMAX ");
-    p = put_u(p, pct(t->tot_max_ever, b));
+    p = put_str(p, "\nMAX ");                            /* the worse of the tracker's wakes and the engine's */
+    p = put_u(p, pct(t->tot_max_ever > s->tot_max_ever ? t->tot_max_ever : s->tot_max_ever, b));
     p = put_str(p, " OVR ");
-    p = put_u(p, cap(t->over));
+    p = put_u(p, cap(t->over > s->over ? t->over : s->over));
     *p = 0;
 }
 
@@ -696,6 +829,7 @@ static void toggle(meter_t *m, u32 now) {
         m->shown = 1;
         m->reset_req++;                                 /* HI, OVR and MAX start again */
         tt.reset_req++;
+        sy.reset_req++;
         m->posted_seq = m->seq - 2u;                    /* show the current window at once */
         m->posted_at = now - KEEPALIVE;
     } else {
@@ -779,6 +913,30 @@ EXPORT UI_SMALL void tune_ui(void) {
     t->routing = (u32)SYS_GET(SYSPRM, ROUTING, -1);
 }
 
+/* Clear the SY engine, then hand it to the audio task (only while it is off). */
+UI_SMALL static void sy_start(sy_t *s) {
+    memset(&sy_block, 0, sizeof(sy_block));
+    s->starts++;
+    BARRIER();
+    s->req = 1;
+}
+
+/* Every UI tick: the SY engine on every page but the Sound Generator's (guitar synth test 6 plays there), with EXT
+ * SOURCE on and ROUTING on ExtIn (on Mix the effects chip hands back the mix as heard: the engine would hear its own
+ * sound on DRY). Leaving that lets it fade out over 8 blocks. */
+EXPORT UI_SMALL void sy_ui(void) {
+    sy_t *s = &sy;
+    u32 want = syn_live(&tt) && PAGE != SG_PAGE;
+    if (!want) {
+        if (s->req) {
+            s->req = 0;
+            s->stops++;
+        }
+        return;
+    }
+    if (!s->req && s->state == SY_OFF) sy_start(s);
+}
+
 /* Every UI tick, on the Sound Generator page: the tracker's note there, through the entry MIDI IN on the page's
  * channel takes (the kits' note gates' SG route: r0 = 2, r1 note, r2 velocity, r3 0 on / 1 off), so ARP and drum
  * mode treat it as they treat MIDI. One note at a time: a new note lets go of the one before. Leaving the page
@@ -789,12 +947,13 @@ EXPORT UI_SMALL void tune_ui(void) {
  * strikes), played only within MIDI 12..127.
  * Test 5: silent unless EXT SOURCE is on and ROUTING on ExtIn (the readout can run the tracker on the page on Mix: its
  * notes are not played). On the page with EXT SOURCE on and ROUTING Mix, a popup says so, once each time that
- * starts, when no other popup is showing or waiting (never over a stock message). */
+ * starts, when no other popup is showing or waiting (never over a stock message). SY test 1: on every stock page
+ * (the SY engine needs ExtIn too). */
 EXPORT UI_SMALL void syn_ui(void) {
     gsyn_t *s = &gsyn;
     u32 drum = KIT_MODE_ON;
     tt.drum = drum;                                     /* the tracker plays only plucks in drum mode */
-    u32 mix = PAGE == SG_PAGE && tt.ext && tt.routing != ROUTING_EXTIN;
+    u32 mix = (u32)PAGE < STOCK_PAGES && tt.ext && tt.routing != ROUTING_EXTIN;
     if (mix && !s->mix) s->hint_due = 1;
     s->mix = mix;
     if (!mix) s->hint_due = 0;
@@ -844,6 +1003,7 @@ EXPORT void diag_ui(int elapsed) {
     meter_ui_tick(elapsed);
     tune_ui();
     syn_ui();
+    sy_ui();
 }
 
 /* Every RX block: pairs 0 and 1's peaks, and pair 0 as (L + R) / 2 for the tracker (32-byte frames, 64 of them).
@@ -873,6 +1033,7 @@ EXPORT void diag_rx_c(const volatile s16 *packet) {
     ((void (*)(void))BNC_RX)();
     tune_pairs(packet);
     tune_rx();
+    sy_rx();
 }
 
 /* The bridge comes here with the audio task's registers as its RX site left them: r9 the RX banks, [r6 + 4] this

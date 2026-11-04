@@ -1,5 +1,13 @@
-"""Guitar synth test 6 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
+"""SY synth test 1, with guitar synth test 6 (note tracker 3), on v9.52 (test only).
 
+SY synth test 1: a polyphonic guitar synth in the way BOSS's SY pedals work (Roland's patent US 9,542,923). The
+input the effects chip hands back (RX pair 0) is split into 49 bands a semitone apart, E2..E6; each band's pitch
+(its zero crossings) and level drive a saw of its own, the bands' sum goes through a resonant low-pass that opens with
+the playing, and the result is added to the DRY pair of TX line 3 one block later. It plays on every page but the
+Sound Generator's while EXT SOURCE is on and ROUTING on ExtIn. tunetest/sy_fp.c is the engine, tunetest/sy_ref.py
+the same in Python and the tables (written into sy_tables.h at build time). See synth/SY_TEST.md.
+
+On the Sound Generator page, guitar synth test 6 as before:
 The input the effects chip hands back (RX pair 0, after the input FX) goes through a note tracker on the main
 processor (YIN, an analysis every 5.3 ms); on the Sound Generator page with EXT SOURCE on and ROUTING on ExtIn, its
 note plays there as MIDI IN would. Test 4: a pick's click (the energy over 2 kHz) counts as a pluck too, only clean
@@ -33,6 +41,7 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import capstone
@@ -40,16 +49,18 @@ from keystone import Ks, KS_ARCH_ARM, KS_MODE_THUMB, KS_MODE_LITTLE_ENDIAN
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / 'tunetest'
+sys.path.insert(0, str(SRC))
+import sy_ref  # noqa: E402  (the SY engine's tables)
 INTEGER_SOURCE = SRC / 'tune_test.c'           # none of its functions may hold an FPU instruction
-SOURCES = [INTEGER_SOURCE, SRC / 'tune_fp.c']
-HEADERS = [SRC / 'tune_test.h']
+SOURCES = [INTEGER_SOURCE, SRC / 'tune_fp.c', SRC / 'sy_fp.c']
+HEADERS = [SRC / 'tune_test.h', SRC / 'sy_ref.py']   # sy_ref.py writes sy_tables.h
 THIRD_PARTY = ()
 TEST_PLAN = SRC / 'HARDWARE_TEST.md'
 FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'gtr-synth-test6'
+REVISION = 'sy-synth-test1'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -68,8 +79,9 @@ ROUTING_GETTER = 0x80081158         # a stock getter of system 0x5c (INPUT SETTI
 EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', 'meter_sg_end',
            'meter_mix_begin', 'meter_mix_end', 'meter_ui_tick', 'tune_format', 'diag_ui', 'diag_rx',
            'tune_rx', 'tune_ui', 'tune_pairs', 'diag_rx_c', 'tune_fp_call', 'tune_fp_step', 'syn_ui', 'memset',
-           'memcpy', 'meter', 'tt', 'tt_block', 'tt_layout', 'gsyn')
-DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn')
+           'memcpy', 'meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy_rx', 'sy_tx', 'sy_ui', 'sy_fp_call',
+           'sy_fp_step', 'sy', 'sy_block', 'sy_layout')
+DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout')
 
 # Exact instructions at and around every site (capstone text).
 GUARDS = [
@@ -494,6 +506,7 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode):
         f'#define SG_PRE_TARGET {pre_target:#010x}\n#define BNC_UI {bridges["bnc_ui"]:#010x}u\n'
         f'#define BNC_RX {bridges["bnc_rx"]:#010x}u\n#define SG_MIDI {sg_midi:#010x}u\n'
         f'#define KIT_MODE {kit_mode:#010x}u\n', encoding='ascii', newline='\n')
+    (folder / 'sy_tables.h').write_text(sy_ref.c_header(), encoding='ascii', newline='\n')
     # The integer side (tune_test.o) first, from the base to tt_integer_end; then the FPU side. Unused sections go
     # (--gc-sections: Zig links its compiler_rt, of which only what something calls may stay).
     fp_keep = ' '.join(f'KEEP(*(.text.{n}))' for n in EXPORTS if n not in DATA and not n.startswith(('meter', 'diag')))
@@ -501,7 +514,7 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode):
 SECTIONS {{
  . = {base:#x};
  .text : {{ KEEP(*tune_test.o(.text.meter_mix_entry)) KEEP(*tune_test.o(.text*)) tt_integer_end = .; {fp_keep} *(.text*) }}
- .rodata : ALIGN(4) {{ KEEP(*(.rodata.tt_layout)) *(.rodata*) }}
+ .rodata : ALIGN(4) {{ KEEP(*(.rodata.tt_layout)) KEEP(*(.rodata.sy_layout)) *(.rodata*) }}
  .data : ALIGN(4) {{ *(.data*) }}
  .bss : ALIGN(32) {{ *(.bss*) *(COMMON) }}
  /DISCARD/ : {{ *(.ARM.exidx*) *(.ARM.extab*) *(.comment) *(.note*) *(.ARM.attributes) }}
@@ -626,6 +639,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     integer = integer + [(a, a + n, name) for name, a, n in funcs if name.startswith('__aeabi')]
     fpu_count = check_module(code, text, base, integer)
     block_bytes = struct.unpack_from('<I', code, syms['tt_layout'] - base + 11 * 4)[0]
+    sy_block_bytes = struct.unpack_from('<I', code, syms['sy_layout'] - base + 6 * 4)[0]
     targets = {MIXER: syms['meter_mix_entry'], STUB: syms['meter_voice']}
     patches = []
     for site, target in targets.items():
@@ -668,7 +682,15 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='Guitar synth test 6: after test 5 on the unit (a second note when a fretted note is let go '
+        description='SY synth test 1: a polyphonic synth in the way BOSS\'s SY pedals work (Roland\'s patent US '
+                    '9,542,923): RX pair 0 at 12 kHz through 49 fourth-order band-passes a semitone apart (E2..E6); '
+                    'each band\'s zero-crossing periods (an alpha-beta tracker) and energy; a band sounds when its '
+                    'energy tops both neighbours\' and its pitch is within 80 cents of its centre, a saw at its pitch '
+                    '(polyBLEP) at its level; the sum through a resonant low-pass whose cutoff follows the input '
+                    'level (300 Hz .. 5 kHz), a soft clip, to the DRY pair of TX line 3 one block later; on every page '
+                    'but the Sound Generator\'s with EXT SOURCE on and ROUTING ExtIn (the popup on Mix now on every '
+                    'stock page); readout line 3 shows the engine (SY avg/peak %, bands sounding). '
+                    'Guitar synth test 6 (on the Sound Generator page): after test 5 on the unit (a second note when a fretted note is let go '
                     'right after the pick; a chord held and picked string by string: notes missing): a move needs '
                     'the level over a period at 0.4 x a 0.3 s peak follower, a pick going steady 0.25 x the level '
                     'before it (else nothing plays and the note stops), the synth lets go when the newest 13 blocks '
@@ -698,7 +720,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
         module_base=base, module_file_offset=file_at, module_size=len(code), module_sha256=sha(code),
         module_limit=LIMIT, symbols={k: syms[k] for k in EXPORTS}, functions={n: [a, s] for n, a, s in funcs},
         integer_spans=[[lo, hi, name] for lo, hi, name in integer], fpu_instructions=fpu_count,
-        tt_block_bytes=block_bytes, bounce_bridges={k: v for k, v in bridges.items()},
+        tt_block_bytes=block_bytes, sy_block_bytes=sy_block_bytes, bounce_bridges={k: v for k, v in bridges.items()},
         source_sha256={str(p.relative_to(HERE)): sha(lf(p)) for p in SOURCES + HEADERS},
         test_plan_sha256=sha(lf(TEST_PLAN)), tool_sha256=sha(lf(Path(__file__))),
         compiler='zig 0.13.0 cc -target thumb-freestanding-eabihf -mcpu=cortex_m7+fp_armv8d16sp -O2',
@@ -711,6 +733,15 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
                   slow='a step over the whole block, or mixer + tracker over 9/10 of it in two wakes in a row, stops '
                        'it (SLOW); the 75-block window is published then',
                   fpu='tune_fp_call: the module\'s own 2 KB stack, FPSCR and d0-d15 saved, FPSCR = nearest, FZ, DN'),
+        sy=dict(memory='sy_block in the module (sy_block_bytes): the bands\' filters, energies, periods and '
+                       'oscillators, a 2 KB stack; the tables (sy_tables.h, from tunetest/sy_ref.py) in .rodata',
+                steps='every RX block, after the tracker: pair 0 (L + R) / 2 -> 4th-order low-pass 2 kHz -> 12 kHz '
+                      '-> 49 bands x 16 samples; the sounding bands\' saws x 64 samples; the output filter; 64 '
+                      'values for TX\'s DRY pair',
+                slow='a step over the whole block, or mixer + tracker + engine over 9/10 of it in two wakes in a '
+                     'row, stops it (SLOW)',
+                fpu='sy_fp_call: the module\'s own 2 KB stack (sy_block), FPSCR and d0-d15 saved, FPSCR = nearest, FZ, '
+                    'DN; no contraction (fmaf only where written), as tunetest/sy_ref.py computes it'),
         readout='main screen: hold EXIT alone for 1 s to show or hide; stock popup 0x800d3ff0, every 0.1 s while '
                 'the tracker runs',
         tool='synth/build_tune_test.py')
@@ -738,7 +769,7 @@ def main():
     a = ap.parse_args()
     m = build(a.app1.resolve(), a.out.resolve(), a.zig.resolve(), a.base, a.build_dir)
     print(json.dumps({k: m[k] for k in ('revision', 'sha256', 'size', 'module_base', 'module_size', 'tt_block_bytes',
-                                        'fpu_instructions')}, indent=1))
+                                        'sy_block_bytes', 'fpu_instructions')}, indent=1))
 
 
 if __name__ == '__main__':

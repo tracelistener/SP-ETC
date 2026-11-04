@@ -1,11 +1,12 @@
-"""Checks for guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the tracker (note
-tracker test 2's, with test 4's click and clean readings), and the synth: the tracker's note on the Sound Generator,
+"""Checks for SY synth test 1 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
+tracker (note tracker test 2's, with test 4's click and clean readings), the SY engine (12. below), and the synth: the tracker's note on the Sound Generator,
 the cases synth test 3 got wrong on the unit (picks at the ringing string's level, strings ringing together) and
 test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT; test 5's ROUTING gate (silent on Mix,
 where pair 0 is the mix as heard) and its popup; test 6's cases from test 5 on the unit: a fretted note let go right
 after the pick (one note, let go soon), chords held and picked string by string (each note plays).
 
 usage: python synth/test_tune_test.py OUT_DIR --kits KITS_MANIFEST [--seeds N] [--blocks N] [--mixer-runs N] [--only ...]
+(--only: static,tune,synth,sy,meter)
 
 The meter's checks are NAM test 2's (test_nam_test.py, imported: the same hooks, the same meter_t), run on this
 image. On top of them:
@@ -29,6 +30,14 @@ image. On top of them:
    - diag_rx with the RX site's r6/r9: pairs 0 and 1's peaks and pair 0's (L + R) >> 1 from this block's bank;
    - the readout through the UI tick: the tracker's lines, every 0.1 s while it runs;
    - diag_rx and diag_ui run bounce's own bnc_rx and bnc_ui as the parent does.
+
+12. SY synth test 1 (tunetest/sy_fp.c, the glue in tune_test.c):
+   - it plays on every page but the Sound Generator's with EXT SOURCE on and ROUTING on ExtIn, cleared before each
+     start; leaving that fades it out over 8 blocks, then OFF; not on Mix, not with EXT SOURCE off;
+   - the module's output = tunetest/sy_ref.py's, value for value, on open strings, a strummed and a picked chord, a
+     bend, a clipped strum, hiss alone; the bands sounding are the strings' partials; silence after the strings stop;
+   - s0-s31, FPSCR, r4-r11 kept; its own stack; sy_tx adds its block to the DRY pair once, clipped to 20 bits, and
+     the whole mixer is the parent's plus that block; the SLOW rules; the instructions a step takes.
 
 Not a hardware test: no timing (instructions are counted as a proxy), no screen, synthetic strings.
 """
@@ -134,6 +143,14 @@ def readout(img, man):
             else:
                 m.put(T + lay.w_n + 4 * TT_MID.index(k), v, '<I')
 
+    def sy_put(state=0, sounding=0, avg=0, mx=0, tot_max_ever=0, over=0):
+        at = sym['sy']
+        m.put(at + 4 * SY_HEAD.index('state'), state, '<I')
+        m.put(at + 4 * SY_HEAD.index('sounding'), sounding, '<I')
+        tail = at + 4 * len(SY_HEAD) + 256
+        for k, v in (('seq', 0), ('p_avg', avg), ('p_max', mx), ('tot_max_ever', tot_max_ever), ('over', over)):
+            m.put(tail + 4 * SY_TAIL.index(k), v, '<I')
+
     def res(**kw):
         r = dict.fromkeys(ref.RESULT, 0)
         r['note'] = -1
@@ -142,35 +159,45 @@ def readout(img, man):
 
     cases = {
         'idle': ((60000, 90000, 0, 0, 0, 0, 0, 800000, 800000, 800000), (0, 0, 0, 0), res(),
-                 dict(state=TT_OFF, fx=0, ext=1, tot_max_ever=90000, over=0, peak=[0, 0])),
+                 dict(state=TT_OFF, fx=0, ext=1, tot_max_ever=90000, over=0, peak=[0, 0]), dict(state=SY_OFF)),
         'typical': ((184000, 328000, 0, 0, 0, 0, 0, 800000, 799000, 801000), (75, 32000, 48000, 360000),
                     res(note=40, cents=3, freq10=824, quality=92, voiced=1, first_ms=21, lock_ms=27, onsets=14,
                         locks=12, lock_sum=300, lock_min=16, lock_max=32, analyses=900),
-                    dict(state=TT_RUN, fx=23, ext=1, tot_max_ever=368000, over=0, peak=[14746, 7000])),
+                    dict(state=TT_RUN, fx=23, ext=1, tot_max_ever=368000, over=0, peak=[14746, 7000]),
+                    dict(state=SY_RUN, sounding=14, avg=72000, mx=96000, tot_max_ever=400000, over=2)),
         'high': ((184000, 328000, 0, 0, 0, 0, 0, 800000, 799000, 801000), (75, 32000, 48000, 360000),
                  res(note=88, cents=-50, freq10=13185, quality=100, voiced=1, first_ms=5, lock_ms=16, locks=3,
                      onsets=3, lock_sum=48, analyses=60),
-                 dict(state=TT_RUN, fx=0, ext=0, tot_max_ever=368000, over=0, peak=[32768, 0])),
+                 dict(state=TT_RUN, fx=0, ext=0, tot_max_ever=368000, over=0, peak=[32768, 0]), dict(state=SY_OFF)),
         'worst': ((9999999, 9999999, 9999999, 9999999, 9999999, 9999999, 4000, 5000000, 0, 5000000),
                   (75, 9999999, 9999999, 9999999),
                   res(note=70, cents=-50, freq10=99999, quality=100, voiced=1, first_ms=9999, lock_ms=9999,
                       locks=9999, onsets=9999, lock_sum=99999999, analyses=9999),
-                  dict(state=TT_SLOW, fx=99, ext=1, tot_max_ever=9999999, over=99999, peak=[32768, 32768])),
+                  dict(state=TT_SLOW, fx=99, ext=1, tot_max_ever=9999999, over=99999, peak=[32768, 32768]),
+                  dict(state=SY_SLOW, sounding=99, tot_max_ever=9999999, over=99999)),
+        'sy wide': ((184000, 328000, 0, 0, 0, 0, 0, 800000, 799000, 801000), (75, 32000, 48000, 360000),
+                    res(note=40, cents=3, freq10=824, quality=92, voiced=1, analyses=900),
+                    dict(state=TT_RUN, fx=23, ext=1, tot_max_ever=368000, over=0, peak=[14746, 7000]),
+                    dict(state=SY_RUN, sounding=49, avg=9999999, mx=9999999, tot_max_ever=0, over=0)),
     }
     texts = {}
-    for name, (w, tw, r, tv) in cases.items():
+    for name, (w, tw, r, tv, sv) in cases.items():
         m.uc.mem_write(SCRATCH, struct.pack('<11I', 375, *w))
         m.uc.mem_write(SCRATCH + 0x80, struct.pack('<4I', *tw))
         m.uc.mem_write(SCRATCH + 0xC0, r)
         tt_put(**tv)
+        sy_put(**sv)
         m.call(sym['tune_format'], SCRATCH, SCRATCH + 0x80, SCRATCH + 0xC0, SCRATCH + 0x100)
         texts[name] = m.bytes(SCRATCH + 0x100, 0x80).split(b'\0')[0].decode('ascii')
     lines = {k: v.split('\n') for k, v in texts.items()}
     check(texts['typical'] ==
-          'E2 +3c Q92\n82.4Hz LV45 X1\n1ST 21 LCK 27\nAVG 25 N12 P14\nTRK 4/6 MIX 23\nMAX 46 OVR 0',
-          f"typical readout reads {texts['typical']!r}")
-    check(texts['idle'] == '-- Q0\n--Hz LV0 X1\n1ST 0 LCK 0\nAVG 0 N0 P0\nTRK OFF MIX 8\nMAX 11 OVR 0',
+          'E2 +3c Q92\n82.4Hz LV45 X1\nSY 9/12 B14\nAVG 25 N12 P14\nTRK 4/6 MIX 23\nMAX 50 OVR 2',
+          f"typical readout reads {texts['typical']!r} (SY test 1: line 3 the engine; MAX and OVR the worse of the "
+          f"tracker's and the engine's)")
+    check(texts['idle'] == '-- Q0\n--Hz LV0 X1\nSY OFF\nAVG 0 N0 P0\nTRK OFF MIX 8\nMAX 11 OVR 0',
           f"idle readout reads {texts['idle']!r}")
+    check(lines['worst'][2] == 'SY SLOW' and lines['sy wide'][2] == 'SY 99/99 B49',
+          f"the engine stopped: SY SLOW; at its widest: {lines['sy wide'][2]!r}")
     m.uc.mem_write(SCRATCH + 0xC0, bytes(4 * len(ref.RESULT)))         # never started: all zero, note 0
     m.call(sym['tune_format'], SCRATCH, SCRATCH + 0x80, SCRATCH + 0xC0, SCRATCH + 0x100)
     zero = m.bytes(SCRATCH + 0x100, 0x80).split(b'\0')[0].decode('ascii')
@@ -820,24 +847,30 @@ def synth_checks(img, man, kit_sym):
     mm.popups()
     mm.page(1)
     mm.tick()
-    quiet_off_page = mm.posted() is None
     mm.page(SG_PAGE)
+    mm.tick()
+    same = mm.posted() is None                                         # SY test 1: still on Mix, so not again
+
+    def ext_again(machine):
+        machine.ext = 0
+        machine.ui(0)
+        machine.tick()
+        machine.ext = 1
+        machine.ui(0)
+    ext_again(mm)
     mm.tick()
     back = mm.posted()
-    mm.popups()
-    mm.page(1)
-    mm.tick()
-    mm.popups(shown=0x1234)                                            # a stock message is up as the page opens
-    mm.page(SG_PAGE)
+    mm.popups(shown=0x1234)                                            # a stock message is up as it turns on
+    ext_again(mm)
     for _ in range(5):
         mm.tick()
     waited = mm.posted() is None and mm.gsyn()['hint_due'] == 1
     mm.popups()                                                        # it closes
     mm.tick()
     after = mm.posted()
-    check(quiet_off_page and back == hint and waited and after == hint and mm.gsyn()['hints'] == 3,
-          f'the popup again each time the page opens on Mix (none off the page); never over a message already up: '
-          f'it waits for it to close ({mm.gsyn()})')
+    check(same and back == hint and waited and after == hint and mm.gsyn()['hints'] == 3,
+          f'the popup again each time EXT SOURCE turns on with ROUTING Mix (SY test 1: on every stock page, so not '
+          f'on a page change); never over a message already up: it waits for it to close ({mm.gsyn()})')
     mq = SynthMachine(img, man, ext=0, routing=0)
     mq.popups()
     mq.ui(0)
@@ -845,13 +878,17 @@ def synth_checks(img, man, kit_sym):
     for _ in range(10):
         mq.tick()
     mp = SynthMachine(img, man, page=1, routing=0)
-    mp.popups()
-    mp.ui(0)
-    mp.ui(0)
-    for _ in range(10):
-        mp.tick()
-    check(mq.posted() is None and mq.gsyn()['hints'] == 0 and mp.posted() is None and mp.gsyn()['hints'] == 0,
-          'no popup with EXT SOURCE off (the synth is off anyway) or off the page')
+    md = SynthMachine(img, man, page=DOOM_PAGE, routing=0)
+    for x in (mp, md):
+        x.popups()
+        x.ui(0)
+        x.ui(0)
+        for _ in range(10):
+            x.tick()
+    check(mq.posted() is None and mq.gsyn()['hints'] == 0 and md.posted() is None and md.gsyn()['hints'] == 0 and
+          mp.posted() == hint and mp.gsyn()['hints'] == 1,
+          "no popup with EXT SOURCE off (the synths are off anyway) or on DOOM OS's own pages; SY test 1: on the "
+          "main screen too (the SY engine needs ExtIn as well)")
     mx = SynthMachine(img, man)
     mx.ui(0)
     mx.ui(0)
@@ -924,6 +961,331 @@ def synth_checks(img, man, kit_sym):
 
 
 # ---------------------------------------------------------------------------------------------
+# SY synth test 1: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx) and its twin (sy_ref.py).
+SY_OFF, SY_RUN, SY_SLOW = range(3)
+SY_HEAD = 'req starts stops reset_req state rx steps tx fresh stopping sounding last_mix'.split()
+SY_TAIL = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack'.split()
+DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own screens)
+
+
+class SyLayout:
+    """sy_t and sy_block_t offsets, from the module's sy_layout table."""
+    def __init__(self, m, sym):
+        v = struct.unpack('<16I', m.bytes(sym['sy_layout'], 64))
+        (self.sy_bytes, self.state, self.out, self.w_n, self.pub, self.tot_max_ever, self.block_bytes, self.e,
+         self.per, self.ph, self.amp, self.owned, self.env, self.started, self.stack, self.nper) = v
+        check(self.state == 4 * SY_HEAD.index('state') and self.out == 4 * len(SY_HEAD) and
+              self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
+              self.sy_bytes == self.tot_max_ever + 20 and self.stack + 2048 <= self.block_bytes and
+              self.block_bytes - self.stack - 2048 < 32,
+              'sy_t and sy_block_t layout as the test reads it')
+
+
+class SyMachine(SynthMachine):
+    """SynthMachine on the main screen, its RX block running tune_rx then sy_rx (as diag_rx_c), then the UI tick's
+    syn_ui and sy_ui."""
+    def __init__(self, img, man, page=1, **kw):
+        super().__init__(img, man, page=page, **kw)
+        self.sl = SyLayout(self, self.sym)
+
+    def sy(self):
+        s = self.sym['sy']
+        st = dict(zip(SY_HEAD, struct.unpack(f'<{len(SY_HEAD)}I', self.bytes(s, 4 * len(SY_HEAD)))))
+        st['out'] = list(struct.unpack('<64i', self.bytes(s + self.sl.out, 256)))
+        st.update(zip(SY_TAIL, struct.unpack(f'<{len(SY_TAIL)}I', self.bytes(s + self.sl.w_n, 4 * len(SY_TAIL)))))
+        return st
+
+    def start(self):
+        """The UI's 0.1 s check (input FX, EXT SOURCE, ROUTING), then sy_ui."""
+        self.ui(0)
+        self.call(self.sym['sy_ui'])
+
+    def step(self, values=None):
+        self.feed(values if values is not None else [0] * 64)
+        self.call(self.sym['tune_rx'])
+        self.call(self.sym['sy_rx'])
+        self.call(self.sym['syn_ui'])
+        self.call(self.sym['sy_ui'])
+        self.blk += 1
+        return self.sy()
+
+    def bands(self):
+        """The module's bands after the last block: sounding (amplitude > 0) as (band, frequency, amplitude)."""
+        b = self.sym['sy_block']
+        per = struct.unpack('<49f', self.bytes(b + self.sl.per, 196))
+        amp = struct.unpack('<49f', self.bytes(b + self.sl.amp, 196))
+        return [(k, 12000.0 / per[k], amp[k]) for k in range(49) if amp[k] > 0]
+
+
+def sy_strum(name, spread=0.03, secs=1.5, seed=0, gain=1.0):
+    """A chord strummed: its strings 30 ms apart, ringing `secs`, over hiss and hum."""
+    import numpy as np
+    notes = [ref.OPEN[s] + f for s, f in ref.CHORDS[name]]
+    x = np.zeros(int((secs + 0.3) * 48000))
+    for k, n in enumerate(notes):
+        at = int((0.1 + k * spread) * 48000)
+        s = ref.guitar(ref._hz(n), secs, amp=0.3, seed=seed + k, B=ref._stiff(n))
+        x[at:at + len(s)] += s[:len(x) - at]
+    return np.clip(ref.hiss(x, seed) * gain, -1, 1), notes
+
+
+def sy_partials(notes, fmax=1450.0):
+    out = []
+    for n in notes:
+        f0, B, k = ref._hz(n), ref._stiff(n), 1
+        while k * f0 * (1 + B * k * k) ** 0.5 <= fmax:
+            out.append(k * f0 * (1 + B * k * k) ** 0.5)
+            k += 1
+    return out
+
+
+def sy_right(bands, notes, tol=30.0):
+    """(amplitude on a partial of the notes within tol cents, all amplitude)."""
+    import math
+    parts = sy_partials(notes)
+    right = sum(a for k, f, a in bands if min(abs(1200 * math.log2(f / p)) for p in parts) <= tol)
+    return right, sum(a for k, f, a in bands)
+
+
+def sy_checks(parent_img, img, man, kit_sym):
+    import numpy as np
+    import sy_ref
+    sym = man['symbols']
+    rng = random.Random(404)
+    report['sy'] = {}
+    # 1. When it plays: every page but the Sound Generator's, with EXT SOURCE on and ROUTING on ExtIn.
+    m = SyMachine(img, man)
+    lay = m.sl
+    m.uc.mem_write(sym['sy_block'], b'\xA5' * lay.stack)               # leftovers of an earlier run
+    m.call(sym['sy_ui'])
+    check(m.sy()['req'] == 0, 'before the UI has read EXT SOURCE and ROUTING: the engine not started')
+    m.start()
+    st = m.sy()
+    check(st['req'] == 1 and st['starts'] == 1 and not any(m.bytes(sym['sy_block'], lay.stack)),
+          'main screen, EXT SOURCE on, ROUTING ExtIn: the engine cleared and handed over')
+    st = m.step()
+    check(st['state'] == SY_RUN and st['steps'] == 1 and st['fresh'] == 1 and
+          m.get(sym['sy_block'] + lay.started, '<I') == 1 and st['out'] == [0] * 64,
+          'RUN from the first block (silence in, silence out), its block ready for TX')
+    sig = ref.to_blocks(sy_strum('G')[0])
+    for b in range(200):
+        st = m.step(sig[b])
+    loud = max(abs(v) for v in st['out'])
+    m.page(SG_PAGE)
+    fade = []
+    for k in range(10):
+        st = m.step(sig[200 + k])
+        fade.append((st['state'], st['stopping'], max(abs(v) for v in st['out']), st['out'][-1], st['fresh']))
+    steps = st['steps']
+    check(loud > 2000 and [f[0] for f in fade] == [SY_RUN] * 8 + [SY_OFF] * 2 and st['stops'] == 1 and
+          fade[8][3] == 0 and fade[8][4] == 1 and fade[9][4] == 0 and all(f[2] > 0 for f in fade[1:8]) and
+          m.step(sig[210])['steps'] == steps,
+          f'the Sound Generator page: the engine fades out over 8 blocks (its last block ends at 0, added once), then '
+          f'OFF, no more steps (peaks {[f[2] for f in fade]})')
+    m.page(1)
+    m.step(sig[211])
+    st = m.step(sig[212])
+    check(st['starts'] == 2 and st['state'] == SY_RUN and st['steps'] == steps + 1 and
+          m.get(sym['sy_block'] + lay.started, '<I') == 1,
+          'back on the main screen: cleared and started afresh')
+    quiet = {}
+    for label, kw, page in (('ROUTING Mix', dict(routing=0), 1), ('EXT SOURCE off', dict(ext=0), 1),
+                            ('Sound Generator page', dict(), SG_PAGE)):
+        q = SyMachine(img, man, page=page, **kw)
+        q.start()
+        for b in range(40):
+            st = q.step(sig[b])
+        quiet[label] = (st['req'], st['state'], st['steps'], st['starts'])
+    d = SyMachine(img, man, page=DOOM_PAGE)
+    d.start()
+    st = d.step(sig[0])
+    check(all(v == (0, SY_OFF, 0, 0) for v in quiet.values()) and st['state'] == SY_RUN,
+          f'not on ROUTING Mix, not with EXT SOURCE off, not on the Sound Generator page; on any other page, '
+          f'DOOM OS\'s too ({quiet})')
+    mm = SyMachine(img, man)
+    mm.start()
+    for b in range(100):
+        mm.step(sig[b])
+    mm.routing = 0
+    mm.ui(0)
+    states = [mm.step(sig[100 + k])['state'] for k in range(12)]
+    check(states[:8] == [SY_RUN] * 8 and states[9:] == [SY_OFF] * 3,
+          f'ROUTING turned to Mix while it plays: it fades out and stops ({states})')
+    # 2. The module against sy_ref.py, value for value, on the same blocks.
+    bend = np.concatenate([np.zeros(4800), ref.guitar(ref._hz(55), 0.9, bend=(0.2, 0.5, 200)), np.zeros(2400)])
+    # (signal, the notes whose partials should sound: none for the bend, whose pitch moves, and the clipped strum,
+    # whose distortion adds tones of its own); each ends in 0.4 s of hiss and hum
+    cases = [('four open strings', ref.open_strings((40, 50, 59, 64), ring=0.4, gap=0.1), (40, 50, 59, 64)),
+             ('G strummed', *sy_strum('G')),
+             ('C picked 0.25 s apart', *ref.arpeggio(ref.CHORDS['C'], 0.25, seed=2, extra=0.5)),
+             ('G3 bent a tone', ref.hiss(bend, 3), ()),
+             ('E strummed, clipped', sy_strum('E', secs=0.7, gain=4.0)[0], ()),
+             ('hiss and hum alone', np.zeros(4800), ())]
+    counter = [0]
+
+    def every(uc, a_, s_, _):
+        counter[0] += 1
+    results, worst, mism = {}, 0, []
+    for label, x, notes in cases:
+        x = np.concatenate([x, ref.hiss(np.zeros(19200), 11)])
+        mc = SyMachine(img, man)
+        mc.start()
+        eng = sy_ref.Engine()
+        right = total = 0.0
+        sounding, peak, nz_end = [], 0, None
+        blocks = ref.to_blocks(x)
+        for b, values in enumerate(blocks):
+            mc.feed(values)
+            h = mc.uc.hook_add(UC_HOOK_CODE, every)
+            counter[0] = 0
+            mc.call(sym['sy_rx'])
+            mc.uc.hook_del(h)
+            worst = max(worst, counter[0])
+            got = list(struct.unpack('<64i', mc.bytes(sym['sy'] + lay.out, 256)))
+            want, _ = eng.step(values)
+            if got != want:
+                mism.append((label, b))
+            peak = max(peak, max(abs(v) for v in got))
+            if any(got):
+                nz_end = b
+            if notes and b % 4 == 0:
+                bd = mc.bands()
+                sounding.append(len(bd))
+                r, t = sy_right(bd, notes)
+                right += r
+                total += t
+        results[label] = dict(blocks=len(blocks), share=round(right / total, 4) if total else None,
+                              bands=round(sum(sounding) / len(sounding), 1) if sounding else 0, peak=peak,
+                              last_sound_ms=None if nz_end is None else round((nz_end + 1) * 4 / 3),
+                              length_ms=round(len(blocks) * 4 / 3))
+    check(not mism, f'the module\'s output = sy_ref.py\'s, value for value, on every block of {len(cases)} signals '
+                    f'({sum(r["blocks"] for r in results.values())} blocks; first differences {mism[:3]})')
+    shares = {k: r['share'] for k, r in results.items() if r['share'] is not None}
+    check(all(v >= 0.97 for v in shares.values()),
+          f'the bands sounding are the strings\' partials (within 30 cents): {shares}')
+    hh = results['hiss and hum alone']
+    check(hh['peak'] == 0 and hh['last_sound_ms'] is None, 'hiss and hum alone (-74 / -66 dBFS): no sound at all')
+    tails = {k: r['length_ms'] - r['last_sound_ms'] for k, r in results.items() if r['last_sound_ms'] is not None}
+    check(all(v >= 200 for v in tails.values()),
+          f'once the strings stop (each signal ends in 0.4 s of hiss and hum) the output goes to 0 within 0.2 s: ms of '
+          f'silence at the end {tails}')
+    check(worst <= 60000, f'the most instructions a step takes: {worst} ({worst / 8000:.1f}% of a block at one a '
+                          f'cycle; the bands {", ".join(f"{k}: {r["bands"]}" for k, r in results.items())})')
+    report['sy']['signals'] = results
+    report['sy']['worst_step_instructions'] = worst
+    # 3. Registers and stacks: the engine on its own stack, every FPU register and FPSCR as they were. One step first:
+    #    the model's first FPU instruction opens the task's FPU context and loads FPSCR from FPDSCR (0), as the
+    #    audio task's own first one did long before (the tracker's check has its earlier steps for this).
+    mr = SyMachine(img, man)
+    mr.start()
+    mr.step()
+    fpu_ok = regs_ok = True
+    stack_depth = task_depth = 0
+    sig = ref.to_blocks(sy_strum('Am')[0])
+    for b in range(60):
+        pattern = [rng.getrandbits(32) for _ in range(32)]
+        for k in range(32):
+            mr.uc.reg_write(getattr(ar, f'UC_ARM_REG_S{k}'), pattern[k])
+        fpscr = 0x00400000 | (b & 1) * 0x9F
+        mr.uc.reg_write(ar.UC_ARM_REG_FPSCR, fpscr)
+        gpr = [rng.getrandbits(32) for _ in range(8)]
+        for k, v in enumerate(gpr):
+            mr.uc.reg_write(getattr(ar, f'UC_ARM_REG_R{k + 4}'), v)
+        mr.uc.mem_write(sym['sy_block'] + lay.stack, b'\xEE' * 2048)
+        mr.uc.mem_write(STACK - 0x800, b'\xEE' * 0x800)
+        mr.feed(sig[40 + b])
+        mr.call(sym['sy_rx'])
+        fpu_ok &= [mr.uc.reg_read(getattr(ar, f'UC_ARM_REG_S{k}')) for k in range(32)] == pattern and \
+            mr.uc.reg_read(ar.UC_ARM_REG_FPSCR) & 0xF7C0009F == fpscr & 0xF7C0009F
+        regs_ok &= [mr.uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k + 4}')) for k in range(8)] == gpr
+        stk = mr.bytes(sym['sy_block'] + lay.stack, 2048)
+        stack_depth = max(stack_depth, 2048 - next(i for i in range(2048) if stk[i] != 0xEE))
+        tsk = mr.bytes(STACK - 0x800, 0x800)
+        task_depth = max(task_depth, 0x800 - next((i for i in range(0x800) if tsk[i] != 0xEE), 0x800))
+    check(fpu_ok and regs_ok, 'SY: s0-s31, FPSCR and r4-r11 as they were after every step')
+    check(0 < stack_depth <= 1536 and task_depth <= 96,
+          f'SY: the step runs on the engine\'s own stack ({stack_depth} of 2,048 bytes); the task\'s stack sees '
+          f'{task_depth} bytes (sy_rx\'s frame)')
+    report['sy'].update(private_stack_bytes=stack_depth, task_stack_bytes=task_depth)
+    # 4. TX: the block onto TX line 3's DRY pair (words 0/1 of each 16-word frame), clipped to 20 bits, once.
+    st = mr.sy()
+    basew = [rng.randint(-0x80000, 0x7FFFF) if rng.random() < 0.1 else rng.randint(-40000, 40000) for _ in range(1024)]
+    mr.uc.mem_write(TXBUF, struct.pack('<1024i', *basew))
+    mr.uc.mem_write(base.ARGS, struct.pack('<3I', TXBUF, TXBUF + 0x1000, TXBUF + 0x2000))
+    mr.call(sym['sy_tx'], base.ARGS, 123456)
+    got = list(struct.unpack('<1024i', mr.bytes(TXBUF, 4096)))
+    exp = list(basew)
+    for f in range(64):
+        for w in (0, 1):
+            exp[16 * f + w] = max(-0x80000, min(0x7FFFF, basew[16 * f + w] + st['out'][f]))
+    mr.call(sym['sy_tx'], base.ARGS, 123456)
+    again = list(struct.unpack('<1024i', mr.bytes(TXBUF, 4096)))
+    st2 = mr.sy()
+    check(any(st['out']) and st['fresh'] == 1 and got == exp and again == exp and st2['fresh'] == 0 and
+          st2['tx'] == st['tx'] + 1 and st2['last_mix'] == 123456,
+          'sy_tx adds the block to DRY L/R only (words 0/1 of TX line 3), clipped to 20 bits, once')
+    mp, mw = Machine(parent_img), SyMachine(img, man)
+    for x in (mp, mw):
+        base.make_voices(x, 9090, occupancy=0.5)
+        x.uc.mem_write(base.ARGS, struct.pack('<3I', TXBUF, TXBUF + 0x1000, TXBUF + 0x2000))
+    mw.start()
+    sig = ref.to_blocks(sy_strum('D')[0])
+    for b in range(150):                                               # into the chord (it starts at 0.1 s)
+        mw.step(sig[b])
+    bad, heard = [], 0
+    for n in range(4):
+        st = mw.step(sig[150 + n])
+        outs = []
+        for x in (mp, mw):
+            x.uc.mem_write(TXBUF, bytes(0x3000))
+            x.call(base.MIXER, base.ARGS)
+            outs.append(list(struct.unpack('<1024i', x.bytes(TXBUF, 4096))) + [x.bytes(TXBUF + 0x1000, 0x2000)])
+        want = outs[0][:1024]
+        for f in range(64):
+            for w in (0, 1):
+                want[16 * f + w] = max(-0x80000, min(0x7FFFF, want[16 * f + w] + st['out'][f]))
+        heard += any(outs[0][:1024]) and any(st['out'])
+        if outs[1][:1024] != want or outs[1][1024] != outs[0][1024]:
+            bad.append(n)
+    check(not bad and heard == 4, 'whole mixer with the engine\'s block ready: TX line 3 = the parent\'s + the block on '
+                                  'DRY L/R, the other words and lines 1/2 the parent\'s (4 blocks)')
+    # 5. SLOW: two wakes in a row over 9/10 (mixer + tracker + engine), or one step over the whole block.
+    ms = SyMachine(img, man)
+    ms.start()
+    ms.step()
+    hot = []
+    for mix, step in ((300_000, 450_000), (300_000, 300_000), (300_000, 450_000), (300_000, 450_000)):
+        ms.call(sym['sy_tx'], 0, mix)                                  # the mixer's cycles, as meter_mix_end hands them
+        ms.cyc_step = step
+        ms.feed([1000] * 64)
+        ms.call(sym['sy_rx'])
+        ms.cyc_step = 0
+        st = ms.sy()
+        hot.append((st['state'], st['hot']))
+    check(hot == [(SY_RUN, 1), (SY_RUN, 0), (SY_RUN, 1), (SY_SLOW, 2)] and st['slow_cycles'] == 750_000 and
+          st['fresh'] == 0,
+          f'mixer + tracker + engine over 9/10 of the block twice in a row: SLOW; once, then a cooler wake: RUN on '
+          f'({hot})')
+    steps = ms.step()['steps']
+    check(ms.step()['steps'] == steps and ms.sy()['state'] == SY_SLOW,
+          'SLOW stays while the engine is wanted (no fade, no restart)')
+    ms.page(SG_PAGE)
+    ms.step()
+    ms.step()
+    ms.page(1)
+    ms.step()
+    ms.cyc_step = 850_000
+    ms.feed([1000] * 64)
+    ms.call(sym['sy_rx'])
+    ms.cyc_step = 0
+    st = ms.sy()
+    check(st['state'] == SY_SLOW and st['slow_cycles'] == 850_000 and st['p_max'] == 850_000 and st['starts'] == 2,
+          'left and back: started afresh; one step over the whole 800,000-cycle block: SLOW at once, the window so '
+          'far published')
+    report['sy']['tables'] = {k: round(float(v), 9) for k, v in sy_ref.G.items()}
+
+
+# ---------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('out', type=Path)
@@ -931,7 +1293,7 @@ def main():
     ap.add_argument('--seeds', type=int, default=12)
     ap.add_argument('--blocks', type=int, default=6)
     ap.add_argument('--mixer-runs', type=int, default=4)
-    ap.add_argument('--only', help='comma-separated: static,tune,synth,meter (default all)')
+    ap.add_argument('--only', help='comma-separated: static,tune,synth,sy,meter (default all)')
     a = ap.parse_args()
     out = a.out.resolve()
     man = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
@@ -943,13 +1305,15 @@ def main():
     if not kit_sym:
         raise SystemExit('no kit symbols beside the parent APP1')
     sym = man['symbols']
-    only = set((a.only or 'static,tune,synth,meter').split(','))
+    only = set((a.only or 'static,tune,synth,sy,meter').split(','))
     if 'static' in only:
         static_checks(out, man, parent_img, img)
     if 'tune' in only:
         tracker_checks(parent_img, img, man)
     if 'synth' in only:
         synth_checks(img, man, kit_sym)
+    if 'sy' in only:
+        sy_checks(parent_img, img, man, kit_sym)
     if 'meter' in only:
         base.entry_checks(parent_img, img, sym)
         base.arithmetic(img, man)
