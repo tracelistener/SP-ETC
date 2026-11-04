@@ -81,3 +81,18 @@ silence the direct sound (EXT SOURCE, MUTE BUS, input LEVEL, a bus effect) also 
 receives, so the processed copy can only be heard on top of the original, 2-3 ms later. With NAM too heavy (72-94% of
 a block) the live "your own amp and cab" idea ends here. What the work leaves: the cabinet costs 15-17% of a block on
 the unit and works on anything the main processor renders itself (the pads); the CPU meter; the RX pair map.
+
+## Reopened (2026-11-03): ROUTING ExtIn
+
+The checks above ran on INPUT SETTING's ROUTING Mix (SHIFT + EXT SOURCE, CTRL 2). On Mix, RX pair 0 is the mix as
+heard; on ExtIn it is the input alone after the input FX (manual p. 36). This turned up through the guitar synth's
+stuck notes (`TUNE_TEST.md`, synth test 4).
+
+The check, with gtr-synth-test4's readout (LV is pair 0's peak): ExtIn, the input on BUS 1, the Isolator on BUS 1
+with all bands down, playing. The user's report: "lv moves!". So on ExtIn the main processor gets the guitar before
+the bus effects, while the cut bus silences the direct sound. A cabinet on DRY could then be heard alone, about 3 ms
+after the pick: the conclusion above holds only for Mix.
+
+A cabinet test 3 must take pair 0 straight from the RX packet, as the tracker does. The recorder feed's copy that
+tests 1 and 2 used was empty on ExtIn outside sampling. Pads on BUS 1 would be cut with the direct sound, so they
+belong on BUS 2 or DRY. NAM stays too heavy.
