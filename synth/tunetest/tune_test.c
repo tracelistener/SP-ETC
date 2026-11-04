@@ -1,4 +1,4 @@
-/* Guitar synth test 5 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52
+/* Guitar synth test 6 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52
  * (combined-test17) with the CPU meter of IR diagnostic test 3 and note tracker test 2's readout. The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
@@ -13,7 +13,8 @@
  * play nothing new; a move without a pluck needs 3 analyses within 30 cents (tune_fp.c). Test 4: the velocity is the
  * pick's (tune_fp.c), and the Sound Generator's OCT moves the note (0: the octave tests 1 and 2 played, an octave below
  * the guitar, as the SG sounds MIDI; drum mode keeps the guitar's note, the pad it strikes). Test 3's voice following
- * is gone.
+ * is gone. Test 6 (tune_fp.c): a fretted note let go no longer plays the open string, a hand on the strings lets go
+ * sooner, and a chord's strings picked one by one play.
  *
  * Readout (the stock popup; every 0.1 s while the tracker runs, else with the meter's half-second window):
  *   E2 +3c Q92        the steady note (-- none); the newest analysis: cents off its nearest note, quality
@@ -141,7 +142,7 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
     OFFSET(tt_t, tot_max_ever), OFFSET(tt_t, reset_ack), OFFSET(tt_t, rseq), OFFSET(tt_t, res), sizeof(tt_result),
     sizeof(tt_block_t), OFFSET(tt_block_t, ring), OFFSET(tt_block_t, span), OFFSET(tt_block_t, d6),
     OFFSET(tt_block_t, peaks), OFFSET(tt_block_t, z), OFFSET(tt_block_t, started), OFFSET(tt_block_t, stack),
-    OFFSET(tt_t, posted_rseq), OFFSET(tt_block_t, pick_peak)};
+    OFFSET(tt_t, posted_rseq), OFFSET(tt_block_t, pick_peak), OFFSET(tt_block_t, env)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */

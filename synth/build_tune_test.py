@@ -1,11 +1,14 @@
-"""Guitar synth test 5 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
+"""Guitar synth test 6 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
 
 The input the effects chip hands back (RX pair 0, after the input FX) goes through a note tracker on the main
 processor (YIN, an analysis every 5.3 ms); on the Sound Generator page with EXT SOURCE on and ROUTING on ExtIn, its
 note plays there as MIDI IN would. Test 4: a pick's click (the energy over 2 kHz) counts as a pluck too, only clean
 readings count, a new note picked while the one before rings always plays, the velocity is the pick's, OCT moves the
 note; test 3's voice following is gone. Test 5: on ROUTING Mix pair 0 is the mix as heard, so the synth stays silent
-there and the page says so in a popup. The CPU meter's readout (hold EXIT on the main screen) shows the tracker. See
+there and the page says so in a popup. Test 6: a move or a pick going steady needs the level to hold (a fretted note
+let go: the open string rang far quieter and test 5 played it), a fast drop lets go, and a pick over strings ringing
+is read from what it added (the difference function less the one from before it), so a chord's notes picked one by
+one play. The CPU meter's readout (hold EXIT on the main screen) shows the tracker. See
 synth/TUNE_TEST.md.
 
 The input is v9.52 (combined-test17); the hooks are cabinet test 2's (IR diagnostic test 3's):
@@ -46,7 +49,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'gtr-synth-test5'
+REVISION = 'gtr-synth-test6'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -665,7 +668,15 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='Guitar synth test 5: test 4 played only on ROUTING ExtIn (system 0x5c = 1), since on Mix the '
+        description='Guitar synth test 6: after test 5 on the unit (a second note when a fretted note is let go '
+                    'right after the pick; a chord held and picked string by string: notes missing): a move needs '
+                    'the level over a period at 0.4 x a 0.3 s peak follower, a pick going steady 0.25 x the level '
+                    'before it (else nothing plays and the note stops), the synth lets go when the newest 13 blocks '
+                    'fall under 0.2 x the follower, a jump is a pluck only over 1.3 x it; a pick over strings '
+                    'ringing is read from the difference function less the last one before it (negative lags 0, '
+                    'only lags past the pick, first dip under 0.3), used when the plain reading is murky or a '
+                    'common period 2..6 x lower; such a note holds through murky readings and does not move. '
+                    'Test 5: test 4 played only on ROUTING ExtIn (system 0x5c = 1), since on Mix the '
                     'effects chip hands back the mix as heard and the synth held its own note; on Mix with EXT SOURCE '
                     'on, the Sound Generator page shows a popup saying so. Test 4: '
                     'on the Sound Generator page with EXT SOURCE on, the input the effects chip '

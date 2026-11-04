@@ -1,11 +1,13 @@
-# Note tracker tests 1 and 2, guitar synth tests 1 to 5
+# Note tracker tests 1 and 2, guitar synth tests 1 to 6
 
 Test-only builds, not for the patcher: v9.52 (combined-test17) with the CPU meter of IR diagnostic test 3 and a
 note tracker on the input. Test 2 (tune-test2) is test 1 with a new pluck test and the plucks heard on the readout
 (see "Test 1 on the unit" below). Guitar synth test 1 (gtr-synth-test1) is test 2 playing the Sound Generator (next
 section); synth test 2 (gtr-synth-test2) is synth test 1 without its extra notes; synth test 3 (gtr-synth-test3)
 plays like the SY-1000's Dynamic Synth; synth test 4 (gtr-synth-test4) undoes test 3's voice following and fixes
-what made test 3 worse on the unit; synth test 5 (gtr-synth-test5) plays only on ROUTING ExtIn (the sections after).
+what made test 3 worse on the unit; synth test 5 (gtr-synth-test5) plays only on ROUTING ExtIn; synth test 6
+(gtr-synth-test6) fixes the two faults test 5 showed on the unit: a second note when a fretted note is let go, and
+a chord's notes picked string by string not playing (the sections after).
 
 ## Guitar synth test 1 (gtr-synth-test1)
 
@@ -165,6 +167,54 @@ Test 4's tracker and synth, gated on ROUTING:
   SHIFT+EXT SRC for 2.5 s. It posts once each time that starts (opening the page, EXT SOURCE on, ROUTING to Mix),
   only when no popup is showing or waiting, so never over a stock message: it waits for that to close.
 
+**On the unit (2026-11-04):** "better and popup does tell you to change to ext in. if you pluck a note and release
+right away you hear a second note on release. also if you try to hold a chord and play the notes they sometimes
+don't sound (imagine because finger pressure not as much as individual note)". So system 0x5c reads 1 on ExtIn, and
+the popup shows. The two faults are test 6's.
+
+## Guitar synth test 6 (gtr-synth-test6): letting notes go, and chords
+
+- **The second note on release.** Letting a fretted note go damps it at once. The open string, or a touch
+  harmonic where the finger rests on a node, then rings for a moment far quieter. In the model that is 5-10% of
+  the note's level. Test 5's move rule needed no pluck: three clean analyses within 30 cents on the open string, and
+  it played. On the twin that happened in 4 of 6 let-gos with a 5 ms damping, and 32 of the 108 let-go models.
+  Test 6 adds a level, a peak follower over the block peaks that falls with a 0.3 s time constant (`env`):
+  - a move needs the level over a period of the new note (its blocks plus one, at least 4) at 0.4 x `env`;
+  - a pluck going steady needs that level, from 4 blocks after the pluck, at 0.25 x its reference. Otherwise it
+    was a let-go: nothing plays, and the note playing stops;
+  - the synth lets go once the newest 13 blocks' peak falls under 0.2 x `env`. Test 5 waited for 4 unvoiced
+    analyses: on the let-go models its note-off came 139 ms after the let-go (median), test 6's 38 ms;
+  - a jump counts as a pluck only over 1.3 x `env`. A fading chord's beating doubled its peak 6 s in, and the
+    subtraction below turned that into a note.
+- **The chord notes.** Not the finger pressure: strings ringing together read murky, and test 4 made murky readings
+  count as nothing heard. Strings a fifth apart even read clean, an octave below the lower one (a D chord's D3 and
+  A3 read D2). On six open chords picked string by string, test 5's rules played 36 of 180 notes, and 46 wrong low
+  ones. Test 6 reads a pick over ringing strings from what the pick added: the difference function less the one of
+  the last analysis before the pluck (`d_base`), negative lags set to 0. The 12 kHz refinement does the same with
+  the 408 samples kept from before the pluck (`base_x`). The subtraction is used only when:
+  - the pluck's reference is at least 0.08 x its peak (something was ringing);
+  - what is left at lags 50..100 is at least 0.2 of the whole, and never under -0.5 x its mean. A string picked
+    again replaces its old vibration, and the subtraction then goes negative;
+  - the lags it reads are ones whose samples all came after the pluck. An analysis reaching back past the pluck
+    reads a dip that isn't there: the first try played blips on one-string riffs;
+  - its first dip is under 0.3, and the plain reading is murky, or clean but 2..6 times lower (a common period).
+
+  A note found this way is held through murky readings while there is signal (-54 dBFS RMS), and does not move: an
+  older string coming through as the newer ones fade is no slide.
+- **On the twin:**
+  - **Chords:** six open chords (C G D Am E Em7), picked string by string 0.3 s and 0.5 s apart, three seeds each:
+    164 of 180 notes right, 8 wrong, 16 missed. The wrong ones are octave errors on a string that doubles a ringing
+    one; the C chord at 0.3 s reads its C4 as C2 on all three seeds.
+  - **Let-gos:** the 108 let-go models (open string, touch harmonic or damping alone; 5-30 ms; clicks at 0.08 and 0.3
+    of the level) play one note each.
+  - **Earlier cases:** test 5's synth cases play as before, and the six strings left ringing (G3 A3 B3 D4 E4 G4) now
+    play 5 of 6 in order.
+- **Cost:** tt_block grows from 6,880 to 9,760 bytes (the last and the base difference functions, what is left,
+  the 408 samples), and the module to 28,768 bytes. The most instructions a step takes, by phase:
+  - 15,327 / 12,998 / 12,998 / 26,023 on one string from silence, the test's measure (3.3% of a block at one a
+    cycle, as in test 5);
+  - 17,393 / 15,063 / 15,070 / 44,752 on the G chord picked 0.3 s apart, with the subtraction running (5.6%).
+
 The first step towards a guitar synth (the Sound Generator played from the guitar): how
 well and how fast the SP's main processor can follow the note. Nothing goes to the output; the meter's readout (hold
 EXIT a second on the main screen) shows what the tracker hears.
@@ -195,8 +245,9 @@ SETTING's ROUTING: on Mix it is the whole mix, so the synth needs ExtIn (synth t
   a row agree, gone after 4 unvoiced ones; after a pluck, the ms to the first voiced analysis and to the steady
   note. An analysis whose samples were taken before the pluck's block only shows its numbers (the string before may
   still ring: without this a new pluck could go steady on the old note at once).
-- **Memory:** `tt_block` in the module (6.7 KB: the ring, an analysis' span, the difference functions, 32 block
-  peaks, a 2 KB stack); the module in NAM's slot `0x83FC9000..0x83FD4000`.
+- **Memory:** `tt_block` in the module (9.5 KB since test 6: the ring, an analysis' span, the difference
+  functions (test 6: also the last one, the one before a pluck and what is left), 32 block peaks, the 408 samples
+  before a pluck, a 2 KB stack); the module in NAM's slot `0x83FC9000..0x83FD4000`.
 - **Guard:** a step over a whole block, or mixer + tracker over 9/10 of one twice in a row, stops it (SLOW).
 
 `tunetest/tune_ref.py` is the same tracker in Python, and makes the test strings: up to 12 decaying harmonics at an
@@ -204,7 +255,9 @@ exact frequency with a noise burst at the attack, clean or overdriven (tanh); an
 magnetic pickup (`guitar`: released from rest, the pickup sensing its velocity, so every harmonic in sine phase and
 the wave pulse-like as a real pickup's; stiff-string inharmonicity, higher harmonics dying faster, the pickup's
 resonance, a slow beat, hiss and hum), played as the hardware test plays it (`open_strings`: each open string rung
-1.5 s and stopped by hand).
+1.5 s and stopped by hand). Test 6's: a fretted note let go after the pick (`let_go`: the note damped, the open
+string or a touch harmonic ringing briefly, a click), and a chord held and picked string by string (`arpeggio`,
+`CHORDS`).
 
 ## Readout
 
@@ -249,7 +302,13 @@ The six open strings once each, low to high, each stopped by hand before the nex
 
 `python synth/test_tune_test.py OUT_DIR --kits kits-v9.46-test3/kits-manifest.json`: NAM test 2's meter checks
 (imported) on this image, and the tracker on Unicorn's Cortex-M7 model, against `tune_ref.py` after every block.
-138 checks pass on `release/gtr-synth-test5` (APP1 `7999927a…ddff8`, 3,182,624 bytes; the module 24,960 bytes): test
+151 checks pass on `release/gtr-synth-test6` (APP1 `05a8361a…6affa`, 3,186,432 bytes; the module 28,768 bytes):
+test 5's (the ringing strings now each play: 5 of 6, in order, held until stopped), plus the let-gos (strings 1, 2,
+3, 5 at frets 5, 3, 7, 3 to the open string, a touch harmonic on the low E at fret 5, the D string at fret 12: one
+note each, let go 33-38 ms after; test 5's rules played a second note in 5 of the 6), chords picked string by string
+(D and Am 0.3 s apart, G and C 0.5 s: every note in order, held, one note-off), and a D chord left to fade 6 s on the
+twin (its four notes, one note-off, no ghost).
+138 on `release/gtr-synth-test5` (APP1 `7999927a…ddff8`, 3,182,624 bytes; the module 24,960 bytes): test
 4's, plus ROUTING read every 0.1 s (system 0x5c, index -1); on Mix the tracker stays off on the page and a pluck plays
 nothing; the popup at the first UI tick, once per start, again on reopening the page, never over a message already up
 (it waits), none with EXT SOURCE off or off the page, widest line 95 px (a 112 x 34 box); a note playing when ROUTING
@@ -341,11 +400,15 @@ The tracker (tune-test2, and gtr-synth-test1 the same):
   post comes before tune_ui starts the tracker: an all-zero result read C-1); bounce's own bnc_rx and bnc_ui run as
   in the parent; the meter's checks.
 
-## Not known (synth test 5 on the unit)
+## Not known (synth test 6 on the unit)
 
-- Whether system 0x5c reads 1 on ExtIn on the unit (DM-404's notes and the boot value 0 = Mix say so): if it were the
-  other way round, the popup would show on ExtIn and the synth play only on Mix.
-- Whether the popup shows on entering the page (the page's own start-up may post something first: it then waits).
+- Whether a real let-go looks like the model's (a 5-30 ms damping, the open string at 15-50% of the note's level):
+  a let-go that leaves the open string ringing louder than 0.4 x the level follower still moves to it.
+- Whether a real chord's strings ring as steadily as the model's over the 30-60 ms around a pick (the subtraction
+  needs what rang before to go on): a picking hand that touches the ringing strings changes them, and the
+  subtraction then reads less.
+- A string an octave (or a twelfth) above one still ringing can read an octave off: its overtones are the ringing
+  string's, so what the pick added is partly cancelled.
 - Synth test 1 played on the unit (no stuck notes), so the UI tick reaches the Sound Generator as MIDI does. Test 2
   was not reported on its own; test 3 was worse (above).
 - Whether a real pick clicks as the pickup model's do (the model has no pick noise; a real pick should click more),
@@ -354,6 +417,5 @@ The tracker (tune-test2, and gtr-synth-test1 the same):
 - Whether a real string reads as clean as the model's (under 0.08). A guitar that reads murkier (a chorus or a
   noisy input before the SP) would play fewer notes: the readout's Q is 100 minus the whole-lag reading x 100, a
   rough guide (Q 85 or more is clean either way).
-- Strings ringing together still play nothing new: a mono tracker on one input hears a chord's common pitch. Play
-  one string at a time, or stop the one before.
+- A strummed chord still plays nothing new: a mono tracker can't name several notes started at once.
 - How late the synth feels: the steady note about 6 ms later than test 2's (23-39 ms after a pick on the model).

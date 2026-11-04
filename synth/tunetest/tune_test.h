@@ -19,6 +19,7 @@ typedef unsigned char u8;
 #define TT_SPAN (TT_W12 + 2u * TT_T6MAX + 4u)   /* the newest samples an analysis reads */
 #define TT_SLICE 25u                        /* lags a block: an analysis takes 4 blocks (5.3 ms) */
 #define TT_PEAKS 32u                        /* block peaks kept for the pluck test */
+#define TT_BASE (TT_W12 + 2u * TT_T6MAX + 8u)   /* test 6: the samples before a pluck kept for the refinement */
 
 /* tt.state, written by the audio task only */
 enum {
@@ -92,6 +93,16 @@ typedef struct __attribute__((aligned(32))) {
     u32 murky;                              /* voiced analyses too murky to count (strings ringing together) */
     float zh[2];                            /* the click's 2 kHz high-pass (transposed direct form II) */
     float hfe[TT_PEAKS];                    /* the blocks' energy over 2 kHz */
+    /* test 6 */
+    float env;                              /* the level: a peak follower falling with a 0.3 s time constant */
+    u32 sub_lock;                           /* the synth's note came from the subtraction (held through murk) */
+    u32 stops, drops, sub_locks, blocked;   /* plucks whose level fell (let-gos), fast drops let go, notes the
+                                               subtraction found, moves too quiet to play */
+    u32 pad6;
+    float d_last[TT_T6MAX + 1];             /* the last analysis' difference function */
+    float d_base[TT_T6MAX + 1];             /* the last one whose samples came before the pending pluck */
+    float dsub[TT_T6MAX + 1];               /* the difference function less d_base */
+    float base_x[TT_BASE];                  /* the 12 kHz samples before the pending pluck, newest first */
     u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
 } tt_block_t;
 _Static_assert((__builtin_offsetof(tt_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");

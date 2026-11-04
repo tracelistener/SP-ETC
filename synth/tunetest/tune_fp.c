@@ -1,4 +1,4 @@
-/* Guitar synth test 4 (note tracker 3), the FPU side: the note the guitar plays, from the input the effects chip
+/* Guitar synth test 6 (note tracker 3), the FPU side: the note the guitar plays, from the input the effects chip
  * hands back (RX pair 0, after the input FX). Everything here runs on the audio task through tune_fp_call: on the
  * module's own 2 KB stack, with FPSCR and d0-d15 saved around it and FPSCR set to round to nearest, flush to zero
  * and default NaN, as cabinet test 2's cab_fp_call.
@@ -53,6 +53,26 @@
  *     (the pick clicked) or 1.2 x (it did not: a thump's level never rises). The velocity is 50 + 77 x the square
  *     root of the pick's peak over 0.4 (127 there), a move's the string's level now (13 blocks' peak).
  *
+ * Test 6, after synth test 5 on the unit ("if you pluck a note and release right away you hear a second note on
+ * release"; "hold a chord and play the notes, they sometimes don't sound"):
+ *   - the level: a peak follower falling with a 0.3 s time constant (env). A fretted note let go leaves the open
+ *     string or a touch harmonic ringing far quieter than the note: test 5 moved to it (no pluck needed). A move now
+ *     needs the level over a period of the new note (its blocks plus one, at least 4) at 0.4 x env; a pluck going
+ *     steady needs that level, since 4 blocks after it, at 0.25 x its reference, else it was a let-go: nothing plays
+ *     and the note playing stops. The synth lets go once the newest 13 blocks' peak falls under 0.2 x env (a hand on
+ *     the strings; test 5 waited for 4 unvoiced analyses). A jump counts as a pluck only over 1.3 x env (a fading
+ *     chord's beating can double its peak);
+ *   - strings ringing together: a pluck heard while they rang (its reference at least 0.08 x its peak) is read from
+ *     what it added: the difference function less the one of the last analysis before the pluck (d_base), negative
+ *     lags set to 0, the samples before the pluck (base_x) taken off the 12 kHz refinement the same way. It counts
+ *     when what is left is at least 0.2 of the whole at lags 50..100, never under -0.5 x its mean, and only at lags
+ *     whose samples all came after the pluck (an analysis reaching back past it reads a dip that is not there); its
+ *     first dip under 0.3. It is used when the plain reading is murky, or clean but 2..6 times lower (a common
+ *     period: strings a fifth apart read an octave below the lower one). A note found so is held through murky
+ *     readings while there is signal (the strings ring together), and does not move (an older string coming
+ *     through as the newer ones fade is no slide). A string doubling a ringing one an octave up can still read an
+ *     octave off.
+ *
  * tunetest/tune_ref.py is the same in Python; test_tune_test.py runs both on the same input.
  */
 #include "tune_test.h"
@@ -85,6 +105,16 @@
 #define HF_MIN 1e-4f                     /* (and at least this) */
 #define HF_FROM 2u                       /* the most of blocks HF_FROM..HF_TO back */
 #define HF_TO 16u
+#define ENV_K 0.9955654144287109f        /* test 6: the level's follower falls with a 0.3 s time constant */
+#define JUMP_ENV 1.3f                    /* a jump is a pluck only over this x env */
+#define MOVE_HOLD 0.4f                   /* a move: the level now at least this x env */
+#define PLUCK_HOLD 0.25f                 /* a pluck going steady: the level now at least this x its reference */
+#define DROP 0.2f                        /* the synth lets go under this x env */
+#define RING_MIN 0.08f                   /* a pluck over strings ringing: its reference at least this x its peak */
+#define SUB_MIN 0.2f                     /* the subtraction: what is left at least this part of the whole, */
+#define SUB_NEG 0.5f                     /* never under -this x its mean, */
+#define THR_SUB 0.3f                     /* its first dip under this */
+#define COMMON_TOL 0.03f                 /* a plain reading 2..6 times lower, within this: a common period */
 
 /* The click's 2nd-order Butterworth high-pass at 2 kHz (48 kHz): b0, b1, b2, a1, a2. */
 static const float HP[5] = {0.8308980464935303f, -1.6617960929870605f, 0.8308980464935303f, -1.632993221282959f,
@@ -212,28 +242,61 @@ static float after_peak(const tt_block_t *b, u32 blk) {
     return m;
 }
 
-static void begin(tt_t *t) {
-    t->rseq++;
-    __asm__ volatile("" ::: "memory");
+/* Test 6: the highest peak of the newest n blocks, not before block `since`. */
+static float win_peak(const tt_block_t *b, u32 blk, u32 n, s32 since) {
+    s32 lo = (s32)blk - (s32)n + 1;
+    if (lo < since)
+        lo = since;
+    float m = 0.0f;
+    for (s32 k = lo; k <= (s32)blk; k++) {
+        float v = b->peaks[(u32)k & PEAK_MASK];
+        m = v > m ? v : m;
+    }
+    return m;
 }
 
-static void end(tt_t *t) {
-    __asm__ volatile("" ::: "memory");
-    t->rseq++;
+/* The blocks a period at f spans, plus one, at least 4 (a low string's peaks ripple within its period). */
+static u32 period_blocks(float f) {
+    float q = 750.0f / (f > 30.0f ? f : 30.0f);
+    u32 c = (u32)q;
+    if ((float)c < q)
+        c++;
+    return c + 1u < 4u ? 4u : c + 1u;
 }
 
-/* The analysis' fourth block: the note, if any, and what it means for the readout. */
-static void decide(tt_t *t, tt_block_t *b, u32 blk) {
-    const float *x = b->span, *d = b->d6;
+static void copy_d(float *to, const float *from) {
+    for (u32 k = 0; k <= TT_T6MAX; k++)
+        to[k] = from[k];
+}
+
+/* The 12 kHz difference at lag over TT_W12 samples, less the same on base (test 6: the samples before a pluck). */
+static float diff2(const float *x, const float *base, u32 lag) {
+    float v = diff(x, 1u, lag, TT_W12);
+    if (base)
+        v -= diff(base, 1u, lag, TT_W12);
+    return v;
+}
+
+typedef struct {
+    float aper, clean, freq;
+} yin_t;
+
+/* YIN on the difference function d (6 kHz, lags 1..tmax): its cumulative-mean normalisation (into b->dn6), the
+ * first dip under thr from lag 4 (1.5 kHz) on, else the deepest; the dip's own bottom by a parabola through it and
+ * its neighbours (test 4's clean reading); refined at 12 kHz on x around twice that lag (7 lags over a 200-sample
+ * window, a parabola through the deepest of the middle 5 and its neighbours, its vertex within a lag), less the
+ * same on base when given; above 1 kHz, where a period under 6 samples at 6 kHz falls between the lags and YIN's
+ * first dip is twice it, half that lag wins when it is as deep within 20%. */
+static void yin(tt_block_t *b, const float *d, const float *x, const float *base, u32 tmax, float thr, yin_t *o) {
     float *dn = b->dn6, cum = 0.0f;
-    for (u32 k = 1; k <= TT_T6MAX; k++) {
+    for (u32 k = 1; k <= tmax; k++) {
         cum += d[k];
         dn[k] = cum > 0.0f ? d[k] * (float)k / cum : 1.0f;
     }
     u32 tau = 0;
-    for (u32 k = TT_T6MIN; k <= TT_T6MAX; k++) {
-        if (dn[k] < THRESHOLD) {
-            while (k + 1u <= TT_T6MAX && dn[k + 1u] < dn[k])
+    for (u32 k = TT_T6MIN; k <= tmax; k++) {
+        if (dn[k] < thr) {
+            while (k + 1u <= tmax && dn[k + 1u] < dn[k])
                 k++;
             tau = k;
             break;
@@ -241,25 +304,22 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     }
     if (!tau) {
         tau = TT_T6MIN;
-        for (u32 k = TT_T6MIN + 1u; k <= TT_T6MAX; k++)
+        for (u32 k = TT_T6MIN + 1u; k <= tmax; k++)
             if (dn[k] < dn[tau])
                 tau = k;
     }
-    float aper = dn[tau], power = 0.0f, clean = aper;
-    if (tau > 1u && tau < TT_T6MAX) {                    /* test 4: the dip's own bottom (YIN's step 5): at whole */
+    float aper = dn[tau], clean = aper;
+    if (tau > 1u && tau < tmax) {                        /* test 4: the dip's own bottom (YIN's step 5): at whole */
         float den = dn[tau - 1u] - 2.0f * dn[tau] + dn[tau + 1u];   /* lags a period between two (E6: 4.55) */
         if (den > 0.0f) {                                /* reads up to 0.2 on one clean string */
             float dd = dn[tau - 1u] - dn[tau + 1u], v = aper - dd * dd / (8.0f * den);
             clean = v < 0.0f ? 0.0f : v > aper ? aper : v;
         }
     }
-    for (u32 j = 0; j < TT_W12; j++)
-        power += x[j] * x[j];
-    power *= 1.0f / (float)TT_W12;
     u32 c = 2u * tau, best = 1;
     float dd[7];
     for (u32 i = 0; i < 7u; i++)
-        dd[i] = diff(x, 1u, c - 3u + i, TT_W12);
+        dd[i] = diff2(x, base, c - 3u + i);
     for (u32 i = 2; i <= 5u; i++)
         if (dd[i] < dd[best])
             best = i;
@@ -271,40 +331,98 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         u32 h = (u32)(k * 0.5f + 0.5f), hb = 1;
         float dh[3];
         for (u32 i = 0; i < 3u; i++)
-            dh[i] = diff(x, 1u, h - 1u + i, TT_W12);
+            dh[i] = diff2(x, base, h - 1u + i);
         for (u32 i = 0; i < 3u; i += 2u)
             if (dh[i] < dh[hb])
                 hb = i;
         if (dh[hb] <= 1.2f * dd[best]) {
-            float o = 0.0f, dn2 = dh[0] - 2.0f * dh[1] + dh[2];
+            float oo = 0.0f, dn2 = dh[0] - 2.0f * dh[1] + dh[2];
             if (hb == 1u && dn2 > 0.0f) {
-                o = 0.5f * (dh[0] - dh[2]) / dn2;
-                o = o > 1.0f ? 1.0f : o < -1.0f ? -1.0f : o;
+                oo = 0.5f * (dh[0] - dh[2]) / dn2;
+                oo = oo > 1.0f ? 1.0f : oo < -1.0f ? -1.0f : oo;
             }
-            k = (float)(h - 1u + hb) + o;
+            k = (float)(h - 1u + hb) + oo;
         }
     }
-    float freq = 12000.0f / k;
-    u32 voiced = power >= LEVEL_MIN * LEVEL_MIN && aper < APER_MAX;
-    float midi = 69.0f + SEMI_PER_LN * ln(freq * (1.0f / 440.0f));
+    o->aper = aper;
+    o->clean = clean;
+    o->freq = 12000.0f / k;
+}
+
+static void begin(tt_t *t) {
+    t->rseq++;
+    __asm__ volatile("" ::: "memory");
+}
+
+static void end(tt_t *t) {
+    __asm__ volatile("" ::: "memory");
+    t->rseq++;
+}
+
+/* The analysis' fourth block: the note, if any, and what it means for the readout and the synth. */
+static void decide(tt_t *t, tt_block_t *b, u32 blk) {
+    const float *x = b->span, *d = b->d6;
+    yin_t y;
+    yin(b, d, x, 0, TT_T6MAX, THRESHOLD, &y);
+    float power = 0.0f;
+    for (u32 j = 0; j < TT_W12; j++)
+        power += x[j] * x[j];
+    power *= 1.0f / (float)TT_W12;
+    u32 voiced = power >= LEVEL_MIN * LEVEL_MIN && y.aper < APER_MAX;
+    s32 age = (s32)blk - b->onset_blk;
+    u32 pre = age < 3, sub = 0;                         /* pre: its samples were taken before the last pluck */
+    if (pre && b->lock_pending)
+        copy_d(b->d_base, d);
+    copy_d(b->d_last, d);
+    if (!pre && b->lock_pending && b->pluck_ref >= RING_MIN * b->pick_peak) {   /* test 6: over strings ringing */
+        float *dn = b->dsub, e_new = 0.0f, e_all = 0.0f, mabs = 0.0f, mn = 0.0f;
+        for (u32 k = 1; k <= TT_T6MAX; k++) {           /* what the pick added */
+            float v = d[k] - b->d_base[k];
+            dn[k] = v;
+            mabs += __builtin_fabsf(v);
+            mn = k == 1u || v < mn ? v : mn;
+            if (k >= 50u) {
+                e_new += v;
+                e_all += d[k];
+            }
+        }
+        s32 tmax = (age - 2) * 8 - (s32)TT_W6;          /* lags whose samples all came after the pluck */
+        if (e_new >= SUB_MIN * e_all && e_new > 0.0f && mn >= -SUB_NEG * 0.01f * mabs && tmax >= (s32)TT_T6MIN + 2) {
+            for (u32 k = 1; k <= TT_T6MAX; k++)
+                dn[k] = dn[k] > 0.0f ? dn[k] : 0.0f;
+            yin_t s;
+            yin(b, dn, x, b->base_x, tmax < (s32)TT_T6MAX ? (u32)tmax : TT_T6MAX, THR_SUB, &s);
+            u32 v2 = power >= LEVEL_MIN * LEVEL_MIN && s.aper < APER_MAX;
+            float ratio = s.freq / y.freq;
+            s32 kk = (s32)(ratio + 0.5f);
+            u32 common = kk >= 2 && kk <= 6 && __builtin_fabsf(ratio / (float)kk - 1.0f) < COMMON_TOL;
+            if (v2 && s.clean <= CLEAN_APER && (!(voiced && y.clean <= CLEAN_APER) || common)) {
+                y = s;                                  /* murky plain, or a common period: the pick's own note */
+                voiced = v2;
+                sub = 1;
+            }
+        }
+    }
+    float midi = 69.0f + SEMI_PER_LN * ln(y.freq * (1.0f / 440.0f));
     s32 note = round_s(midi);
     tt_result *r = &t->res;
     begin(t);
     r->analyses++;
     r->voiced = voiced;
-    r->freq10 = (u32)(freq * 10.0f + 0.5f);
+    r->freq10 = (u32)(y.freq * 10.0f + 0.5f);
     r->cents = round_s((midi - (float)note) * 100.0f);
-    r->quality = aper >= 1.0f ? 0u : (u32)((1.0f - aper) * 100.0f + 0.5f);
-    if ((s32)blk - b->onset_blk < 3) {
+    r->quality = y.aper >= 1.0f ? 0u : (u32)((1.0f - y.aper) * 100.0f + 0.5f);
+    if (pre) {
         end(t);
         return;
     }
-    if (voiced && clean <= CLEAN_APER) {                 /* clean: one string */
+    float now = win_peak(b, blk, period_blocks(y.freq), b->onset_blk + 4);   /* test 6: the level over a period */
+    if (voiced && y.clean <= CLEAN_APER) {               /* clean: one string (or what a pick added to several) */
         b->unvoiced = 0;
         b->voiced_level = recent_peak(b, blk);
         if (b->first_pending) {
             b->first_pending = 0;
-            r->first_ms = ms(blk - (u32)b->onset_blk);
+            r->first_ms = ms((u32)age);
         }
         b->agree = b->agree && b->prev_note == note ? b->agree + 1u : 1u;
         b->prev_note = note;
@@ -312,7 +430,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         if (b->agree >= AGREE) {
             r->note = note;
             if (b->lock_pending) {
-                u32 v = ms(blk - (u32)b->onset_blk);
+                u32 v = ms((u32)age);
                 b->lock_pending = 0;
                 r->lock_ms = v;
                 r->lock_sum += v;
@@ -322,13 +440,23 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                     r->lock_max = v;
                 r->locks++;
                 float keep = b->pluck_click ? CLICK_KEEP : REPICK;
-                if (!same || after_peak(b, blk) >= keep * b->pluck_ref)
+                if (now < PLUCK_HOLD * b->pluck_ref) {
+                    b->stops++;                          /* the level fell after it: a let-go, not a pick */
+                    if (b->syn_note >= 0)
+                        syn_send(t, b, -1, 0u);
+                } else if (!same || after_peak(b, blk) >= keep * b->pluck_ref) {
                     syn_send(t, b, note, velocity(b->pick_peak));   /* a pluck went steady: the synth plays it */
-                else
+                    b->sub_lock = sub;
+                    b->sub_locks += sub;
+                } else {
                     b->syn_strays++;                     /* its own note, no pick's level: a stray pluck */
-            } else if (b->syn_note >= 0 && !same && !t->drum && b->agree >= MOVE_AGREE && r->cents <= MOVE_CENTS &&
-                       r->cents >= -MOVE_CENTS && !harmonic_jump(note, b->syn_note)) {
-                syn_send(t, b, note, velocity(level(b, blk)));      /* the pitch moved while it plays */
+                }
+            } else if (b->syn_note >= 0 && !same && !t->drum && !b->sub_lock && b->agree >= MOVE_AGREE &&
+                       r->cents <= MOVE_CENTS && r->cents >= -MOVE_CENTS && !harmonic_jump(note, b->syn_note)) {
+                if (now < MOVE_HOLD * b->env)
+                    b->blocked++;                        /* far quieter than the note: a let-go, not a slide */
+                else
+                    syn_send(t, b, note, velocity(level(b, blk)));  /* the pitch moved while it plays */
             }
         }
     } else {
@@ -336,7 +464,8 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
             b->murky++;                                  /* strings ringing together: counts as nothing heard */
         b->agree = 0;
         b->prev_note = -1;
-        b->unvoiced++;
+        if (!(b->sub_lock && power >= LEVEL_MIN * LEVEL_MIN))   /* test 6: a chord's note holds while heard */
+            b->unvoiced++;
         if (b->unvoiced >= RELEASE) {
             r->note = -1;
             if (b->syn_note >= 0) {
@@ -347,6 +476,12 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
             }
         }
     }
+    if (b->syn_note >= 0 && !b->lock_pending && win_peak(b, blk, LEVEL_BLOCKS, -0x7FFFFFFF) < DROP * b->env) {
+        b->drops++;
+        syn_send(t, b, -1, 0u);                          /* the level fell fast: a hand stopped the string */
+    }
+    if (b->syn_note < 0)
+        b->sub_lock = 0;
     end(t);
 }
 
@@ -390,6 +525,8 @@ u32 tune_fp_step(tt_t *t) {
     u32 blk = b->blk;
     b->peaks[blk & PEAK_MASK] = pk;
     b->hfe[blk & PEAK_MASK] = e;
+    float env_prev = b->env, ev = b->env * ENV_K;
+    b->env = pk > ev ? pk : ev;                          /* test 6: the level */
     if (blk >= P_TO) {
         float ref = 0.0f, href = 0.0f;
         for (u32 k = P_FROM; k <= P_TO; k++) {
@@ -400,7 +537,7 @@ u32 tune_fp_step(tt_t *t) {
             float v = b->hfe[(blk - k) & PEAK_MASK];
             href = v > href ? v : href;
         }
-        u32 jump = pk >= P_MIN && pk >= P_RATIO * ref;
+        u32 jump = pk >= P_MIN && pk >= P_RATIO * ref && pk >= JUMP_ENV * env_prev;
         u32 click = e >= HF_MIN && e >= HF_RATIO * href && pk >= P_MIN;
         if ((jump || click) && (s32)blk - b->last_onset >= REFRACTORY) {
             b->clicks += !jump;
@@ -410,6 +547,9 @@ u32 tune_fp_step(tt_t *t) {
             b->last_onset = b->onset_blk = (s32)blk;
             b->first_pending = b->lock_pending = 1;
             b->agree = 0;
+            copy_d(b->d_base, b->d_last);                /* test 6: what rang before it */
+            for (u32 j = 0; j < TT_BASE; j++)
+                b->base_x[j] = b->ring[(b->w - FRAMES / 4u - 1u - j) & RING_MASK];
             begin(t);
             t->res.onsets++;
             end(t);

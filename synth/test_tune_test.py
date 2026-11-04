@@ -1,8 +1,9 @@
-"""Checks for guitar synth test 5 (build_tune_test.py): the CPU meter as in cabinet test 2, the tracker (note
+"""Checks for guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the tracker (note
 tracker test 2's, with test 4's click and clean readings), and the synth: the tracker's note on the Sound Generator,
 the cases synth test 3 got wrong on the unit (picks at the ringing string's level, strings ringing together) and
 test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT; test 5's ROUTING gate (silent on Mix,
-where pair 0 is the mix as heard) and its popup.
+where pair 0 is the mix as heard) and its popup; test 6's cases from test 5 on the unit: a fretted note let go right
+after the pick (one note, let go soon), chords held and picked string by string (each note plays).
 
 usage: python synth/test_tune_test.py OUT_DIR --kits KITS_MANIFEST [--seeds N] [--blocks N] [--mixer-runs N] [--only ...]
 
@@ -61,16 +62,16 @@ PACKET = TXBUF + 0x6000
 class Layout:
     """tt_t and tt_block_t offsets, from the module's tt_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<21I', m.bytes(sym['tt_layout'], 84))
+        v = struct.unpack('<22I', m.bytes(sym['tt_layout'], 88))
         (self.tt_bytes, self.state, self.peak, self.inp, self.w_n, self.pub, self.tot_max_ever, self.reset_ack,
          self.rseq, self.res, self.res_bytes, self.block_bytes, self.b_ring, self.b_span, self.b_d6, self.b_peaks,
-         self.b_z, self.b_started, self.b_stack, self.posted_rseq, self.b_pick) = v
+         self.b_z, self.b_started, self.b_stack, self.posted_rseq, self.b_pick, self.b_env) = v
         self.syn = self.res + self.res_bytes
         check(self.state == 4 * TT_HEAD.index('state') and self.posted_rseq == 4 * TT_HEAD.index('posted_rseq') and
               self.peak == 4 * len(TT_HEAD) and self.inp == self.peak + 8 and self.w_n == self.inp + 128 and
               self.pub == self.w_n + 20 and self.rseq == self.w_n + 4 * (len(TT_MID) - 1) and
               self.res == self.rseq + 4 and self.res_bytes == 4 * len(ref.RESULT) and
-              self.tt_bytes == self.syn + 8 and self.b_pick + 16 <= self.b_stack,
+              self.tt_bytes == self.syn + 8 and self.b_pick + 16 <= self.b_stack and self.b_env + 24 <= self.b_stack,
               'tt_t layout as the test reads it (syn, drum at the end)')
 
 
@@ -520,6 +521,12 @@ class SynthMachine(TuneMachine):
         f = struct.unpack('<f3I', self.bytes(self.block + self.lay.b_pick, 16))
         return dict(zip(('pick_peak', 'pluck_click', 'clicks', 'murky'), f))
 
+    def b6(self):
+        """Test 6's counters: the level, a note from the subtraction playing, let-gos, fast drops, notes the
+        subtraction found, moves too quiet to play."""
+        f = struct.unpack('<f5I', self.bytes(self.block + self.lay.b_env, 24))
+        return dict(zip(('env', 'sub_lock', 'stops', 'drops', 'sub_locks', 'blocked'), f))
+
     def tick(self, values=None):
         """One RX block (silence if None), then syn_ui as the next UI tick runs it."""
         st = self.rx(values if values is not None else [0] * 64)
@@ -574,6 +581,8 @@ class Run:
         self.model = syn_model(self.words, drum, oct)
         self.g = ms.gsyn()
         self.bf = ms.bfields()
+        self.b6 = ms.b6()
+        self.tw = (tr.stops, tr.drops, tr.sub_locks, tr.blocked)
 
     def calls(self):
         return [(n, 'on' if v else 'off') for _, _, n, v, _ in self.ms.midi]
@@ -583,6 +592,26 @@ class Run:
 
     def times(self):
         return [(round(b * 64 / 48000, 3), n, 'on' if v else 'off') for b, _, n, v, _ in self.ms.midi]
+
+
+def held(tms):
+    """Each note held until the next: every note-off comes with the next note-on (the mono synth's change of note)
+    but the last, after the last note-on. tms: Run.times()."""
+    ons = [t for t, n, k in tms if k == 'on']
+    offs = [t for t, n, k in tms if k == 'off']
+    return bool(ons) and len(offs) == len(ons) and offs[:-1] == ons[1:] and offs[-1] > ons[-1]
+
+
+def twin_events(x, **kw):
+    """tune_ref.py's tracker alone (test6=False: test 5's rules): [(seconds, note name or 'off')]."""
+    tr, prev, out = ref.Tracker(**kw), 0, []
+    for b, v in enumerate(ref.to_blocks(x, seed=4)):
+        tr.step(v)
+        if tr.syn != prev:
+            n = (tr.syn & 0xFF) - 1
+            out.append((round(b * 64 / 48000, 3), ref.name(n) if n >= 0 else 'off'))
+            prev = tr.syn
+    return out
 
 
 def synth_checks(img, man, kit_sym):
@@ -660,15 +689,18 @@ def synth_checks(img, man, kit_sym):
           f"an A2 picked four times, softer each time (0.45, 0.2, 0.08, 0.03 of full scale): four notes, "
           f"velocities {vels} (50 + 77 x the square root of the pick's peak over 0.4)")
     report['synth']['repeats'] = dict(softer=vels)
-    # 3. Strings left ringing together read murky: no wrong low notes, and the synth lets go rather than hold one.
-    r = Run(img, man, ringing((55, 57, 59, 62, 64, 67), 0.3, seed=40))
+    # 3. Strings left ringing together read murky (test 3: wrong low 'common' notes); test 6 reads a pick over them from
+    # what it added, so each note plays, held while the strings ring (test 4: G3, then the synth let go).
+    want = [55, 57, 59, 62, 64, 67]
+    r = Run(img, man, ringing(want, 0.3, seed=40))
     tms = r.times()
+    on_n = [n for n, _ in r.ons()]
     off_at = [t for t, n, k in tms if k == 'off']
-    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [55] and off_at and 0.5 < off_at[0] < 0.6 and
-          r.bf['murky'] > 100,
-          f"G3 A3 B3 D4 E4 G4 picked 0.3 s apart on six strings, all left ringing: G3 plays, then the strings read "
-          f"murky ({r.bf['murky']} analyses) and the synth lets go {off_at[0] if off_at else None} s in, 0.1 s after "
-          f"the A3 (test 3 on the twin: a stuck G3 or C2..G2 'common' notes): {tms}")
+    check(r.ms.midi == r.model and on_n == [n for n in want if n in on_n] and len(on_n) >= 5 and
+          held(tms) and off_at[-1] > 0.2 + 0.3 * 6 and r.bf['murky'] > 100 and r.b6['sub_locks'] >= 4,
+          f"G3 A3 B3 D4 E4 G4 picked 0.3 s apart on six strings, all left ringing: {len(on_n)} of the 6 play in order, "
+          f"none wrong ({r.b6['sub_locks']} read from what the pick added), each held until the next, let go when "
+          f"they are stopped; the plain readings murky ({r.bf['murky']} analyses): {tms}")
     # 4. Test 2's cases: a thump, a re-pick, a sharp note with vibrato, drum mode; and a hammer-on.
     ring = ref.guitar(hz[40], 1.6, seed=21)
     at, w = int(0.8 * fs), int(0.003 * fs)
@@ -844,6 +876,50 @@ def synth_checks(img, man, kit_sym):
           f"the readout shown on the page on Mix: the tracker runs for it ({st['res']['locks']} steady notes) but "
           f"nothing plays ({len(mr.midi)} calls)")
     report['synth']['routing'] = dict(hint=hint, hint_box=[box_w, box_h])
+    # 11. Test 6. Synth test 5 on the unit: "if you pluck a note and release right away you hear a second note on
+    # release". A fretted note let go 0.15 s after the pick: the note is damped (5 ms), the open string or a touch
+    # harmonic rings briefly far quieter, the string leaving the fret clicks; test 5 moved to the open string.
+    lets, five, offs, bad = [(1, 5, 'open', 0.08), (2, 3, 'open', 0.08), (3, 7, 'open', 0.08), (5, 3, 'open', 0.08),
+                             (6, 5, 'harm', 0.3), (4, 12, 'open', 0.3)], 0, [], []
+    for s_, f_, kind, ac in lets:
+        x, note = ref.let_go(s_, f_, kind=kind, a_click=ac, a_new=0.5 if kind == 'harm' else 0.3, seed=s_ * 31 + f_)
+        r = Run(img, man, x)
+        tms = r.times()
+        off_at = [t for t, n, k in tms if k == 'off']
+        if not (r.ms.midi == r.model and [n for n, _ in r.ons()] == [note] and off_at and off_at[0] - 0.35 < 0.06):
+            bad.append((s_, f_, kind, tms))
+        offs.append(round((off_at[0] - 0.35) * 1000) if off_at else None)
+        five += len([e for e in twin_events(x, test6=False) if e[1] != 'off']) > 1
+    check(not bad and five >= 5,
+          f"a fretted note let go right after the pick (strings 1, 2, 3, 5 at frets 5, 3, 7, 3 to the open string, a "
+          f"touch harmonic on the low E at fret 5, the D string at fret 12): one note each, let go {offs} ms after the "
+          f"let-go; test 5's rules played a second note in {five} of {len(lets)} ({bad})")
+    report['synth']['let_go_off_ms'] = offs
+    # "Hold a chord and play the notes, they sometimes don't sound": each string of a held chord picked in turn.
+    arps, bad, played5 = [('D', 0.3, 5), ('Am', 0.3, 5), ('G', 0.5, 5), ('C', 0.5, 5)], [], []
+    for chord, gap, seed in arps:
+        x, notes = ref.arpeggio(ref.CHORDS[chord], gap, seed=seed)
+        r = Run(img, man, x)
+        tms = r.times()
+        if not (r.ms.midi == r.model and [n for n, _ in r.ons()] == notes and held(tms)):
+            bad.append((chord, gap, tms))
+        played5.append(len([e for e in twin_events(x, test6=False) if e[1] in [ref.name(n) for n in notes]]))
+    check(not bad,
+          f"chords held and picked string by string (D and Am 0.3 s apart, G and C 0.5 s): every note plays in order, "
+          f"each held until the next, let go when the strings are stopped; test 5's rules played {played5} of "
+          f"5, 5, 6 and 5 notes, and wrong low ones ({bad})")
+    # A chord left to fade (no hand): no note from an older string coming through, one note-off when it is quiet.
+    notes = [ref.OPEN[s_] + f_ for s_, f_ in ref.CHORDS['D']]
+    total = 0.4 * len(notes) + 6.0
+    x = np.zeros(int(total * fs))
+    for k, n in enumerate(notes):
+        at = int(k * 0.4 * fs)
+        g = ref.guitar(hz[n], total - k * 0.4, seed=k, B=1e-4 if n < 55 else 3e-5)
+        x[at:at + len(g)] += g[:len(x) - at]
+    ev = twin_events(noisy(np.concatenate([np.zeros(fs // 5), x]), 1))
+    check([n for _, n in ev] == [ref.name(n) for n in notes] + ['off'],
+          f'the D chord picked 0.4 s apart and left to fade 6 s (tune_ref.py): its four notes, then let go once '
+          f'quiet ({ev})')
     report['synth']['entry'] = hex(entry & ~1)
 
 
