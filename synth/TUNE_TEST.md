@@ -1,8 +1,30 @@
-# Note tracker tests 1 and 2 (tune-test1, tune-test2): which note the guitar plays
+# Note tracker tests 1 and 2, guitar synth test 1 (tune-test1, tune-test2, gtr-synth-test1)
 
 Test-only builds, not for the patcher: v9.52 (combined-test17) with the CPU meter of IR diagnostic test 3 and a
 note tracker on the input. Test 2 is test 1 with a new pluck test and the plucks heard on the readout (see "Test 1 on
-the unit" below). The first step towards a guitar synth (the Sound Generator played from the guitar): how
+the unit" below). Guitar synth test 1 is test 2 playing the Sound Generator (next section).
+
+## Guitar synth test 1 (gtr-synth-test1)
+
+Test 2's tracker plays the Sound Generator, one note at a time:
+
+- **When:** on the Sound Generator page (page 0x1E) with EXT SOURCE on, the tracker runs with the readout hidden
+  (and, as before, while the readout is shown, on any page).
+- **The note** (audio task, `tune_fp.c`): `tt.syn` = seq << 16 | (note + 1), 0 none, written whole. On when a pluck
+  goes steady; moved (a new note-on) when the steady note changes while it plays (a slide, a hammer-on: no pluck);
+  none when the steady note is gone (4 unvoiced analyses: the string stopped, or faded under -54 dBFS). A note going
+  steady without a pluck while nothing plays starts nothing (another string ringing on after one was stopped).
+- **Playing it** (UI task, `syn_ui`, every 1 ms tick): through the entry MIDI IN takes on that page. The kits' note
+  gates (the stock dispatcher's 0x80066e64 note-on and 0x800670b8 note-off jump to them) end their SG route with
+  `b.w arp_midi_event` (0x83fa3448): r0 = 2 (the route), r1 the note, r2 the velocity (0 for off), r3 0 on / 1 off.
+  The builder reads the address from both gates. A new note-on first lets go of the one before; velocity 100. So
+  ARP takes the note into its list and drum mode turns notes 36-51 into pads 1-16, as for MIDI. In the UI task
+  because a note-on may wait about 3 ms for a busy voice to fade (v9.5's stealing), as the MIDI task's does: the
+  audio task must never wait for itself.
+- **Leaving the page** stops the Sound Generator's voices (as for MIDI): `syn_ui` forgets its note without a call,
+  and back on the page nothing replays. A stopped tracker (EXT SOURCE off, SLOW) lets go of its note.
+- **The delay:** the steady note 15-32 ms after a pluck (emulator; the unit's low E: 32), up to a 1 ms UI tick, then
+  the voice's start. The first step towards a guitar synth (the Sound Generator played from the guitar): how
 well and how fast the SP's main processor can follow the note. Nothing goes to the output; the meter's readout (hold
 EXIT a second on the main screen) shows what the tracker hears.
 
@@ -69,12 +91,39 @@ The six open strings once each, low to high, each stopped by hand before the nex
 - **TRK moves all the time:** as it should, it is the last tenth of a second's average/peak.
 - Not reported: whether the notes were right.
 
+## Test 2 on the unit (2026-11-03)
+
+- **The open low E alone,** rung about 5 s, then stopped by hand: E2 throughout, N1 P1, still P1 after the hand
+  stopped it. The open high E the same (E4).
+- **The six open strings slowly** (each rung about 3 s, stopped, then the next): P 1, 2, 3, 4, 5, 6.
+- **The first, quicker run:** LCK 32 after the low E (the emulator: 28), AVG 33, MAX 21, but P23. The extra plucks
+  did not go steady (phantoms going steady would have pulled AVG towards 11), and "sometimes P jumps on its own
+  before I get to the next string": something between strings (the hand, the pick) passes the pluck test now and
+  then. For the synth that is harmless while the string is stopping (nothing goes steady), but on a string still
+  ringing it goes steady on the same note and the synth starts that note again: watch for repeated notes in synth
+  test 1 (a fix would ask a re-pick of the same note to keep its level up after the pluck).
+
 ## Checked in the emulator (not on hardware)
 
 `python synth/test_tune_test.py OUT_DIR --kits kits-v9.46-test3/kits-manifest.json`: NAM test 2's meter checks
 (imported) on this image, and the tracker on Unicorn's Cortex-M7 model, against `tune_ref.py` after every block.
-90 checks pass on `release/tune-test2` (APP1 `68691893…96d2`, 3,179,808 bytes; the module 22,144 bytes); test 1
-passed 87 on `release/tune-test1` (APP1 `7cd37ebf…17cb`):
+103 checks pass on `release/gtr-synth-test1` (APP1 `19df4dda…1559`, 3,180,128 bytes; the module 22,464 bytes), 90
+on `release/tune-test2` (APP1 `68691893…96d2`), 87 on `release/tune-test1` (APP1 `7cd37ebf…17cb`).
+
+The synth (gtr-synth-test1), with the MIDI entry stubbed and `syn_ui` run after every block:
+
+- The notes go to `arp_midi_event` 0x83fa3448, where both kits' note gates' SG routes jump (the kits' own symbol
+  agrees); the module's `tt.syn` equals `tune_ref.py`'s after every block of every phrase.
+- Six open strings on the Sound Generator page, EXT SOURCE on, the readout hidden: six notes, each on (2, note, 100,
+  0) in the block its pluck went steady (28, 31, 21, 19, 20, 17 ms after it) and off (2, note, 0, 1) when its
+  string is stopped.
+- Legato (one pluck heard): the synth follows the steady note, E2 G2 A2 B2, each move an off then an on.
+- Off the page (the readout shown, the tracker running): nothing. EXT SOURCE off on the page: the tracker stays off.
+  A note playing when EXT SOURCE goes off: let go at the next tick. A note playing when the page closes: forgotten
+  without a call, and nothing replays back on the page.
+- A step costs the same: 14,739 / 12,410 / 12,410 / 26,127 instructions by phase.
+
+The tracker (tune-test2, and gtr-synth-test1 the same):
 
 - The module and `tune_ref.py` agree after every block on four phrases played one at a time (B1 D2 E2 A2, D3 G3 B3
   E4, A4 E5 A5 E6, and E2 E3 E4 E5 overdriven), one legato, and (test 2) the hardware test's run twice, clean on a
@@ -96,9 +145,11 @@ passed 87 on `release/tune-test1` (APP1 `7cd37ebf…17cb`):
   post comes before tune_ui starts the tracker: an all-zero result read C-1); bounce's own bnc_rx and bnc_ui run as
   in the parent; the meter's checks.
 
-## Not known (test 2 on the unit)
+## Not known (synth test 1 on the unit)
 
-- Whether the notes are right on a real guitar (test 1's report did not say).
-- The real times from a real pluck (AVG over the six open strings: 22 here), and whether N and P are 6.
-- Re-picking a string that still rings: no new pluck until it has faded to about half. For the synth step a pick's
-  click (the highs, which a ringing string loses fast) may tell a re-pick: it needs a real guitar's numbers.
+- Whether the Sound Generator really plays from the UI tick as from MIDI (the emulator stubs the entry; the path
+  from it on is the kits' MIDI path).
+- How late the synth feels (the steady note 15-32 ms after a pluck, then the voice).
+- Repeated notes from stray plucks while a string rings (test 2: "P jumps on its own" now and then).
+- Re-picking a string that still rings: no new pluck until it has faded to about half, so the synth note goes on
+  rather than starting again. A pick's click (the highs, which a ringing string loses fast) may tell a re-pick.

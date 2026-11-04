@@ -1,4 +1,5 @@
-"""Checks for note tracker test 2 (build_tune_test.py): the CPU meter as in cabinet test 2, and the tracker.
+"""Checks for guitar synth test 1 (build_tune_test.py): the CPU meter as in cabinet test 2, the tracker (note
+tracker test 2's), and the synth: the tracker's note on the Sound Generator.
 
 usage: python synth/test_tune_test.py OUT_DIR --kits KITS_MANIFEST [--seeds N] [--blocks N] [--mixer-runs N] [--only ...]
 
@@ -60,11 +61,12 @@ class Layout:
         (self.tt_bytes, self.state, self.peak, self.inp, self.w_n, self.pub, self.tot_max_ever, self.reset_ack,
          self.rseq, self.res, self.res_bytes, self.block_bytes, self.b_ring, self.b_span, self.b_d6, self.b_peaks,
          self.b_z, self.b_started, self.b_stack, self.posted_rseq) = v
+        self.syn = self.res + self.res_bytes
         check(self.state == 4 * TT_HEAD.index('state') and self.posted_rseq == 4 * TT_HEAD.index('posted_rseq') and
               self.peak == 4 * len(TT_HEAD) and self.inp == self.peak + 8 and self.w_n == self.inp + 128 and
               self.pub == self.w_n + 20 and self.rseq == self.w_n + 4 * (len(TT_MID) - 1) and
               self.res == self.rseq + 4 and self.res_bytes == 4 * len(ref.RESULT) and
-              self.tt_bytes == self.res + self.res_bytes, 'tt_t layout as the test reads it')
+              self.tt_bytes == self.syn + 4, 'tt_t layout as the test reads it')
 
 
 def tt_state(m, sym, lay):
@@ -75,6 +77,7 @@ def tt_state(m, sym, lay):
     st['in'] = list(struct.unpack('<64h', m.bytes(t + lay.inp, 128)))
     r = dict(zip(ref.RESULT, struct.unpack(f'<{len(ref.RESULT)}i', m.bytes(t + lay.res, lay.res_bytes))))
     st['res'] = r
+    st['syn'] = struct.unpack('<I', m.bytes(t + lay.syn, 4))[0]
     return st
 
 
@@ -282,11 +285,12 @@ def tracker_checks(parent_img, img, man):
             tr.step(values)
             got, want = st['res'], tr.res
             same = all(got[k] == want[k] for k in ('note', 'voiced', 'first_ms', 'lock_ms', 'onsets', 'locks',
-                                                   'lock_min', 'lock_max', 'analyses'))
+                                                   'lock_min', 'lock_max', 'analyses')) and st['syn'] == tr.syn
             close = (abs(got['freq10'] - want['freq10']) <= max(1, want['freq10'] // 1000) and
                      abs(got['cents'] - want['cents']) <= 1 and abs(got['quality'] - want['quality']) <= 2)
             if not (same and close) and len(mism) < 4:
-                mism.append((label, b, {k: (got[k], want[k]) for k in ref.RESULT if got[k] != want[k]}))
+                mism.append((label, b, {k: (got[k], want[k]) for k in ref.RESULT if got[k] != want[k]},
+                             (hex(st['syn']), hex(tr.syn))))
             if got['locks'] > len(locks):
                 locks.append([got['note'], got['lock_ms'], got['first_ms'], None])
                 probe = b + 112                                   # 150 ms on: past the attack
@@ -304,8 +308,8 @@ def tracker_checks(parent_img, img, man):
             wrong.append((label, 'cents', off))
         if st['res']['onsets'] != len(notes):
             wrong.append((label, 'plucks', st['res']['onsets']))
-    check(not mism, f'C and tune_ref.py agree after every block: notes, plucks, times, counts; frequency within 0.1%, '
-                    f'cents within 1 ({mism})')
+    check(not mism, f'C and tune_ref.py agree after every block: notes, plucks, times, counts, the synth note; '
+                    f'frequency within 0.1%, cents within 1 ({mism})')
     check(not wrong, f'every pluck played one at a time is one pluck and gives its string\'s note, within 3 cents '
                      f'150 ms after it went steady ({GUITAR_CENTS} for the pickup-like strings: a stiff string\'s '
                      f'overtones run sharp) ({wrong})')
@@ -464,6 +468,153 @@ def tracker_checks(parent_img, img, man):
 
 
 # ---------------------------------------------------------------------------------------------
+SG_PAGE = 0x1E
+
+
+class SynthMachine(TuneMachine):
+    """TuneMachine on a page, with the Sound Generator's MIDI entry (the kits' gates' target) stubbed: every call
+    recorded as (block, r0, note, velocity, r3)."""
+    def __init__(self, img, man, page=SG_PAGE, **kw):
+        super().__init__(img, man, **kw)
+        self.midi, self.blk = [], 0
+        a = man['sg_midi_entry'] & ~1
+        self.uc.hook_add(UC_HOOK_CODE, self._midi, begin=a, end=a)
+        self.page(page)
+
+    def page(self, p):
+        self.put(base.PAGE, p, '<h')
+
+    def _midi(self, uc, a, s, _):
+        self.midi.append((self.blk,) + tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(4)))
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def gsyn(self):
+        return dict(zip(('sounding', 'done', 'ons', 'offs'), struct.unpack('<iIII', self.bytes(self.sym['gsyn'], 16))))
+
+    def tick(self, values=None):
+        """One RX block (silence if None), then syn_ui as the next UI tick runs it."""
+        st = self.rx(values if values is not None else [0] * 64)
+        self.call(self.sym['syn_ui'])
+        self.blk += 1
+        return st
+
+
+def syn_model(words):
+    """syn_ui on the page, in Python: (block, tt.syn) changes -> the MIDI calls it makes."""
+    sounding, done, out = -1, 0, []
+    for b, w in words:
+        seq, note = w >> 16, (w & 0xFF) - 1
+        if seq != done:
+            done = seq
+            if sounding >= 0:
+                out.append((b, 2, sounding, 0, 1))
+                sounding = -1
+            if note >= 0:
+                out.append((b, 2, note, 100, 0))
+                sounding = note
+        elif note < 0 and sounding >= 0:
+            out.append((b, 2, sounding, 0, 1))
+            sounding = -1
+    return out
+
+
+def synth_checks(img, man, kit_sym):
+    sym = man['symbols']
+    entry = man['sg_midi_entry']
+    gates = man['guards']['sg_midi']
+    check(entry == kit_sym.get('arp_midi_event') and all(g['entry'] == hex(entry & ~1) for g in gates.values()),
+          f"the synth's notes go to arp_midi_event {entry & ~1:#x}, where both of the kits' note gates' SG routes "
+          f"jump (the kits' own symbol agrees): {[g['listing'] for g in gates.values()]}")
+    # 1. Six open strings on the Sound Generator page, EXT SOURCE on, the readout hidden.
+    runs = {}
+    for label, notes, x in (('open strings', OPEN, ref.open_strings(OPEN)),
+                            ('legato', (40, 43, 45, 47), signal((40, 43, 45, 47), 0.0, 40, True))):
+        ms = SynthMachine(img, man)
+        ms.ui(0)
+        ms.ui(0)                                                     # the first reads EXT SOURCE, the second starts
+        started = ms.tt()['req'] == 1
+        tr, words, prev, locks = ref.Tracker(), [], 0, []
+        for b, values in enumerate(ref.to_blocks(x, noise=1e-4 if label == 'legato' else 0.0, seed=4)):
+            st = ms.tick(values)
+            tr.step(values)
+            if tr.syn != prev:
+                words.append((b, tr.syn))
+                prev = tr.syn
+            if st['res']['locks'] > len(locks):
+                locks.append((b, st['res']['lock_ms']))
+        runs[label] = (ms, started, words, locks, syn_model(words), ms.gsyn())
+    ms, started, words, locks, model, g = runs['open strings']
+    ons = [(b, n) for b, r0, n, v, off in ms.midi if v]
+    pairs = [(n, ms.midi[k + 1][2]) for k, (b, r0, n, v, off) in enumerate(ms.midi) if v and k + 1 < len(ms.midi)]
+    check(started and ms.midi == model and [n for _, n in ons] == list(OPEN) and
+          all(a == b for a, b in pairs) and ms.midi[-1][2:] == (OPEN[-1], 0, 1) and
+          [b for b, _ in ons] == [b for b, _ in locks] and g['sounding'] == -1 and g['ons'] == 6 and g['offs'] == 6,
+          f"Sound Generator page, EXT SOURCE on, readout hidden: the tracker runs; six open strings play six notes, "
+          f"each on in the block its pluck went steady ({[lk for _, lk in locks]} ms after the pluck) and off when "
+          f"its string is stopped, every call (2, note, 100, 0) / (2, note, 0, 1): {[(n, 'on' if v else 'off') for _, _, n, v, _ in ms.midi]}")
+    ms, started, words, locks, model, g = runs['legato']
+    ons = [n for b, r0, n, v, off in ms.midi if v]
+    check(started and ms.midi == model and ons and ons[0] == 40 and len(ons) >= 2 and
+          all(ms.midi[k][3] == 0 for k in range(1, len(ms.midi), 2)),
+          f"legato (no new pluck heard): the synth follows the steady note, each move an off then an on "
+          f"({[(n, 'on' if v else 'off') for _, _, n, v, _ in ms.midi]})")
+    # 2. Off the page (the readout shown, the tracker running): nothing to the Sound Generator.
+    mo = SynthMachine(img, man, page=1)
+    mo.ui(1)
+    for values in ref.to_blocks(ref.open_strings((40, 45), ring=0.8))[:1200]:
+        st = mo.tick(values)
+    check(st['state'] == TT_RUN and st['res']['locks'] >= 1 and not mo.midi and mo.gsyn()['sounding'] == -1,
+          f"off the Sound Generator page the tracker runs for the readout but plays nothing ({st['res']['locks']} "
+          f"steady notes, {len(mo.midi)} calls)")
+    # 3. EXT SOURCE off on the page: the tracker stays off.
+    me = SynthMachine(img, man, ext=0)
+    me.ui(0)
+    me.ui(0)
+    for values in ref.to_blocks(ref.open_strings((40,), ring=0.6))[:600]:
+        st = me.tick(values)
+    check(st['req'] == 0 and st['state'] == TT_OFF and st['steps'] == 0 and not me.midi,
+          'Sound Generator page with EXT SOURCE off: the tracker stays off, nothing plays')
+    # 4. A note playing, then EXT SOURCE off: the tracker stops and lets go of it.
+    sig = ref.to_blocks(ref.open_strings((40,), ring=1.5))
+    mx = SynthMachine(img, man)
+    mx.ui(0)
+    mx.ui(0)
+    b = 0
+    while not mx.midi and b < 600:
+        mx.tick(sig[b])
+        b += 1
+    on = list(mx.midi)
+    mx.ext = 0
+    mx.ui(0)
+    mx.ui(0)
+    for k in range(3):
+        st = mx.tick(sig[b + k])
+    check(len(on) == 1 and on[0][2:] == (40, 100, 0) and st['state'] == TT_OFF and
+          mx.midi[1:] == [(on[0][0] + 1, 2, 40, 0, 1)] and mx.gsyn()['sounding'] == -1,
+          f'a note playing when the tracker stops (EXT SOURCE off): let go at the next UI tick ({mx.midi})')
+    # 5. A note playing, then the page closed: forgotten (the SG stops its own voices), nothing replays on return.
+    ml = SynthMachine(img, man)
+    ml.ui(0)
+    ml.ui(0)
+    b = 0
+    while not ml.midi and b < 600:
+        ml.tick(sig[b])
+        b += 1
+    ml.page(1)
+    ml.tick(sig[b])
+    gone = ml.gsyn()['sounding'] == -1 and len(ml.midi) == 1
+    ml.page(SG_PAGE)
+    for k in range(1, 900):
+        ml.tick(sig[b + k] if b + k < len(sig) else None)
+    check(gone and len(ml.midi) == 1 and ml.gsyn()['sounding'] == -1,
+          f'a note playing when the page closes: forgotten without a call (the Sound Generator stops its voices '
+          f'itself); back on the page it does not play again ({ml.midi})')
+    report['synth'] = dict(entry=hex(entry & ~1), open_strings=[(n, 'on' if v else 'off', b) for b, _, n, v, _ in
+                                                                  runs['open strings'][0].midi],
+                           legato=[(n, 'on' if v else 'off', b) for b, _, n, v, _ in runs['legato'][0].midi])
+
+
+# ---------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('out', type=Path)
@@ -471,7 +622,7 @@ def main():
     ap.add_argument('--seeds', type=int, default=12)
     ap.add_argument('--blocks', type=int, default=6)
     ap.add_argument('--mixer-runs', type=int, default=4)
-    ap.add_argument('--only', help='comma-separated: static,tune,meter (default all)')
+    ap.add_argument('--only', help='comma-separated: static,tune,synth,meter (default all)')
     a = ap.parse_args()
     out = a.out.resolve()
     man = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
@@ -483,11 +634,13 @@ def main():
     if not kit_sym:
         raise SystemExit('no kit symbols beside the parent APP1')
     sym = man['symbols']
-    only = set((a.only or 'static,tune,meter').split(','))
+    only = set((a.only or 'static,tune,synth,meter').split(','))
     if 'static' in only:
         static_checks(out, man, parent_img, img)
     if 'tune' in only:
         tracker_checks(parent_img, img, man)
+    if 'synth' in only:
+        synth_checks(img, man, kit_sym)
     if 'meter' in only:
         base.entry_checks(parent_img, img, sym)
         base.arithmetic(img, man)

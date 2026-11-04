@@ -1,7 +1,7 @@
-/* Note tracker test 2, the FPU side: the note the guitar plays, from the input the effects chip hands back (RX pair 0,
- * after the input FX). Everything here runs on the audio task through tune_fp_call: on the module's own 2 KB stack,
- * with FPSCR and d0-d15 saved around it and FPSCR set to round to nearest, flush to zero and default NaN, as cabinet
- * test 2's cab_fp_call.
+/* Guitar synth test 1 (note tracker 3), the FPU side: the note the guitar plays, from the input the effects chip
+ * hands back (RX pair 0, after the input FX). Everything here runs on the audio task through tune_fp_call: on the
+ * module's own 2 KB stack, with FPSCR and d0-d15 saved around it and FPSCR set to round to nearest, flush to zero
+ * and default NaN, as cabinet test 2's cab_fp_call.
  *
  * One step per RX block (tune_rx in tune_test.c decides when):
  *   - the block's 64 frames (48 kHz, (L + R) / 2 of pair 0) through a 4th-order Butterworth low-pass at 1.6 kHz,
@@ -20,7 +20,11 @@
  *   - the result: voiced when the newest 200 samples reach -54 dBFS RMS and the aperiodicity is under 0.35; the
  *     steady note once two voiced analyses in a row agree, gone after 4 unvoiced ones; after a pluck, the time to
  *     the first voiced analysis and to the steady note. An analysis whose samples were taken before the pluck's
- *     block (it finished under 3 blocks after it) only shows its numbers: the string before may still ring.
+ *     block (it finished under 3 blocks after it) only shows its numbers: the string before may still ring;
+ *   - the synth note (tt.syn, played on the Sound Generator by the UI task): on when a pluck goes steady, moved
+ *     when the steady note changes while it plays (a slide, a hammer-on: no pluck), off when the steady note
+ *     is gone. A note that goes steady without a pluck while nothing plays starts nothing (a string ringing on
+ *     after another was stopped).
  *
  * tunetest/tune_ref.py is the same in Python; test_tune_test.py runs both on the same input.
  */
@@ -101,6 +105,17 @@ static float ln(float x) {
 static s32 round_s(float x) { return (s32)(x < 0.0f ? x - 0.5f : x + 0.5f); }
 
 static u32 ms(u32 blocks) { return (blocks * 4u + 1u) / 3u; }   /* 64 frames at 48 kHz: 4/3 ms */
+
+/* The synth note for the UI task (tune_test.c's syn_ui plays it on the Sound Generator): one word, so the UI reads
+ * it whole; seq << 16 | (note + 1), 0 none. A note-on bumps seq, so a new pluck of the same note starts it again. */
+static void syn_send(tt_t *t, tt_block_t *b, s32 note) {
+    u32 seq = t->syn >> 16;
+    if (note >= 0)
+        seq = (seq + 1u) & 0xFFFFu;
+    t->syn = seq << 16 | (note >= 0 ? (u32)note + 1u : 0u);
+    b->syn_note = note;
+    b->syn_sends++;
+}
 
 static void begin(tt_t *t) {
     t->rseq++;
@@ -202,14 +217,20 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                 if (v > r->lock_max)
                     r->lock_max = v;
                 r->locks++;
+                syn_send(t, b, note);                    /* a pluck went steady: the synth plays it */
+            } else if (b->syn_note >= 0 && note != b->syn_note) {
+                syn_send(t, b, note);                    /* the pitch moved while it plays: a slide, a hammer-on */
             }
         }
     } else {
         b->agree = 0;
         b->prev_note = -1;
         b->unvoiced++;
-        if (b->unvoiced >= RELEASE)
+        if (b->unvoiced >= RELEASE) {
             r->note = -1;
+            if (b->syn_note >= 0)
+                syn_send(t, b, -1);                      /* the string stopped: let go */
+        }
     }
     end(t);
 }
@@ -221,6 +242,7 @@ u32 tune_fp_step(tt_t *t) {
         b->last_onset = -1000;
         b->prev_note = -1;
         b->unvoiced = 99;
+        b->syn_note = -1;
     }
     float z00 = b->z[0][0], z01 = b->z[0][1], z10 = b->z[1][0], z11 = b->z[1][1], pk = 0.0f;
     for (u32 f = 0; f < FRAMES; f++) {

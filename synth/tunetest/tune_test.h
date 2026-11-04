@@ -62,6 +62,8 @@ typedef struct {
     u32 reset_req, reset_ack;
     volatile u32 rseq;                      /* odd while res is written */
     tt_result res;
+    volatile u32 syn;                       /* the synth note, for the UI (syn_ui): seq << 16 | (note + 1), 0 none;
+                                               the audio task writes it whole, and a note-on bumps seq */
 } tt_t;
 
 /* The tracker's memory, in the module. The UI clears it before a start. */
@@ -75,8 +77,11 @@ typedef struct __attribute__((aligned(32))) {
     u32 started, w, blk;                    /* ring writes, blocks */
     s32 last_onset, onset_blk, prev_note;
     u32 first_pending, lock_pending, agree, unvoiced;
+    s32 syn_note;                           /* the synth note last sent (tt.syn), -1 none */
+    u32 syn_sends;                          /* tt.syn writes since the start */
     u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
 } tt_block_t;
+_Static_assert((__builtin_offsetof(tt_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");
 
 extern tt_t tt;
 extern tt_block_t tt_block;

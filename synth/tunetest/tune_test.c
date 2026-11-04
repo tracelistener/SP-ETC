@@ -1,12 +1,14 @@
-/* Note tracker test 2: which note the guitar plays, on the screen, on v9.52 (combined-test17) with the CPU meter of
- * IR diagnostic test 3. The first step towards a guitar synth (the Sound Generator played from the guitar): how well
- * and how fast the SP's main processor can follow the note from the input the effects chip hands back (RX pair 0,
- * after the input FX: cabinet test 2 on the unit found the input only in pairs 0 and 1).
+/* Guitar synth test 1 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52
+ * (combined-test17) with the CPU meter of IR diagnostic test 3 and note tracker test 2's readout. The SP's main
+ * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
+ * test 2 on the unit found the input only in pairs 0 and 1).
  *
- * While the meter's readout is shown (hold EXIT a second on the main screen), the audio task copies pair 0,
- * (L + R) / 2, after every RX block and runs one tracker step (tune_fp.c). Hiding the readout stops it. It stops
- * itself (SLOW) when one step takes over a whole block, or the mixer and the tracker take over 9/10 of one twice in
- * a row. Nothing goes to the output.
+ * The tracker runs while the meter's readout is shown (hold EXIT a second on the main screen), and on the Sound
+ * Generator page while EXT SOURCE is on: the audio task copies pair 0, (L + R) / 2, after every RX block and runs
+ * one tracker step (tune_fp.c). It stops itself (SLOW) when one step takes over a whole block, or the mixer and the
+ * tracker take over 9/10 of one twice in a row. On the Sound Generator page the UI tick (syn_ui) plays its note
+ * there as MIDI IN on the page's channel would (the kits' note gate's SG route, arp_midi_event): one note at a
+ * time, at velocity 100, so ARP and drum mode take it as they take MIDI.
  *
  * Readout (the stock popup; every 0.1 s while the tracker runs, else with the meter's half-second window):
  *   E2 +3c Q92        the steady note (-- none); the newest analysis: cents off its nearest note, quality
@@ -22,7 +24,7 @@
  *   0x0001c2d0  mixer entry       -> meter_mix_entry (the return comes back to meter_mix_exit)
  *   0x80005870  per-voice stub    -> meter_voice
  *   0x0001fd84  SG stub's pre call -> meter_sg_pre
- *   bounce's ui bridge: its bnc_ui call -> diag_ui (bnc_ui, the meter's UI step, tune_ui)
+ *   bounce's ui bridge: its bnc_ui call -> diag_ui (bnc_ui, the meter's UI step, tune_ui, syn_ui)
  *   bounce's rx bridge: its bnc_rx call -> diag_rx (the RX packet from the audio task's r9 and [r6 + 4], as its
  *                     RX site computed it; bnc_rx, the pairs, tune_rx)
  *
@@ -147,6 +149,20 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
 #define REFRESH_CYCLES 60000000u                       /* the readout follows the tracker every 0.1 s */
 #define CUR_TASK (*(volatile u32 *)0x202BBBFCu)        /* the kernel's running task (its TCB) */
 #define TCB_ATTR 0x10
+
+/* ---- the synth: the tracker's note on the Sound Generator ---- */
+#define SG_PAGE 0x1E                                   /* the Sound Generator page (the kits' and the arp's) */
+#define SYN_VELOCITY 100
+/* The kits' note gates jump here on their SG route: (2, note, velocity, 0) on, (2, note, 0, 1) off. The builder
+ * reads the address from both gates' b.w. */
+#define SG_MIDI_EVENT ((void (*)(u32, s32, s32, s32))SG_MIDI)
+
+typedef struct {
+    s32 sounding;                                      /* the note the Sound Generator holds for us, -1 none */
+    u32 done;                                          /* the last tt.syn sequence handled */
+    u32 ons, offs;                                     /* note-ons and note-offs sent */
+} gsyn_t;
+EXPORT gsyn_t gsyn = {-1, 0, 0, 0};
 
 #define BARRIER() __asm__ volatile("" ::: "memory")
 
@@ -719,10 +735,11 @@ UI_SMALL static void tune_start(tt_t *t) {
     t->req = 1;
 }
 
-/* Every UI tick: the tracker on while the readout is shown. Every 0.1 s: the input FX and EXT SOURCE. */
+/* Every UI tick: the tracker on while the readout is shown, or on the Sound Generator page with EXT SOURCE on. Every
+ * 0.1 s: the input FX and EXT SOURCE. */
 EXPORT UI_SMALL void tune_ui(void) {
     tt_t *t = &tt;
-    u32 want = meter.shown;
+    u32 want = meter.shown || (PAGE == SG_PAGE && t->ext);
     if (!want) t->req = 0;
     if (want && !t->req && t->state == TT_OFF) tune_start(t);
     u32 now = DWT_CYCCNT;
@@ -733,11 +750,50 @@ EXPORT UI_SMALL void tune_ui(void) {
     t->ext = SET_GET(SETTINGS, EXT_SOURCE, 0) != 0;
 }
 
+/* Every UI tick, on the Sound Generator page: the tracker's note there, through the entry MIDI IN on the page's
+ * channel takes (the kits' note gates' SG route: r0 = 2, r1 note, r2 velocity, r3 0 on / 1 off), so ARP and drum
+ * mode treat it as they treat MIDI. One note at a time: a new note lets go of the one before. Leaving the page
+ * stops the Sound Generator's voices (as for MIDI), so what was playing is just forgotten there; a stopped tracker
+ * (EXT SOURCE off, SLOW) lets go of it. Runs in the UI task: a note-on may wait about 3 ms for a busy voice to
+ * fade (v9.5's stealing), as it does for MIDI, which the audio task must never do. */
+EXPORT UI_SMALL void syn_ui(void) {
+    gsyn_t *s = &gsyn;
+    u32 w = tt.syn, seq = w >> 16;
+    s32 note = (s32)(w & 0xFFu) - 1;
+    if (PAGE != SG_PAGE) {
+        s->sounding = -1;
+        s->done = seq;
+        return;
+    }
+    if (tt.state != TT_RUN) {
+        note = -1;
+        s->done = seq;
+    }
+    if (seq != s->done) {
+        s->done = seq;
+        if (s->sounding >= 0) {
+            SG_MIDI_EVENT(2u, s->sounding, 0, 1);
+            s->offs++;
+            s->sounding = -1;
+        }
+        if (note >= 0) {
+            SG_MIDI_EVENT(2u, note, SYN_VELOCITY, 0);
+            s->ons++;
+            s->sounding = note;
+        }
+    } else if (note < 0 && s->sounding >= 0) {
+        SG_MIDI_EVENT(2u, s->sounding, 0, 1);
+        s->offs++;
+        s->sounding = -1;
+    }
+}
+
 /* Bounce's ui bridge (the popup tick, UI task, every millisecond) calls this in place of bnc_ui. */
 EXPORT void diag_ui(int elapsed) {
     ((void (*)(int))BNC_UI)(elapsed);
     meter_ui_tick(elapsed);
     tune_ui();
+    syn_ui();
 }
 
 /* Every RX block: pairs 0 and 1's peaks, and pair 0 as (L + R) / 2 for the tracker (32-byte frames, 64 of them).

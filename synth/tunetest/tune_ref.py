@@ -49,6 +49,15 @@ class Tracker:
         self.res = dict.fromkeys(RESULT, 0)
         self.res['note'] = -1
         self.analyses = []          # (block, voiced, freq, aperiodicity, nearest note)
+        self.syn, self.syn_note, self.syn_sends = 0, -1, 0      # tt.syn: seq << 16 | (note + 1), 0 none
+
+    def syn_send(self, note):
+        seq = self.syn >> 16
+        if note >= 0:
+            seq = (seq + 1) & 0xFFFF
+        self.syn = seq << 16 | (note + 1 if note >= 0 else 0)
+        self.syn_note = note
+        self.syn_sends += 1
 
     def step(self, block):
         """block: the 64 int16 values the integer side copies, (L + R) >> 1 of pair 0."""
@@ -166,12 +175,17 @@ class Tracker:
                         r['lock_min'] = v
                     r['lock_max'] = max(r['lock_max'], v)
                     r['locks'] += 1
+                    self.syn_send(note)                     # a pluck went steady: the synth plays it
+                elif self.syn_note >= 0 and note != self.syn_note:
+                    self.syn_send(note)                     # the pitch moved while it plays
         else:
             self.agree = 0
             self.prev_note = -1
             self.unvoiced += 1
             if self.unvoiced >= RELEASE:
                 r['note'] = -1
+                if self.syn_note >= 0:
+                    self.syn_send(-1)                       # the string stopped: let go
 
 
 def pluck(freq, secs, amp=0.4, seed=0, fs=48000, drive=0.0):
