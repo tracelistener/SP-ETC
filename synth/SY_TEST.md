@@ -125,11 +125,14 @@ the chain.
   output plus that block.
 - **Guards:** the SLOW rules, and the instructions a step takes.
 
-## Not known (SY test 1 on the unit)
+## On the unit (2026-11-04)
 
-- Whether a real guitar's partials, pick noise and hum behave like the model's. A hum harmonic above -60 dBFS in a
-  band's window would play as a faint tone.
-- How the low notes' 20-30 ms feel when playing.
+"OMG IT works really well!" So the method carries over from the model guitar to a real one: the real partials,
+pick noise and hum gave no trouble the user mentioned. No details yet on chords, low notes or the readout's numbers.
+
+## Still not known
+
+- How the low notes' 20-30 ms feel in longer playing (nothing was reported against them).
 - The engine's cycles at SDRAM speed (the readout's SY line).
 - Whether the synth's level against the dry guitar is right. There is no level control yet; the test's output peaks
   near -6 dBFS.
