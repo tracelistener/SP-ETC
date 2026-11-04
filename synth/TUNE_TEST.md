@@ -1,9 +1,10 @@
-# Note tracker tests 1 and 2, guitar synth tests 1 and 2
+# Note tracker tests 1 and 2, guitar synth tests 1 to 3
 
 Test-only builds, not for the patcher: v9.52 (combined-test17) with the CPU meter of IR diagnostic test 3 and a
 note tracker on the input. Test 2 (tune-test2) is test 1 with a new pluck test and the plucks heard on the readout
 (see "Test 1 on the unit" below). Guitar synth test 1 (gtr-synth-test1) is test 2 playing the Sound Generator (next
-section); synth test 2 (gtr-synth-test2) is synth test 1 without its extra notes (the section after).
+section); synth test 2 (gtr-synth-test2) is synth test 1 without its extra notes; synth test 3 (gtr-synth-test3)
+plays like the SY-1000's Dynamic Synth (the sections after).
 
 ## Guitar synth test 1 (gtr-synth-test1)
 
@@ -45,7 +46,45 @@ Three ways synth test 1 made extra notes, found in the emulator, and their fixes
 - **Drum mode** played every move as a hit: there only plucks play. `syn_ui` copies the kits' `kit_mode` (0x83fc58e0,
   the byte `arp_midi_event` tests first; the builder reads its address there) to `tt.drum` every tick.
 
-The readout's steady note is unchanged (it still shows the flicker). The first step towards a guitar synth (the Sound Generator played from the guitar): how
+The readout's steady note is unchanged (it still shows the flicker).
+
+## Guitar synth test 3 (gtr-synth-test3): Dynamic Synth ways
+
+Test 2's rules stay. Three changes follow the SY-1000's Dynamic Synth. Its controls come from the SY-1000 v1.20's
+own parameter list (its readable host image; the synth's DSP code itself sits in its encrypted BMC image): PLAY
+FEEL (FEEL1-4, NO DYNA), DYNAMICS 1-10, LOW VELO CUT, CHROMATIC OFF/TYPE1-3, and envelopes with an ATTACK but no
+decay or release of their own.
+
+- **Velocity from the pick** (PLAY FEEL, DYNAMICS): the note-on's velocity is 200.8 x the square root of the
+  highest block peak (low-passed, at 12 kHz) from the pluck to its steady note. 127 is at 0.4 of full scale; in
+  `tune_ref.py`'s pickup model, a pick peaking at 0.45, 0.15, 0.05 and 0.015 of full scale plays 121, 70, 40 and
+  22. The stock MIDI note-on sets the voice's level to velocity x 100 (`+0x74`, applied every sample), so this is
+  loudness. MIDI notes never used the LEVEL knob.
+- **The guitar's own pitch:** the Sound Generator sounds MIDI note n at pitch n - 48 (`+0x5c`), frequency TUNE x
+  2^((pitch - 33) / 12): an octave below n. Tests 1 and 2 played an octave down. `syn_ui` now sends n + 12 + 12 x OCT
+  (the SG's OCT, -3..+4, at 0x80591c4c), within MIDI 12-127. Drum mode keeps the guitar's note (the pad it strikes).
+- **The voice follows the string** (CHROMATIC OFF; the level following the string). With ARP off and not in drum
+  mode (`tt.dyn`, from `kit_mode` and the arp's `arp_mode` 0x83fc7b70, the word `arp_midi_event`'s melodic path tests
+  first; the builder reads it there), there are no moves. Every block, `voice_update` writes the voice holding our
+  note: sounding, not releasing, its `+0x194` the note `syn_ui` sent (`tt.sent`), not a noise type (13, 14).
+  - Its pitch steps, `+0x20` = f / 48000 and `+0x38` = 2 pi f / 48000: the stock code sets them only at a note's
+    start, and the oscillator adds them to its two phases every sample. They come from the voice's own pitch and
+    TUNE, bent to the tracked pitch. Every voiced analysis after the steady note moves the followed pitch: a step
+    under a semitone at once (a bend, vibrato), a bigger one (a hammer-on, a slide's end) once 3 analyses in a row
+    agree on its note, never by an octave or a harmonic's interval. The voice glides 0.3 of the way a block. The
+    fork's filter envelopes read `+0x20` for their cutoff, so the cutoff bends too. The FPU here is single
+    precision: the doubles are written as raw words.
+  - Its level, `+0x74`: the same velocity of the string's level now (the highest peak of the newest 13 blocks, 17
+    ms, longer than the lowest period), 0.5 of the way a block up and 0.15 down.
+  - With ARP on, the moves stay test 2's (the arp needs notes), and the voices are left alone.
+- The builder guards the stock code this relies on: the MIDI note-on's `+0x194`, `+0x5c`, `+0x60`, its `+0x20` and
+  `+0x38` stores and their 48000 and pi literals, an idle voice's level; the oscillator's use of all three every
+  sample; and the fork's SG module loading the clones' base, 0x8353a310.
+
+Stock pitch bend would not do: the SP-404MKII's MIDI implementation chart receives pitch bend only for the Vocoder
+input FX (channel 11), never the Sound Generator. Hence the voice writes.
+
+The first step towards a guitar synth (the Sound Generator played from the guitar): how
 well and how fast the SP's main processor can follow the note. Nothing goes to the output; the meter's readout (hold
 EXIT a second on the main screen) shows what the tracker hears.
 
@@ -128,9 +167,28 @@ The six open strings once each, low to high, each stopped by hand before the nex
 
 `python synth/test_tune_test.py OUT_DIR --kits kits-v9.46-test3/kits-manifest.json`: NAM test 2's meter checks
 (imported) on this image, and the tracker on Unicorn's Cortex-M7 model, against `tune_ref.py` after every block.
-111 checks pass on `release/gtr-synth-test2` (APP1 `637424b5…1a63`, 3,180,576 bytes; the module 22,912 bytes), 103
-on `release/gtr-synth-test1` (APP1 `19df4dda…1559`), 90 on `release/tune-test2` (APP1 `68691893…96d2`), 87 on
-`release/tune-test1` (APP1 `7cd37ebf…17cb`).
+126 checks pass on `release/gtr-synth-test3` (APP1 `03679e29…420d`, 3,182,304 bytes; the module 24,640 bytes), 111
+on `release/gtr-synth-test2` (APP1 `637424b5…1a63`, 3,180,576 bytes; the module 22,912 bytes), 103 on
+`release/gtr-synth-test1` (APP1 `19df4dda…1559`), 90 on `release/tune-test2` (APP1 `68691893…96d2`), 87 on
+`release/tune-test1` (APP1 `7cd37ebf…17cb`). Test 3's tracker step, without voice writes: 14,746 / 12,417 / 12,417 /
+26,136 instructions by phase, 272 bytes of its own stack; the voice writes' cost is not measured.
+
+Synth test 3's own checks (the MIDI entry stubbed as a voice the stock note-on sets up; every voice write against
+`tune_ref.py`'s in the same block and against the module's own bend and level):
+
+- The stub sets a voice as the stock MIDI note-on (0x80132118, run in the emulator) does: sounding, the note at
+  `+0x194`, pitch note - 48, level velocity x 100, the steps of TUNE x 2^((pitch - 33) / 12). MIDI 57 (A3, 220 Hz)
+  sounds at 110 Hz: an octave below.
+- Six open strings: notes 52 57 62 67 71 76 (the guitar's + 12), velocities 126 121 118 120 122 118; 7,086 voice
+  writes, the worst 0.0004 cents and 0.0001 of a velocity from the twin, the pitch step within 4e-7 of its own bend.
+- An A2 picked hard then softly (0.45 and 0.05 of full scale): velocities 121 and 40.
+- A whole-step bend on G3: one note, its voice bent from 0.7 to 202.7 cents; its level 11,921 -> 7,733 halfway.
+- Hammer-ons E2 G2 A2 B2: one note (52), 3 steps, the voice up to 700 cents. With ARP on: test 2's moves (52, 55, 57,
+  59), no voice writes.
+- A G3 40 cents sharp with 25 cents of vibrato: one note, the voice following 16..65 cents.
+- Test 2's thump, re-pick and drum-mode checks hold (drum mode at OCT +2: one hit, the guitar's own note 40).
+- OCT +1, -1, 9 and -7 play an A2 as 69, 45, 105 (held to +4) and 21 (held to -3); a noise type's voice is left
+  alone; off the page, nothing is written.
 
 Synth test 2's own checks (the module against `tune_ref.py` after every block, the MIDI entry stubbed):
 
@@ -178,11 +236,15 @@ The tracker (tune-test2, and gtr-synth-test1 the same):
   post comes before tune_ui starts the tracker: an all-zero result read C-1); bounce's own bnc_rx and bnc_ui run as
   in the parent; the meter's checks.
 
-## Not known (synth test 2 on the unit)
+## Not known (synth tests 2 and 3 on the unit)
 
 - Synth test 1 played on the unit (no stuck notes), so the UI tick reaches the Sound Generator as MIDI does.
 - Whether test 2's rules remove the extra notes the unit made, and what "tracking not the best" means there: wrong
   notes, late notes or missed ones.
+- Test 3: how the bends sound (the voice follows analyses 5.3 ms apart, gliding 0.3 of the way a block), whether
+  200.8 suits the unit's input level (the readout's LV is the raw peak in %; a quiet input plays soft notes), and
+  whether a level following the string makes long notes too quiet next to tests 1 and 2's fixed 100. The voice writes
+  were checked against a stubbed voice, not the Sound Generator's own code.
 - How late the synth feels (the steady note 15-32 ms after a pluck, then the voice).
 - Re-picking a string that still rings: no new pluck until it has faded to about half, so the synth note goes on
   rather than starting again. A pick's click (the highs, which a ringing string loses fast) may tell a re-pick.

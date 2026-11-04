@@ -62,9 +62,12 @@ typedef struct {
     u32 reset_req, reset_ack;
     volatile u32 rseq;                      /* odd while res is written */
     tt_result res;
-    volatile u32 syn;                       /* the synth note, for the UI (syn_ui): seq << 16 | (note + 1), 0 none;
-                                               the audio task writes it whole, and a note-on bumps seq */
+    volatile u32 syn;                       /* the synth note, for the UI (syn_ui): seq << 16 | velocity << 8 |
+                                               (note + 1), 0 none; the audio task writes it whole, and a note-on
+                                               bumps seq */
     volatile u32 drum;                      /* syn_ui: the kits' drum mode is on (only plucks play notes there) */
+    volatile s32 sent;                      /* syn_ui: the MIDI note the Sound Generator holds for us, -1 none */
+    volatile u32 dyn;                       /* syn_ui: neither drum mode nor ARP: the voice follows the string */
 } tt_t;
 
 /* The tracker's memory, in the module. The UI clears it before a start. */
@@ -84,6 +87,12 @@ typedef struct __attribute__((aligned(32))) {
     u32 syn_strays;                         /* plucks heard while the synth played whose level did not rise */
     float voiced_level;                     /* the newest 4 blocks' peak at the last voiced analysis */
     u32 syn_holds;                          /* analyses the synth held its note through, unvoiced but not quieter */
+    float pick_peak;                        /* the highest block peak from the last pluck to its steady note */
+    float bend_est;                         /* the pitch the voice follows (MIDI, fractional) */
+    float bend_cur;                         /* the voice's bend now, in cents from the synth note (it glides) */
+    float lev;                              /* the voice's level now, as a velocity (it follows the string) */
+    u32 bend_jumps;                         /* steps of a semitone or more the voice took without a pluck */
+    u32 voice_writes;                       /* blocks that set a voice's pitch step and level */
     u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
 } tt_block_t;
 _Static_assert((__builtin_offsetof(tt_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");
