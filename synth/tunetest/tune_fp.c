@@ -1,4 +1,4 @@
-/* Guitar synth test 1 (note tracker 3), the FPU side: the note the guitar plays, from the input the effects chip
+/* Guitar synth test 2 (note tracker 3), the FPU side: the note the guitar plays, from the input the effects chip
  * hands back (RX pair 0, after the input FX). Everything here runs on the audio task through tune_fp_call: on the
  * module's own 2 KB stack, with FPSCR and d0-d15 saved around it and FPSCR set to round to nearest, flush to zero
  * and default NaN, as cabinet test 2's cab_fp_call.
@@ -21,10 +21,17 @@
  *     steady note once two voiced analyses in a row agree, gone after 4 unvoiced ones; after a pluck, the time to
  *     the first voiced analysis and to the steady note. An analysis whose samples were taken before the pluck's
  *     block (it finished under 3 blocks after it) only shows its numbers: the string before may still ring;
- *   - the synth note (tt.syn, played on the Sound Generator by the UI task): on when a pluck goes steady, moved
- *     when the steady note changes while it plays (a slide, a hammer-on: no pluck), off when the steady note
- *     is gone. A note that goes steady without a pluck while nothing plays starts nothing (a string ringing on
- *     after another was stopped).
+ *   - the synth note (tt.syn, played on the Sound Generator by the UI task): on when a pluck goes steady, off
+ *     when the steady note is gone. A pluck heard while it plays starts the note again (or the new one) only if
+ *     the newest 4 blocks' peak is 1.5 x the pluck's reference by then: else it was a stray pluck (the hand, the
+ *     pick near a ringing string; synth test 1 heard extra notes) and the note goes on. Without a pluck it moves
+ *     (a slide, a hammer-on) once 3 analyses in a row agree on a note within 30 cents of it, never by an octave
+ *     or a harmonic's interval (the tracker's own mistakes), and never in drum mode (each move would be a hit).
+ *     It lets go once the steady note is gone and the newest 4 blocks' peak is under 0.3 x what it was at the
+ *     last voiced analysis (a hand on the string), else after 12 unvoiced analyses (64 ms): a thump or a scrape
+ *     spoils the analyses that span it while the string rings on (synth test 1 let go there, then started the
+ *     note again).
+ *     A note going steady without a pluck while nothing plays starts nothing.
  *
  * tunetest/tune_ref.py is the same in Python; test_tune_test.py runs both on the same input.
  */
@@ -44,6 +51,11 @@
 #define AGREE 2u                         /* analyses in a row for the steady note */
 #define RELEASE 4u                       /* unvoiced analyses that clear it */
 #define SEMI_PER_LN 17.312340f           /* 12 / ln 2 */
+#define REPICK 1.5f                      /* a pluck while the synth plays: the newest 4 blocks' peak over its reference */
+#define MOVE_AGREE 3u                    /* the synth moves without a pluck: analyses in a row on the new note, */
+#define MOVE_CENTS 30                    /* each within this many cents of it */
+#define SYN_DROP 0.3f                    /* the synth lets go once unvoiced and under this part of the last voiced */
+#define SYN_RELEASE_LONG 12u             /* level (a hand on the string), else after this many unvoiced (64 ms) */
 
 /* The 4th-order Butterworth low-pass at 1.6 kHz (48 kHz) as two biquads: b0, b1, b2, a1, a2. */
 static const float BQ[2][5] = {
@@ -115,6 +127,22 @@ static void syn_send(tt_t *t, tt_block_t *b, s32 note) {
     t->syn = seq << 16 | (note >= 0 ? (u32)note + 1u : 0u);
     b->syn_note = note;
     b->syn_sends++;
+}
+
+/* The highest peak of the newest 4 blocks (5.3 ms). */
+static float recent_peak(const tt_block_t *b, u32 blk) {
+    float m = 0.0f;
+    for (u32 k = 0; k < 4u; k++) {
+        float v = b->peaks[(blk - k) & PEAK_MASK];
+        m = v > m ? v : m;
+    }
+    return m;
+}
+
+/* A jump the tracker makes by mistake rather than a player: an octave, an octave and a fifth, two octaves... */
+static int harmonic_jump(s32 a, s32 b) {
+    s32 d = a > b ? a - b : b - a;
+    return d == 12 || d == 19 || d == 24 || d == 28 || d == 31;
 }
 
 static void begin(tt_t *t) {
@@ -199,6 +227,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     }
     if (voiced) {
         b->unvoiced = 0;
+        b->voiced_level = recent_peak(b, blk);
         if (b->first_pending) {
             b->first_pending = 0;
             r->first_ms = ms(blk - (u32)b->onset_blk);
@@ -217,8 +246,12 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                 if (v > r->lock_max)
                     r->lock_max = v;
                 r->locks++;
-                syn_send(t, b, note);                    /* a pluck went steady: the synth plays it */
-            } else if (b->syn_note >= 0 && note != b->syn_note) {
+                if (b->syn_note < 0 || recent_peak(b, blk) >= REPICK * b->pluck_ref)
+                    syn_send(t, b, note);                /* a pluck went steady: the synth plays it */
+                else
+                    b->syn_strays++;                     /* the level never rose: a stray pluck, the note goes on */
+            } else if (b->syn_note >= 0 && note != b->syn_note && !t->drum && b->agree >= MOVE_AGREE &&
+                       r->cents <= MOVE_CENTS && r->cents >= -MOVE_CENTS && !harmonic_jump(note, b->syn_note)) {
                 syn_send(t, b, note);                    /* the pitch moved while it plays: a slide, a hammer-on */
             }
         }
@@ -228,8 +261,12 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         b->unvoiced++;
         if (b->unvoiced >= RELEASE) {
             r->note = -1;
-            if (b->syn_note >= 0)
-                syn_send(t, b, -1);                      /* the string stopped: let go */
+            if (b->syn_note >= 0) {
+                if (b->unvoiced >= SYN_RELEASE_LONG || recent_peak(b, blk) < SYN_DROP * b->voiced_level)
+                    syn_send(t, b, -1);                  /* the string stopped: let go */
+                else
+                    b->syn_holds++;                      /* as loud as before: a thump, a scrape; hold on */
+            }
         }
     }
     end(t);
@@ -274,6 +311,7 @@ u32 tune_fp_step(tt_t *t) {
             ref = v > ref ? v : ref;
         }
         if (pk >= P_MIN && pk >= P_RATIO * ref && (s32)blk - b->last_onset >= REFRACTORY) {
+            b->pluck_ref = ref;
             b->last_onset = b->onset_blk = (s32)blk;
             b->first_pending = b->lock_pending = 1;
             b->agree = 0;

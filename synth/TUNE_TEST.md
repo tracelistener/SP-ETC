@@ -1,8 +1,9 @@
-# Note tracker tests 1 and 2, guitar synth test 1 (tune-test1, tune-test2, gtr-synth-test1)
+# Note tracker tests 1 and 2, guitar synth tests 1 and 2
 
 Test-only builds, not for the patcher: v9.52 (combined-test17) with the CPU meter of IR diagnostic test 3 and a
-note tracker on the input. Test 2 is test 1 with a new pluck test and the plucks heard on the readout (see "Test 1 on
-the unit" below). Guitar synth test 1 is test 2 playing the Sound Generator (next section).
+note tracker on the input. Test 2 (tune-test2) is test 1 with a new pluck test and the plucks heard on the readout
+(see "Test 1 on the unit" below). Guitar synth test 1 (gtr-synth-test1) is test 2 playing the Sound Generator (next
+section); synth test 2 (gtr-synth-test2) is synth test 1 without its extra notes (the section after).
 
 ## Guitar synth test 1 (gtr-synth-test1)
 
@@ -24,7 +25,27 @@ Test 2's tracker plays the Sound Generator, one note at a time:
 - **Leaving the page** stops the Sound Generator's voices (as for MIDI): `syn_ui` forgets its note without a call,
   and back on the page nothing replays. A stopped tracker (EXT SOURCE off, SLOW) lets go of its note.
 - **The delay:** the steady note 15-32 ms after a pluck (emulator; the unit's low E: 32), up to a 1 ms UI tick, then
-  the voice's start. The first step towards a guitar synth (the Sound Generator played from the guitar): how
+  the voice's start.
+- **On the unit (2026-11-03):** "tracking not the best / no stuck notes. sometimes extra notes especially with drum
+  kits" (in drum mode every note-on is a hit).
+
+## Guitar synth test 2 (gtr-synth-test2): fewer extra notes
+
+Three ways synth test 1 made extra notes, found in the emulator, and their fixes in `tune_fp.c`:
+
+- **A thump or a scrape on a ringing string** (the hand, the pick) spoils the analyses that span it: 4 unvoiced in
+  a row cleared the steady note, the synth let go, and the pluck it also made went steady and started the note
+  again. Now the synth lets go only once the newest 4 blocks' peak is under 0.3 x what it was at the last voiced
+  analysis (a hand on the string), else after 12 unvoiced analyses (64 ms, so nothing sticks); and a pluck heard
+  while it plays starts a note only if that peak is 1.5 x the pluck's reference by the time it goes steady (a real
+  re-pick lifts the string; a thump does not).
+- **A note between two semitones** (a sharp string, vibrato) flickered the steady note, and every flicker moved the
+  synth. A move without a pluck now needs 3 analyses in a row on a note, each within 30 cents of it, and is never
+  an octave or a harmonic's interval (12, 19, 24, 28, 31: the tracker's own mistakes).
+- **Drum mode** played every move as a hit: there only plucks play. `syn_ui` copies the kits' `kit_mode` (0x83fc58e0,
+  the byte `arp_midi_event` tests first; the builder reads its address there) to `tt.drum` every tick.
+
+The readout's steady note is unchanged (it still shows the flicker). The first step towards a guitar synth (the Sound Generator played from the guitar): how
 well and how fast the SP's main processor can follow the note. Nothing goes to the output; the meter's readout (hold
 EXIT a second on the main screen) shows what the tracker hears.
 
@@ -107,8 +128,20 @@ The six open strings once each, low to high, each stopped by hand before the nex
 
 `python synth/test_tune_test.py OUT_DIR --kits kits-v9.46-test3/kits-manifest.json`: NAM test 2's meter checks
 (imported) on this image, and the tracker on Unicorn's Cortex-M7 model, against `tune_ref.py` after every block.
-103 checks pass on `release/gtr-synth-test1` (APP1 `19df4dda…1559`, 3,180,128 bytes; the module 22,464 bytes), 90
-on `release/tune-test2` (APP1 `68691893…96d2`), 87 on `release/tune-test1` (APP1 `7cd37ebf…17cb`).
+111 checks pass on `release/gtr-synth-test2` (APP1 `637424b5…1a63`, 3,180,576 bytes; the module 22,912 bytes), 103
+on `release/gtr-synth-test1` (APP1 `19df4dda…1559`), 90 on `release/tune-test2` (APP1 `68691893…96d2`), 87 on
+`release/tune-test1` (APP1 `7cd37ebf…17cb`).
+
+Synth test 2's own checks (the module against `tune_ref.py` after every block, the MIDI entry stubbed):
+
+- A thump on a ringing low E (2.5 x its peak for 3 ms, 0.8 s on) is heard as a pluck and goes steady, but the
+  level never rose: the synth note goes on, (40 on, 40 off). Test 1's rules let go and started it again.
+- The low E picked again 2 s on, as hard: the level rose, so the note starts again (on, off, on, off).
+- Drum mode (`kit_mode` set), the legato phrase: the steady note moves E2 G2 A2 B2, one hit (40 on).
+- A G3 40 cents sharp with 25 cents of vibrato: the steady note flickers G3/G#3 16 times, the synth holds G3.
+- `tune_ref.py` alone: thumps of 2-6 x the ringing peak at 0.5-1.1 s on E2, A2, G3 and E4 all hold the note; the
+  six open strings overdriven (drive 3 and 6, both pickups) give one note a string.
+- The drum-mode byte is the kits' own `kit_mode`; a step costs 14,741 / 12,412 / 12,412 / 26,130 instructions.
 
 The synth (gtr-synth-test1), with the MIDI entry stubbed and `syn_ui` run after every block:
 
@@ -145,11 +178,11 @@ The tracker (tune-test2, and gtr-synth-test1 the same):
   post comes before tune_ui starts the tracker: an all-zero result read C-1); bounce's own bnc_rx and bnc_ui run as
   in the parent; the meter's checks.
 
-## Not known (synth test 1 on the unit)
+## Not known (synth test 2 on the unit)
 
-- Whether the Sound Generator really plays from the UI tick as from MIDI (the emulator stubs the entry; the path
-  from it on is the kits' MIDI path).
+- Synth test 1 played on the unit (no stuck notes), so the UI tick reaches the Sound Generator as MIDI does.
+- Whether test 2's rules remove the extra notes the unit made, and what "tracking not the best" means there: wrong
+  notes, late notes or missed ones.
 - How late the synth feels (the steady note 15-32 ms after a pluck, then the voice).
-- Repeated notes from stray plucks while a string rings (test 2: "P jumps on its own" now and then).
 - Re-picking a string that still rings: no new pluck until it has faded to about half, so the synth note goes on
   rather than starting again. A pick's click (the highs, which a ringing string loses fast) may tell a re-pick.

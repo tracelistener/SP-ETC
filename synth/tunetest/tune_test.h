@@ -64,6 +64,7 @@ typedef struct {
     tt_result res;
     volatile u32 syn;                       /* the synth note, for the UI (syn_ui): seq << 16 | (note + 1), 0 none;
                                                the audio task writes it whole, and a note-on bumps seq */
+    volatile u32 drum;                      /* syn_ui: the kits' drum mode is on (only plucks play notes there) */
 } tt_t;
 
 /* The tracker's memory, in the module. The UI clears it before a start. */
@@ -79,6 +80,10 @@ typedef struct __attribute__((aligned(32))) {
     u32 first_pending, lock_pending, agree, unvoiced;
     s32 syn_note;                           /* the synth note last sent (tt.syn), -1 none */
     u32 syn_sends;                          /* tt.syn writes since the start */
+    float pluck_ref;                        /* the last pluck's reference: the highest peak of the 21 ms before it */
+    u32 syn_strays;                         /* plucks heard while the synth played whose level did not rise */
+    float voiced_level;                     /* the newest 4 blocks' peak at the last voiced analysis */
+    u32 syn_holds;                          /* analyses the synth held its note through, unvoiced but not quieter */
     u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
 } tt_block_t;
 _Static_assert((__builtin_offsetof(tt_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");

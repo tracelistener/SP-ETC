@@ -1,4 +1,4 @@
-/* Guitar synth test 1 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52
+/* Guitar synth test 2 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52
  * (combined-test17) with the CPU meter of IR diagnostic test 3 and note tracker test 2's readout. The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1).
@@ -8,7 +8,8 @@
  * one tracker step (tune_fp.c). It stops itself (SLOW) when one step takes over a whole block, or the mixer and the
  * tracker take over 9/10 of one twice in a row. On the Sound Generator page the UI tick (syn_ui) plays its note
  * there as MIDI IN on the page's channel would (the kits' note gate's SG route, arp_midi_event): one note at a
- * time, at velocity 100, so ARP and drum mode take it as they take MIDI.
+ * time, at velocity 100, so ARP and drum mode take it as they take MIDI. Test 2: stray plucks (the level does not
+ * rise) and drum mode play nothing new; a move without a pluck needs 3 analyses within 30 cents (tune_fp.c).
  *
  * Readout (the stock popup; every 0.1 s while the tracker runs, else with the meter's half-second window):
  *   E2 +3c Q92        the steady note (-- none); the newest analysis: cents off its nearest note, quality
@@ -156,6 +157,9 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
 /* The kits' note gates jump here on their SG route: (2, note, velocity, 0) on, (2, note, 0, 1) off. The builder
  * reads the address from both gates' b.w. */
 #define SG_MIDI_EVENT ((void (*)(u32, s32, s32, s32))SG_MIDI)
+/* The kits' drum mode (kit_mode, nonzero: the kit), the byte that entry tests first; the builder reads its address
+ * from the entry's own code. */
+#define KIT_MODE_ON (*(volatile const u8 *)KIT_MODE != 0)
 
 typedef struct {
     s32 sounding;                                      /* the note the Sound Generator holds for us, -1 none */
@@ -758,6 +762,7 @@ EXPORT UI_SMALL void tune_ui(void) {
  * fade (v9.5's stealing), as it does for MIDI, which the audio task must never do. */
 EXPORT UI_SMALL void syn_ui(void) {
     gsyn_t *s = &gsyn;
+    tt.drum = KIT_MODE_ON;                              /* the tracker plays only plucks in drum mode */
     u32 w = tt.syn, seq = w >> 16;
     s32 note = (s32)(w & 0xFFu) - 1;
     if (PAGE != SG_PAGE) {

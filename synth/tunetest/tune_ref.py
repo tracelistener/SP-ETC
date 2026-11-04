@@ -16,6 +16,9 @@ LEVEL_MIN = 0.0019952622
 P_MIN, P_RATIO, P_FROM, P_TO = 0.0039810717, 2.0, 3, 18   # a pluck: -48 dBFS, twice the peaks 3..18 blocks back
 THRESHOLD, APER_MAX = 0.2, 0.35
 REFRACTORY, AGREE, RELEASE = 24, 2, 4
+REPICK, MOVE_AGREE, MOVE_CENTS = 1.5, 3, 30       # the synth: a pluck while it plays; a move without a pluck
+SYN_DROP, SYN_RELEASE_LONG = 0.3, 12              # the synth lets go: quieter than the last voiced level, or late
+HARMONIC_JUMPS = (12, 19, 24, 28, 31)
 BQ = ((0.009165618568658829, 0.018331237137317657, 0.009165618568658829, -1.641069769859314, 0.6777322292327881),
       (0.010120933875441551, 0.020241867750883102, 0.010120933875441551, -1.8121154308319092, 0.8525991439819336))
 NAMES = ('C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B')
@@ -36,7 +39,8 @@ def round_s(x):
 
 
 class Tracker:
-    def __init__(self):
+    def __init__(self, drum=False):
+        self.drum = drum            # tt.drum: the kits' drum mode, only plucks play notes
         self.ring = np.zeros(RING)
         self.span = np.zeros(SPAN)
         self.d6 = np.zeros(T6MAX + 1)
@@ -50,6 +54,11 @@ class Tracker:
         self.res['note'] = -1
         self.analyses = []          # (block, voiced, freq, aperiodicity, nearest note)
         self.syn, self.syn_note, self.syn_sends = 0, -1, 0      # tt.syn: seq << 16 | (note + 1), 0 none
+        self.pluck_ref, self.syn_strays = 0.0, 0
+        self.voiced_level, self.syn_holds = 0.0, 0
+
+    def recent_peak(self, blk):
+        return max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(4))
 
     def syn_send(self, note):
         seq = self.syn >> 16
@@ -80,6 +89,7 @@ class Tracker:
         if blk >= P_TO:
             ref = max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(P_FROM, P_TO + 1))
             if pk >= P_MIN and pk >= P_RATIO * ref and blk - self.last_onset >= REFRACTORY:
+                self.pluck_ref = ref
                 self.last_onset = self.onset_blk = blk
                 self.first_pending = self.lock_pending = True
                 self.agree = 0
@@ -159,6 +169,7 @@ class Tracker:
             return
         if voiced:
             self.unvoiced = 0
+            self.voiced_level = self.recent_peak(blk)
             if self.first_pending:
                 self.first_pending = False
                 r['first_ms'] = ms(blk - self.onset_blk)
@@ -175,8 +186,12 @@ class Tracker:
                         r['lock_min'] = v
                     r['lock_max'] = max(r['lock_max'], v)
                     r['locks'] += 1
-                    self.syn_send(note)                     # a pluck went steady: the synth plays it
-                elif self.syn_note >= 0 and note != self.syn_note:
+                    if self.syn_note < 0 or self.recent_peak(blk) >= REPICK * self.pluck_ref:
+                        self.syn_send(note)                 # a pluck went steady: the synth plays it
+                    else:
+                        self.syn_strays += 1                # the level never rose: a stray pluck
+                elif (self.syn_note >= 0 and note != self.syn_note and not self.drum and self.agree >= MOVE_AGREE
+                      and abs(r['cents']) <= MOVE_CENTS and abs(note - self.syn_note) not in HARMONIC_JUMPS):
                     self.syn_send(note)                     # the pitch moved while it plays
         else:
             self.agree = 0
@@ -185,7 +200,10 @@ class Tracker:
             if self.unvoiced >= RELEASE:
                 r['note'] = -1
                 if self.syn_note >= 0:
-                    self.syn_send(-1)                       # the string stopped: let go
+                    if self.unvoiced >= SYN_RELEASE_LONG or self.recent_peak(blk) < SYN_DROP * self.voiced_level:
+                        self.syn_send(-1)                   # the string stopped: let go
+                    else:
+                        self.syn_holds += 1                 # as loud as before: hold on
 
 
 def pluck(freq, secs, amp=0.4, seed=0, fs=48000, drive=0.0):
@@ -222,22 +240,28 @@ def phrase(notes, drive=0.0, seed=0, legato=False, fs=48000):
     return np.concatenate(parts)
 
 
-def guitar(freq, secs, amp=0.45, p=0.2, q=0.1, B=1e-4, seed=0, fs=48000, drive=0.0, beat=0.1):
+def guitar(freq, secs, amp=0.45, p=0.2, q=0.1, B=1e-4, seed=0, fs=48000, drive=0.0, beat=0.1, cents=0.0,
+           vibrato=(0.0, 5.5)):
     """A string through a magnetic pickup: released from rest at p of its length, the pickup at q sensing its velocity
     (every harmonic in sine phase: the pulse-like wave of a real pickup, whose blocks swing far within a period),
     stiff-string inharmonicity B, higher harmonics dying faster, the pickup's resonance near 4 kHz, a slow beat of the
-    two polarisations; peak `amp` in the first 50 ms; drive > 0 overdrives it (tanh)."""
+    two polarisations; peak `amp` in the first 50 ms; drive > 0 overdrives it (tanh). `cents` detunes it and
+    `vibrato` = (depth in cents, rate in Hz) bends it."""
     rng = np.random.default_rng(seed)
     t = np.arange(int(secs * fs)) / fs
     x = np.zeros_like(t)
     tau1 = 3.0 if freq < 150 else (2.0 if freq < 300 else 1.2)
+    if cents or vibrato[0]:
+        ph = 2 * np.pi * np.cumsum(freq * 2 ** ((cents + vibrato[0] * np.sin(2 * np.pi * vibrato[1] * t)) / 1200)) / fs
+    else:
+        ph = 2 * np.pi * freq * t
     for n in range(1, 80):
         fn = n * freq * math.sqrt(1 + B * n * n)
         if fn > 7000:
             break
         r = fn / 4000.0
         a = math.sin(n * math.pi * p) * math.sin(n * math.pi * q) / n / math.sqrt((1 - r * r) ** 2 + (r / 1.5) ** 2)
-        x += a * np.sin(2 * np.pi * fn * t) * np.exp(-t * (1 + fn / 400.0) / tau1)
+        x += a * np.sin(n * math.sqrt(1 + B * n * n) * ph) * np.exp(-t * (1 + fn / 400.0) / tau1)
     x *= 1 + beat * np.sin(2 * np.pi * rng.uniform(0.5, 2.0) * t + rng.uniform(0, 2 * np.pi))
     x *= amp / np.max(np.abs(x[:int(0.05 * fs)]))
     if drive:

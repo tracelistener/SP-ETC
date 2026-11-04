@@ -1,4 +1,4 @@
-"""Guitar synth test 1 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
+"""Guitar synth test 2 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
 
 The first step towards a guitar synth: while the meter's readout is shown, the input the effects chip hands back (RX
 pair 0, after the input FX) goes through a note tracker on the main processor (YIN, an analysis every 5.3 ms), and the
@@ -43,7 +43,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'gtr-synth-test1'
+REVISION = 'gtr-synth-test2'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -330,6 +330,21 @@ def sg_midi_entry(img):
                                     listing=v['listing']) for s, v in out.items()}
 
 
+def kit_mode_flag(img, entry):
+    """The kits' drum-mode byte (kit_mode), which the SG MIDI entry tests first: movw/movt r6 around a mov, then
+    ldrb r7, [r6]; cmp r7, #0; beq (the melodic path)."""
+    at = entry & ~1
+    text = listing(read(img, at, 0x20), at)
+    if text[:2] != ['push.w {r4, r5, r6, r7, r8, sb, lr}', 'sub sp, #4'] or not text[2].startswith('movw r6, #') or \
+            text[3] != 'mov r4, r1' or not text[4].startswith('movt r6, #') or \
+            text[5:7] != ['ldrb r7, [r6]', 'cmp r7, #0'] or not text[7].startswith('beq #'):
+        raise ValueError(f'SG MIDI entry {at:#x}: unexpected start {text[:8]}')
+    addr = (int(text[4].split('#')[-1], 0) << 16) | int(text[2].split('#')[-1], 0)
+    if not (0x83F80000 <= addr < GAP_END and not BASE <= addr < LIMIT):
+        raise ValueError(f'kit mode byte {addr:#x} is not in the fork module area')
+    return addr, text[:8]
+
+
 def check_guards(img):
     found = {}
     for addr, size, expect, why in GUARDS:
@@ -384,7 +399,9 @@ def check_guards(img):
         raise ValueError(f'mixer callers: {callers}')
     found['bounce'] = {k: hex(v) for k, v in bridges.items()}
     sg_midi, found['sg_midi'] = sg_midi_entry(img)
-    return found, pre_target, bridges, sg_midi
+    kit_mode, start = kit_mode_flag(img, sg_midi)
+    found['kit_mode'] = dict(address=hex(kit_mode), entry_listing=start)
+    return found, pre_target, bridges, sg_midi, kit_mode
 
 
 # ---- the cabinet IR: a stand-in, not a measured cabinet --------------------------------------------------------
@@ -450,7 +467,7 @@ def integer_spans(map_text, obj):
     return spans
 
 
-def compile_module(zig, folder, base, pre_target, bridges, sg_midi):
+def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode):
     folder.mkdir(parents=True, exist_ok=True)
     inc = folder / 'include'
     inc.mkdir(exist_ok=True)
@@ -461,8 +478,8 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi):
                                   encoding='ascii', newline='\n')
     (folder / 'tune_test_links.h').write_text(
         f'#define SG_PRE_TARGET {pre_target:#010x}\n#define BNC_UI {bridges["bnc_ui"]:#010x}u\n'
-        f'#define BNC_RX {bridges["bnc_rx"]:#010x}u\n#define SG_MIDI {sg_midi:#010x}u\n', encoding='ascii',
-        newline='\n')
+        f'#define BNC_RX {bridges["bnc_rx"]:#010x}u\n#define SG_MIDI {sg_midi:#010x}u\n'
+        f'#define KIT_MODE {kit_mode:#010x}u\n', encoding='ascii', newline='\n')
     # The integer side (tune_test.o) first, from the base to tt_integer_end; then the FPU side. Unused sections go
     # (--gc-sections: Zig links its compiler_rt, of which only what something calls may stay).
     fp_keep = ' '.join(f'KEEP(*(.text.{n}))' for n in EXPORTS if n not in DATA and not n.startswith(('meter', 'diag')))
@@ -578,7 +595,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
             raise ValueError(f'refusing to overwrite {out / name}')
     if not (BASE <= base and (base & 0xFFF) == 0 and base < LIMIT):
         raise ValueError(f'base {base:#x} outside {BASE:#x}..{LIMIT:#x}')
-    guards, pre_target, bridges, sg_midi = check_guards(img)
+    guards, pre_target, bridges, sg_midi, kit_mode = check_guards(img)
     rows = scatter(img)
     for load, dst, n, fn in rows:
         if max(dst, base) < min(dst + n, LIMIT):
@@ -587,7 +604,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     if hits:
         raise ValueError(f'input refers to the module area: {hits[:4]}')
     code, syms, funcs, text, integer = compile_module(zig, (build_dir or out / 'build').resolve(), base, pre_target,
-                                                      bridges, sg_midi)
+                                                      bridges, sg_midi, kit_mode)
     end = base + len(code)
     if end > LIMIT or end > GAP_END:
         raise ValueError(f'module {base:#x}+{len(code):#x} passes {LIMIT:#x}')
@@ -637,14 +654,16 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='Guitar synth test 1: on the Sound Generator page with EXT SOURCE on, the input the effects chip '
+        description='Guitar synth test 2: on the Sound Generator page with EXT SOURCE on, the input the effects chip '
                     'hands back (RX pair 0, after the input FX) goes through note tracker test 2 (YIN at 6 kHz refined '
                     'at 12 kHz, an analysis every 4 RX blocks; a pluck is a block peak twice the highest of the 21 ms '
                     'before), and the UI tick plays its note on the Sound Generator through the entry MIDI IN takes '
                     '(the kits\' note gates\' SG route): one note at a time, at velocity 100; on when a pluck goes '
-                    'steady, moved when the note changes while it plays, off when the string stops. The CPU meter\'s '
-                    'readout (hold EXIT on the main screen) shows the tracker as in note tracker test 2.',
-        sg_midi_entry=sg_midi,
+                    'steady, off when the string stops. Test 2 against extra notes: a pluck heard while it plays '
+                    'starts a note only if the level rose 1.5 x; a move without a pluck needs 3 analyses within 30 '
+                    'cents, never an octave or harmonic interval, never in drum mode. The CPU meter\'s readout (hold '
+                    'EXIT on the main screen) shows the tracker as in note tracker test 2.',
+        sg_midi_entry=sg_midi, kit_mode_flag=kit_mode,
         parent_app1=str(inp), parent_sha256=sha(inp.read_bytes()), parent_folder=inp.parent.name,
         parent_revision=parent.get('revision'), parent_parent_revision=parent.get('parent_revision'),
         sha256=sha(img), size=len(img), app0_sha256=APP0_SHA,
