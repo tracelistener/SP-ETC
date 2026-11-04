@@ -15,7 +15,9 @@ What changed since test 3:
 - Back to tests 1 and 2's octave. Set the Sound Generator's OCT to +1 to play at your guitar's pitch.
 - Soft picks are a bit quieter than hard ones; less difference than in test 3.
 
-1. Volume low at first. Guitar in, EXT SOURCE on, input FX Bypass.
+1. Volume low at first. Guitar in, EXT SOURCE on, input FX Bypass. SHIFT + EXT SOURCE, CTRL 2: ROUTING ExtIn, then
+   EXIT. On Mix the SP hands back its whole mix, so the synth hears itself and holds its own note. Set Mix again
+   before you resample.
 2. Open the Sound Generator in melodic mode with ARP OFF. Pick one note four times in a row, evenly.
 3. A melody on one string, then a melody across strings.
 4. Drum mode: a riff with repeated notes.

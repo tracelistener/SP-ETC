@@ -128,12 +128,30 @@ Test 4 (`tune_fp.c`, the same in `tune_ref.py`):
 Cost on the twin: the steady note comes about 6 ms later (the first readings after a pick are murkier): the open
 strings run AVG 29 ms (test 2: 22), a re-pick about 30 ms.
 
+**On the unit (2026-11-03):** "first plucked note gets stuck. same if hitting pad with no ext in". A Sound Generator
+pad sticks with no guitar plugged in, so the tracker hears the SP's own sound. RX pair 0 (RX line 0 words 0/1) is what
+the effects chip hands back to be sampled, and INPUT SETTING's ROUTING picks it (manual p. 36; DM-404's
+`core/fx/README.md`, from tallfree's measurements):
+
+- **Mix** (the default) is the mix as heard, the Sound Generator and the pads included.
+- **ExtIn** is the input alone, after the input FX.
+
+On Mix the synth's own note comes back clean and steady, so nothing lets it go. Test 2's release rule follows the
+last voiced level, which the echo keeps up, and its moves block the octave the echo reads. Test 3 played at the
+guitar's pitch and read its own note outright.
+
+Test 1 had no stuck notes because each echo read an octave down and moved the note there, until the notes ran out of
+range. Its "extra notes especially with drum kits" fit the same loop: each drum hit came back as a pluck.
+
+Next on the unit: test 4 again on ROUTING ExtIn (SHIFT + EXT SOURCE, CTRL 2), no new build.
+
 The first step towards a guitar synth (the Sound Generator played from the guitar): how
 well and how fast the SP's main processor can follow the note. Nothing goes to the output; the meter's readout (hold
 EXIT a second on the main screen) shows what the tracker hears.
 
 Cabinet test 2 (`CAB_TEST.md`) found the input in RX pairs 0 and 1 only, after the input FX, the bus effects and
-every mute. A tracker only listens, so that is enough: the guitar must be heard anyway.
+every mute. A tracker only listens, so that is enough: the guitar must be heard anyway. But pair 0 follows INPUT
+SETTING's ROUTING: on Mix it is the whole mix, so the synth needs ExtIn (synth test 4 on the unit, below).
 
 ## What runs
 
@@ -300,6 +318,8 @@ The tracker (tune-test2, and gtr-synth-test1 the same):
 
 ## Not known (synth test 4 on the unit)
 
+- Whether ROUTING ExtIn ends the stuck notes, and how test 4 tracks with the echo gone. Tests 2 to 4 were all heard
+  on Mix. The build does not read ROUTING yet.
 - Synth test 1 played on the unit (no stuck notes), so the UI tick reaches the Sound Generator as MIDI does. Test 2
   was not reported on its own; test 3 was worse (above).
 - Whether a real pick clicks as the pickup model's do (the model has no pick noise; a real pick should click more),
