@@ -1,11 +1,11 @@
-# Note tracker tests 1 and 2, guitar synth tests 1 to 4
+# Note tracker tests 1 and 2, guitar synth tests 1 to 5
 
 Test-only builds, not for the patcher: v9.52 (combined-test17) with the CPU meter of IR diagnostic test 3 and a
 note tracker on the input. Test 2 (tune-test2) is test 1 with a new pluck test and the plucks heard on the readout
 (see "Test 1 on the unit" below). Guitar synth test 1 (gtr-synth-test1) is test 2 playing the Sound Generator (next
 section); synth test 2 (gtr-synth-test2) is synth test 1 without its extra notes; synth test 3 (gtr-synth-test3)
 plays like the SY-1000's Dynamic Synth; synth test 4 (gtr-synth-test4) undoes test 3's voice following and fixes
-what made test 3 worse on the unit (the sections after).
+what made test 3 worse on the unit; synth test 5 (gtr-synth-test5) plays only on ROUTING ExtIn (the sections after).
 
 ## Guitar synth test 1 (gtr-synth-test1)
 
@@ -148,6 +148,23 @@ Next on the unit: test 4 again on ROUTING ExtIn (SHIFT + EXT SOURCE, CTRL 2), no
 **On ExtIn (2026-11-03):** "does not get stuck now. tracks pretty well too". So the echo was the cause. Known limit:
 the build does not read ROUTING, so on Mix the synth still holds its own note.
 
+## Guitar synth test 5 (gtr-synth-test5): the synth checks ROUTING
+
+Test 4's tracker and synth, gated on ROUTING:
+
+- **Where ROUTING lives:** system parameter 0x5c, `Resample_Routing` in the firmware's parameter names (0x80245ee4).
+  It is sent to the effects chip as `02 01 00 1e`: 0 Mix (the boot value), 1 ExtIn. The stock getters read it with
+  index -1: the looper's SHIFT + CTRL 2 getter at `0x80081158`, which the builder guards, and the sampler at
+  `0x80070bb0`. `tune_ui` reads it every 0.1 s with the input FX and EXT SOURCE, through the same system getter
+  (`0x800da011` on `0x82dfeed0`).
+- **The synth plays only with EXT SOURCE on and ROUTING on ExtIn:**
+  - on Mix the tracker does not start on the Sound Generator page;
+  - if the readout runs the tracker there, `syn_ui` plays none of its notes;
+  - a note playing when ROUTING turns Mix is let go at the next UI tick after the read.
+- **The popup:** on the page with EXT SOURCE on and ROUTING Mix, `syn_ui` posts SYNTH NEEDS / ROUTING ExtIn /
+  SHIFT+EXT SRC for 2.5 s. It posts once each time that starts (opening the page, EXT SOURCE on, ROUTING to Mix),
+  only when no popup is showing or waiting, so never over a stock message: it waits for that to close.
+
 The first step towards a guitar synth (the Sound Generator played from the guitar): how
 well and how fast the SP's main processor can follow the note. Nothing goes to the output; the meter's readout (hold
 EXIT a second on the main screen) shows what the tracker hears.
@@ -232,7 +249,12 @@ The six open strings once each, low to high, each stopped by hand before the nex
 
 `python synth/test_tune_test.py OUT_DIR --kits kits-v9.46-test3/kits-manifest.json`: NAM test 2's meter checks
 (imported) on this image, and the tracker on Unicorn's Cortex-M7 model, against `tune_ref.py` after every block.
-128 checks pass on `release/gtr-synth-test4` (APP1 `daf588a7…d52f`, 3,182,432 bytes; the module 24,768 bytes), 126
+138 checks pass on `release/gtr-synth-test5` (APP1 `7999927a…ddff8`, 3,182,624 bytes; the module 24,960 bytes): test
+4's, plus ROUTING read every 0.1 s (system 0x5c, index -1); on Mix the tracker stays off on the page and a pluck plays
+nothing; the popup at the first UI tick, once per start, again on reopening the page, never over a message already up
+(it waits), none with EXT SOURCE off or off the page, widest line 95 px (a 112 x 34 box); a note playing when ROUTING
+turns Mix let go at the next UI tick; the readout running the tracker on the page on Mix plays nothing.
+128 on `release/gtr-synth-test4` (APP1 `daf588a7…d52f`, 3,182,432 bytes; the module 24,768 bytes), 126
 on `release/gtr-synth-test3` (APP1 `03679e29…420d`, 3,182,304 bytes; the module 24,640 bytes), 111
 on `release/gtr-synth-test2` (APP1 `637424b5…1a63`, 3,180,576 bytes; the module 22,912 bytes), 103 on
 `release/gtr-synth-test1` (APP1 `19df4dda…1559`), 90 on `release/tune-test2` (APP1 `68691893…96d2`), 87 on
@@ -319,8 +341,11 @@ The tracker (tune-test2, and gtr-synth-test1 the same):
   post comes before tune_ui starts the tracker: an all-zero result read C-1); bounce's own bnc_rx and bnc_ui run as
   in the parent; the meter's checks.
 
-## Not known (synth test 4 on the unit)
+## Not known (synth test 5 on the unit)
 
+- Whether system 0x5c reads 1 on ExtIn on the unit (DM-404's notes and the boot value 0 = Mix say so): if it were the
+  other way round, the popup would show on ExtIn and the synth play only on Mix.
+- Whether the popup shows on entering the page (the page's own start-up may post something first: it then waits).
 - Synth test 1 played on the unit (no stuck notes), so the UI tick reaches the Sound Generator as MIDI does. Test 2
   was not reported on its own; test 3 was worse (above).
 - Whether a real pick clicks as the pickup model's do (the model has no pick noise; a real pick should click more),

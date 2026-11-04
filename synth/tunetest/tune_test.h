@@ -46,7 +46,8 @@ typedef struct {
 typedef struct {
     /* written by the UI task */
     volatile u32 req;                       /* 1: run the tracker; 0: stop */
-    u32 fx, ext, checked, checks, starts;   /* input FX, EXT SOURCE, last check (cycle count), checks made */
+    u32 fx, ext, routing, checked, checks, starts;  /* input FX, EXT SOURCE, ROUTING (0 Mix, 1 ExtIn), last check
+                                                       (cycle count), checks made */
     u32 posted_rseq;                        /* the result the readout last showed */
     /* written by the audio task */
     volatile u32 state;

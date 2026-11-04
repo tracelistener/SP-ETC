@@ -1,18 +1,19 @@
-/* Guitar synth test 4 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52
+/* Guitar synth test 5 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52
  * (combined-test17) with the CPU meter of IR diagnostic test 3 and note tracker test 2's readout. The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
- * test 2 on the unit found the input only in pairs 0 and 1).
+ * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
+ * ExtIn the input alone, on Mix the mix as heard, the synth's own note included, so test 5 plays only on ExtIn.
  *
  * The tracker runs while the meter's readout is shown (hold EXIT a second on the main screen), and on the Sound
- * Generator page while EXT SOURCE is on: the audio task copies pair 0, (L + R) / 2, after every RX block and runs
- * one tracker step (tune_fp.c). It stops itself (SLOW) when one step takes over a whole block, or the mixer and the
- * tracker take over 9/10 of one twice in a row. On the Sound Generator page the UI tick (syn_ui) plays its note
- * there as MIDI IN on the page's channel would (the kits' note gate's SG route, arp_midi_event): one note at a
- * time, so ARP and drum mode take it as they take MIDI. Test 2: stray plucks (the level does not rise) and drum
- * mode play nothing new; a move without a pluck needs 3 analyses within 30 cents (tune_fp.c). Test 4: the
- * velocity is the pick's (tune_fp.c), and the Sound Generator's OCT moves the note (0: the octave tests 1 and 2
- * played, an octave below the guitar, as the SG sounds MIDI; drum mode keeps the guitar's note, the pad it
- * strikes). Test 3's voice following is gone.
+ * Generator page while EXT SOURCE is on and ROUTING on ExtIn: the audio task copies pair 0, (L + R) / 2, after every RX
+ * block and runs one tracker step (tune_fp.c). It stops itself (SLOW) when one step takes over a whole block, or the
+ * mixer and the tracker take over 9/10 of one twice in a row. On the Sound Generator page the UI tick (syn_ui) plays
+ * its note there as MIDI IN on the page's channel would (the kits' note gate's SG route, arp_midi_event): one note at a
+ * time, so ARP and drum mode take it as they take MIDI. Test 2: stray plucks (the level does not rise) and drum mode
+ * play nothing new; a move without a pluck needs 3 analyses within 30 cents (tune_fp.c). Test 4: the velocity is the
+ * pick's (tune_fp.c), and the Sound Generator's OCT moves the note (0: the octave tests 1 and 2 played, an octave below
+ * the guitar, as the SG sounds MIDI; drum mode keeps the guitar's note, the pad it strikes). Test 3's voice following
+ * is gone.
  *
  * Readout (the stock popup; every 0.1 s while the tracker runs, else with the meter's half-second window):
  *   E2 +3c Q92        the steady note (-- none); the newest analysis: cents off its nearest note, quality
@@ -148,6 +149,11 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
 #define SETTINGS 0x82E01144u                           /* the settings object */
 #define SET_GET ((s32 (*)(u32, s32, s32))0x800D94D9u)  /* settings GetParam(object, ID, index) */
 #define EXT_SOURCE 0x25                                /* settings: EXT SOURCE on */
+/* System 0x5C (Resample_Routing, sent to the effects chip as 02 01 00 1e), index -1 as the stock getters read it: INPUT
+ * SETTING's ROUTING, what the chip hands back in RX pair 0. 0 Mix: the mix as heard, so the synth would hear its own
+ * note (synth tests 2-4 on the unit: stuck notes); 1 ExtIn: the input alone, after the input FX. */
+#define ROUTING 0x5C
+#define ROUTING_EXTIN 1
 #define BUS_EFFECT 0x27C                               /* system, by slot: the effect (slot 0 = input FX) */
 #define CHECK_CYCLES 60000000u                         /* the input FX is read every 0.1 s */
 #define REFRESH_CYCLES 60000000u                       /* the readout follows the tracker every 0.1 s */
@@ -171,8 +177,15 @@ typedef struct {
     s32 sounding;                                      /* the note the Sound Generator holds for us, -1 none */
     u32 done;                                          /* the last tt.syn sequence handled */
     u32 ons, offs;                                     /* note-ons and note-offs sent */
+    u32 mix, hint_due, hints;                          /* on the page with EXT SOURCE on and ROUTING Mix; the hint
+                                                          still to show; hints shown */
 } gsyn_t;
-EXPORT gsyn_t gsyn = {-1, 0, 0, 0};
+EXPORT gsyn_t gsyn = {-1, 0, 0, 0, 0, 0, 0};
+
+/* Shown once each time the page is open with EXT SOURCE on and ROUTING on Mix (the synth stays silent there). The
+ * widest line is 95 px in the popup font: a 112 px box (test_tune_test.py checks it fits the 128 px screen). */
+#define SYN_HINT "SYNTH NEEDS\nROUTING ExtIn\nSHIFT+EXT SRC"
+#define HINT_MS 2500
 
 #define BARRIER() __asm__ volatile("" ::: "memory")
 
@@ -745,11 +758,15 @@ UI_SMALL static void tune_start(tt_t *t) {
     t->req = 1;
 }
 
-/* Every UI tick: the tracker on while the readout is shown, or on the Sound Generator page with EXT SOURCE on. Every
- * 0.1 s: the input FX and EXT SOURCE. */
+/* The synth plays only with EXT SOURCE on and ROUTING on ExtIn: on Mix the effects chip hands back the mix as heard, so
+ * the tracker would hear the synth's own note and hold it (synth tests 2-4 on the unit). */
+static inline u32 syn_live(const tt_t *t) { return t->ext && t->routing == ROUTING_EXTIN; }
+
+/* Every UI tick: the tracker on while the readout is shown, or on the Sound Generator page with EXT SOURCE on and
+ * ROUTING on ExtIn. Every 0.1 s: the input FX, EXT SOURCE and ROUTING. */
 EXPORT UI_SMALL void tune_ui(void) {
     tt_t *t = &tt;
-    u32 want = meter.shown || (PAGE == SG_PAGE && t->ext);
+    u32 want = meter.shown || (PAGE == SG_PAGE && syn_live(t));
     if (!want) t->req = 0;
     if (want && !t->req && t->state == TT_OFF) tune_start(t);
     u32 now = DWT_CYCCNT;
@@ -758,6 +775,7 @@ EXPORT UI_SMALL void tune_ui(void) {
     t->checks++;
     t->fx = (u32)SYS_GET(SYSPRM, BUS_EFFECT, 0);
     t->ext = SET_GET(SETTINGS, EXT_SOURCE, 0) != 0;
+    t->routing = (u32)SYS_GET(SYSPRM, ROUTING, -1);
 }
 
 /* Every UI tick, on the Sound Generator page: the tracker's note there, through the entry MIDI IN on the page's
@@ -767,11 +785,23 @@ EXPORT UI_SMALL void tune_ui(void) {
  * (EXT SOURCE off, SLOW) lets go of it. Runs in the UI task: a note-on may wait about 3 ms for a busy voice to
  * fade (v9.5's stealing), as it does for MIDI, which the audio task must never do.
  * Test 4: the word's velocity (the pick's); the note plus OCT octaves (drum mode: the guitar's note, the pad it
- * strikes), played only within MIDI 12..127. */
+ * strikes), played only within MIDI 12..127.
+ * Test 5: silent unless EXT SOURCE is on and ROUTING on ExtIn (the readout can run the tracker on the page on Mix: its
+ * notes are not played). On the page with EXT SOURCE on and ROUTING Mix, a popup says so, once each time that
+ * starts, when no other popup is showing or waiting (never over a stock message). */
 EXPORT UI_SMALL void syn_ui(void) {
     gsyn_t *s = &gsyn;
     u32 drum = KIT_MODE_ON;
     tt.drum = drum;                                     /* the tracker plays only plucks in drum mode */
+    u32 mix = PAGE == SG_PAGE && tt.ext && tt.routing != ROUTING_EXTIN;
+    if (mix && !s->mix) s->hint_due = 1;
+    s->mix = mix;
+    if (!mix) s->hint_due = 0;
+    if (s->hint_due && POPUP_PENDING < 0 && !POPUP_SHOWN) {
+        POPUP_POST(SYN_HINT, HINT_MS);
+        s->hint_due = 0;
+        s->hints++;
+    }
     u32 w = tt.syn, seq = w >> 16;
     s32 note = (s32)(w & 0xFFu) - 1, vel = (s32)((w >> 8) & 0x7Fu);
     if (PAGE != SG_PAGE) {
@@ -779,7 +809,7 @@ EXPORT UI_SMALL void syn_ui(void) {
         s->done = seq;
         return;
     }
-    if (tt.state != TT_RUN) {
+    if (tt.state != TT_RUN || !syn_live(&tt)) {
         note = -1;
         s->done = seq;
     }

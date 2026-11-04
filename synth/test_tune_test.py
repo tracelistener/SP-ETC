@@ -1,7 +1,8 @@
-"""Checks for guitar synth test 4 (build_tune_test.py): the CPU meter as in cabinet test 2, the tracker (note
+"""Checks for guitar synth test 5 (build_tune_test.py): the CPU meter as in cabinet test 2, the tracker (note
 tracker test 2's, with test 4's click and clean readings), and the synth: the tracker's note on the Sound Generator,
 the cases synth test 3 got wrong on the unit (picks at the ringing string's level, strings ringing together) and
-test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT.
+test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT; test 5's ROUTING gate (silent on Mix,
+where pair 0 is the mix as heard) and its popup.
 
 usage: python synth/test_tune_test.py OUT_DIR --kits KITS_MANIFEST [--seeds N] [--blocks N] [--mixer-runs N] [--only ...]
 
@@ -50,7 +51,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / 'tunetest'))
 import tune_ref as ref  # noqa: E402
 
 TT_OFF, TT_RUN, TT_SLOW = range(3)
-TT_HEAD = 'req fx ext checked checks starts posted_rseq state rx steps task_attr last_mix'.split()
+TT_HEAD = 'req fx ext routing checked checks starts posted_rseq state rx steps task_attr last_mix'.split()
+ROUTING, EXTIN = 0x5C, 1           # system 0x5c, INPUT SETTING's ROUTING: 0 Mix, 1 ExtIn
 TT_MID = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_req reset_ack rseq'.split()
 report = base.report
 PACKET = TXBUF + 0x6000
@@ -186,20 +188,22 @@ def readout(img, man):
 
 # ---------------------------------------------------------------------------------------------
 class TuneMachine(Machine):
-    """The image on the Cortex-M7 model, with the input FX and EXT SOURCE getters stubbed."""
-    def __init__(self, img, man, fx=0, ext=1):
+    """The image on the Cortex-M7 model, with the input FX, EXT SOURCE and ROUTING getters stubbed."""
+    def __init__(self, img, man, fx=0, ext=1, routing=EXTIN):
         super().__init__(img, m7=True)
         self.man, self.sym = man, man['symbols']
         self.lay = Layout(self, self.sym)
-        self.fx, self.ext, self.getters = fx, ext, []
+        self.fx, self.ext, self.routing, self.getters = fx, ext, routing, []
         self.put(CUR_TASK, TCB, '<I')
         self.put(TCB + 0x10, 0x1001, '<I')
         for a in (SYS_GET, SET_GET):
             self.uc.hook_add(UC_HOOK_CODE, self._getter, begin=a, end=a)
 
     def _getter(self, uc, a, s, _):
-        self.getters.append((a, uc.reg_read(ar.UC_ARM_REG_R0), uc.reg_read(ar.UC_ARM_REG_R1)))
-        uc.reg_write(ar.UC_ARM_REG_R0, (self.fx if a == SYS_GET else self.ext) & 0xFFFFFFFF)
+        r1 = uc.reg_read(ar.UC_ARM_REG_R1)
+        self.getters.append((a, uc.reg_read(ar.UC_ARM_REG_R0), r1, uc.reg_read(ar.UC_ARM_REG_R2)))
+        v = self.ext if a == SET_GET else self.routing if r1 == ROUTING else self.fx
+        uc.reg_write(ar.UC_ARM_REG_R0, v & 0xFFFFFFFF)
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
 
     @property
@@ -269,8 +273,11 @@ def tracker_checks(parent_img, img, man):
     check(st['req'] == 1 and st['starts'] == 1 and not any(m.bytes(blk, lay.b_stack)) and st['res'] == want_res and
           st['rseq'] == rseq0 + 2,
           'readout shown: the tracker and its result cleared (no note), a new result for the readout, handed over')
-    check(m.getters == [(SYS_GET, SYSPRM, 0x27C), (SET_GET, SETTINGS_OBJ, 0x25)] and st['fx'] == 23 and st['ext'] == 1,
-          'every 0.1 s: the input FX and EXT SOURCE')
+    check(m.getters == [(SYS_GET, SYSPRM, 0x27C, 0), (SET_GET, SETTINGS_OBJ, 0x25, 0),
+                        (SYS_GET, SYSPRM, ROUTING, 0xFFFFFFFF)] and
+          st['fx'] == 23 and st['ext'] == 1 and st['routing'] == EXTIN,
+          f'every 0.1 s: the input FX, EXT SOURCE and ROUTING (system 0x5c, index -1 as the stock getter reads it) '
+          f'({[tuple(hex(x) for x in g) for g in m.getters]})')
     st = m.rx([0] * 64)
     check(st['state'] == TT_RUN and st['steps'] == 1 and m.get(blk + lay.b_started, '<I') == 1,
           'RUN from the first block')
@@ -495,7 +502,19 @@ class SynthMachine(TuneMachine):
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
 
     def gsyn(self):
-        return dict(zip(('sounding', 'done', 'ons', 'offs'), struct.unpack('<iIII', self.bytes(self.sym['gsyn'], 16))))
+        return dict(zip(('sounding', 'done', 'ons', 'offs', 'mix', 'hint_due', 'hints'),
+                        struct.unpack('<i6I', self.bytes(self.sym['gsyn'], 28))))
+
+    def popups(self, shown=0):
+        """No popup showing or waiting (a stock one showing if `shown`)."""
+        self.put(base.POPUP_PENDING, -1)
+        self.put(base.POPUP_SHOWN, shown, '<I')
+
+    def posted(self):
+        """The text of a post waiting to be built, else None."""
+        if self.get(base.POPUP_PENDING) < 0:
+            return None
+        return self.bytes(base.POPUP_TEXT, 0x80).split(b'\0')[0].decode('latin-1')
 
     def bfields(self):
         f = struct.unpack('<f3I', self.bytes(self.block + self.lay.b_pick, 16))
@@ -744,6 +763,87 @@ def synth_checks(img, man, kit_sym):
     check(gone and len(ml.midi) == 1 and ml.gsyn()['sounding'] == -1,
           f'a note playing when the page closes: forgotten without a call (the Sound Generator stops its voices '
           f'itself); back on the page it does not play again ({ml.midi})')
+    # 10. Test 5: ROUTING. On Mix the effects chip hands back the mix as heard and the synth heard its own note (tests
+    # 2-4 on the unit: stuck notes), so it plays only on ExtIn, and the page says so on Mix.
+    width, line = base.font_widths(img)
+    hint = 'SYNTH NEEDS\nROUTING ExtIn\nSHIFT+EXT SRC'
+    widest = max(sum(width(c) for c in ln) for ln in hint.split('\n'))
+    box_w, box_h = widest - 1 + 18, 3 * line - 1 + 8
+    mm = SynthMachine(img, man, routing=0)
+    mm.popups()
+    mm.ui(0)
+    mm.ui(0)
+    posts = []
+    for b in range(600):
+        st = mm.tick(sig[b])
+        t = mm.posted()
+        if t is not None:
+            posts.append((b, t))
+            mm.popups(shown=0x1234)                                    # the popup is up
+    g = mm.gsyn()
+    check(st['req'] == 0 and st['state'] == TT_OFF and st['steps'] == 0 and not mm.midi and
+          posts == [(0, hint)] and g['hints'] == 1 and box_w <= 128 and box_h <= 64,
+          f"ROUTING Mix on the page with EXT SOURCE on: the tracker stays off, a pluck plays nothing, and a popup says "
+          f"so once, at the first UI tick ({posts}; widest line {widest} px -> box {box_w}x{box_h}, screen 128x64)")
+    mm.popups()
+    mm.page(1)
+    mm.tick()
+    quiet_off_page = mm.posted() is None
+    mm.page(SG_PAGE)
+    mm.tick()
+    back = mm.posted()
+    mm.popups()
+    mm.page(1)
+    mm.tick()
+    mm.popups(shown=0x1234)                                            # a stock message is up as the page opens
+    mm.page(SG_PAGE)
+    for _ in range(5):
+        mm.tick()
+    waited = mm.posted() is None and mm.gsyn()['hint_due'] == 1
+    mm.popups()                                                        # it closes
+    mm.tick()
+    after = mm.posted()
+    check(quiet_off_page and back == hint and waited and after == hint and mm.gsyn()['hints'] == 3,
+          f'the popup again each time the page opens on Mix (none off the page); never over a message already up: '
+          f'it waits for it to close ({mm.gsyn()})')
+    mq = SynthMachine(img, man, ext=0, routing=0)
+    mq.popups()
+    mq.ui(0)
+    mq.ui(0)
+    for _ in range(10):
+        mq.tick()
+    mp = SynthMachine(img, man, page=1, routing=0)
+    mp.popups()
+    mp.ui(0)
+    mp.ui(0)
+    for _ in range(10):
+        mp.tick()
+    check(mq.posted() is None and mq.gsyn()['hints'] == 0 and mp.posted() is None and mp.gsyn()['hints'] == 0,
+          'no popup with EXT SOURCE off (the synth is off anyway) or off the page')
+    mx = SynthMachine(img, man)
+    mx.ui(0)
+    mx.ui(0)
+    b = 0
+    while not mx.midi and b < 600:
+        mx.tick(sig[b])
+        b += 1
+    on = list(mx.midi)
+    mx.routing = 0
+    mx.ui(0)
+    mx.ui(0)
+    for k in range(3):
+        st = mx.tick(sig[b + k])
+    check(len(on) == 1 and on[0][2] == 40 and on[0][4] == 0 and st['state'] == TT_OFF and
+          mx.midi[1:] == [(on[0][0] + 1, 2, 40, 0, 1)] and mx.gsyn()['sounding'] == -1,
+          f'a note playing when ROUTING turns Mix: let go at the next UI tick ({mx.midi})')
+    mr = SynthMachine(img, man, routing=0)
+    mr.ui(1)
+    for values in ref.to_blocks(ref.open_strings((40, 45), ring=0.8))[:1200]:
+        st = mr.tick(values)
+    check(st['state'] == TT_RUN and st['res']['locks'] >= 1 and not mr.midi and mr.gsyn()['sounding'] == -1,
+          f"the readout shown on the page on Mix: the tracker runs for it ({st['res']['locks']} steady notes) but "
+          f"nothing plays ({len(mr.midi)} calls)")
+    report['synth']['routing'] = dict(hint=hint, hint_box=[box_w, box_h])
     report['synth']['entry'] = hex(entry & ~1)
 
 

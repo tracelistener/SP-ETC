@@ -1,10 +1,12 @@
-"""Guitar synth test 4 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
+"""Guitar synth test 5 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
 
 The input the effects chip hands back (RX pair 0, after the input FX) goes through a note tracker on the main
-processor (YIN, an analysis every 5.3 ms); on the Sound Generator page with EXT SOURCE on, its note plays there as
-MIDI IN would. Test 4: a pick's click (the energy over 2 kHz) counts as a pluck too, only clean readings count, a new
-note picked while the one before rings always plays, the velocity is the pick's, OCT moves the note; test 3's voice
-following is gone. The CPU meter's readout (hold EXIT on the main screen) shows the tracker. See synth/TUNE_TEST.md.
+processor (YIN, an analysis every 5.3 ms); on the Sound Generator page with EXT SOURCE on and ROUTING on ExtIn, its
+note plays there as MIDI IN would. Test 4: a pick's click (the energy over 2 kHz) counts as a pluck too, only clean
+readings count, a new note picked while the one before rings always plays, the velocity is the pick's, OCT moves the
+note; test 3's voice following is gone. Test 5: on ROUTING Mix pair 0 is the mix as heard, so the synth stays silent
+there and the page says so in a popup. The CPU meter's readout (hold EXIT on the main screen) shows the tracker. See
+synth/TUNE_TEST.md.
 
 The input is v9.52 (combined-test17); the hooks are cabinet test 2's (IR diagnostic test 3's):
   0x0001c2d0  mixer entry (12 bytes)             -> meter_mix_entry
@@ -44,7 +46,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'gtr-synth-test4'
+REVISION = 'gtr-synth-test5'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -58,6 +60,7 @@ SG_CALL, SG_STUB, SG_PRE_SITE, SG_EXIT_SITE = 0x0001C766, 0x0001FD80, 0x0001FD84
 UI_TICK, UI_CALLER = 0x8006B950, 0x8006F6FA
 POPUP_POST, POPUP_CLOSE, KEY_QUERY, PAGE_QUERY = 0x800D3FF0, 0x8001F730, 0x800D9F20, 0x800D6380
 PENDSV, CUR_TASK = 0x0000DD3C, 0x202BBBFC
+ROUTING_GETTER = 0x80081158         # a stock getter of system 0x5c (INPUT SETTING's ROUTING), guarded below
 
 EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', 'meter_sg_end',
            'meter_mix_begin', 'meter_mix_end', 'meter_ui_tick', 'tune_format', 'diag_ui', 'diag_rx',
@@ -109,6 +112,13 @@ GUARDS = [
      'key state: bit k of the bytes at 0x80592448, keys 0..0x54'),
     (PAGE_QUERY, 0x0E, ['movw r0, #0x5874', 'movt r0, #0x8024', 'ldrsh.w r0, [r0, #0xc]', 'bx lr'],
      'current page: the int16 at 0x80245880'),
+    # INPUT SETTING's ROUTING (Mix 0, ExtIn 1; the looper's SHIFT + CTRL 2 shows the same setting) is system 0x5c,
+    # Resample_Routing in the parameter names: this stock getter reads it with SHIFT (key 0x2a) held, through the
+    # system getter tune_ui uses, index -1. tune_ui reads it the same way.
+    (ROUTING_GETTER, 0x1E, ['movs r0, #0x2a', 'bl #0x800d9f20', 'cbz r0, #0x80081190', 'movw r0, #0xeed0',
+                            'movs r1, #0x5c', 'movt r0, #0x82df', 'mov.w r2, #-1', 'pop.w {r7, lr}',
+                            'b.w #0x800da010'],
+     "ROUTING: the looper's SHIFT + CTRL 2 getter reads system 0x5c (object 0x82dfeed0, index -1) with 0x800da011"),
     # The kernel's task switch: the running task's TCB at 0x202bbbfc, its FPU registers switched when TCB+0x10 has
     # 0x1000 (the readout's F flag reads the audio task's).
     (PENDSV + 0x14, 10, ['ldr r4, [pc, #0x90]', 'mov.w r0, #0', 'ldr.w r8, [r4]'],
@@ -655,7 +665,10 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='Guitar synth test 4: on the Sound Generator page with EXT SOURCE on, the input the effects chip '
+        description='Guitar synth test 5: test 4 played only on ROUTING ExtIn (system 0x5c = 1), since on Mix the '
+                    'effects chip hands back the mix as heard and the synth held its own note; on Mix with EXT SOURCE '
+                    'on, the Sound Generator page shows a popup saying so. Test 4: '
+                    'on the Sound Generator page with EXT SOURCE on, the input the effects chip '
                     'hands back (RX pair 0, after the input FX) goes through note tracker test 2 (YIN at 6 kHz refined '
                     'at 12 kHz, an analysis every 4 RX blocks), and the UI tick plays its note on the Sound Generator '
                     "through the entry MIDI IN takes (the kits' note gates' SG route), one note at a time: on when a "

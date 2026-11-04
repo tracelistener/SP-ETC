@@ -1,4 +1,4 @@
-# Guitar synth test 4: fixing test 3's stuck notes
+# Guitar synth test 5: the synth checks ROUTING
 
 A test build: {{PARENT_REVISION}} (v9.52) plus a guitar synth. Not for sharing. To go back, patch v9.52 again.
 
@@ -7,19 +7,17 @@ A test build: {{PARENT_REVISION}} (v9.52) plus a guitar synth. Not for sharing. 
 | SP404MKII_APP1.bin ({{APP1_SIZE}} bytes) | `{{APP1_SHA256}}` |
 | SP404MKII_APP0.bin (stock 5.52) | `{{APP0_SHA256}}` |
 
-What changed since test 3:
+What changed since test 4:
 
-- No more bending. A pick the tracker missed made test 3 slide the old note instead of playing the new one.
-- Picks are now heard by their click too, so a note picked again at the same strength plays again.
-- When strings ring together and the tracker can't tell the note, the synth stops instead of guessing.
-- Back to tests 1 and 2's octave. Set the Sound Generator's OCT to +1 to play at your guitar's pitch.
-- Soft picks are a bit quieter than hard ones; less difference than in test 3.
+- The synth plays only when INPUT SETTING's ROUTING is ExtIn. On Mix the SP hands back everything it plays, so
+  the synth heard its own note and held it.
+- On the Sound Generator page with EXT SOURCE on and ROUTING on Mix, a popup says SYNTH NEEDS / ROUTING ExtIn /
+  SHIFT+EXT SRC, and the synth stays silent.
+- Tracking is test 4's.
 
-1. Volume low at first. Guitar in, EXT SOURCE on, input FX Bypass. SHIFT + EXT SOURCE, CTRL 2: ROUTING ExtIn, then
-   EXIT. On Mix the SP hands back its whole mix, so the synth hears itself and holds its own note. Set Mix again
-   before you resample.
-2. Open the Sound Generator in melodic mode with ARP OFF. Pick one note four times in a row, evenly.
-3. A melody on one string, then a melody across strings.
-4. Drum mode: a riff with repeated notes.
+1. Volume low at first. Guitar in, EXT SOURCE on, input FX Bypass.
+2. SHIFT + EXT SOURCE, CTRL 2: ROUTING Mix, then EXIT. Open the Sound Generator: the popup shows, and picking plays
+   nothing.
+3. Set ROUTING to ExtIn the same way and go back to the Sound Generator: it plays as test 4 did.
 
-Tell me: any stuck notes left, any wrong or missing notes, and does each repeated note play?
+Tell me: did the popup show on Mix, and does it play as before on ExtIn?
