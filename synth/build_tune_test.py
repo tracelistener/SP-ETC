@@ -1,11 +1,10 @@
-"""Guitar synth test 3 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
+"""Guitar synth test 4 (note tracker 3): the Sound Generator plays the note the guitar plays, on v9.52 (test only).
 
-The tracker of note tracker test 2 (YIN on the main processor, an analysis every 5.3 ms) on the input the effects chip
-hands back (RX pair 0, after the input FX); on the Sound Generator page with EXT SOURCE on, its note plays there as
-MIDI IN would. Test 3 plays like the SY-1000's Dynamic Synth: the note's velocity is the pick's, it sounds at the
-guitar's own pitch (moved by the SG's OCT), and without ARP or drum mode its voice follows the string's pitch (bends,
-vibrato, slides, hammer-ons) and level. The CPU meter's readout (hold EXIT on the main screen) shows the tracker. See
-synth/TUNE_TEST.md.
+The input the effects chip hands back (RX pair 0, after the input FX) goes through a note tracker on the main
+processor (YIN, an analysis every 5.3 ms); on the Sound Generator page with EXT SOURCE on, its note plays there as
+MIDI IN would. Test 4: a pick's click (the energy over 2 kHz) counts as a pluck too, only clean readings count, a new
+note picked while the one before rings always plays, the velocity is the pick's, OCT moves the note; test 3's voice
+following is gone. The CPU meter's readout (hold EXIT on the main screen) shows the tracker. See synth/TUNE_TEST.md.
 
 The input is v9.52 (combined-test17); the hooks are cabinet test 2's (IR diagnostic test 3's):
   0x0001c2d0  mixer entry (12 bytes)             -> meter_mix_entry
@@ -45,7 +44,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'gtr-synth-test3'
+REVISION = 'gtr-synth-test4'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -116,25 +115,7 @@ GUARDS = [
      'PendSV: r4 = &running task (literal 0x202bbbfc, checked)'),
     (PENDSV + 0x62, 8, ['ldr.w r0, [r8, #0x10]', 'ands r0, r0, #0x1000'],
      'PendSV: the incoming task\'s attribute; 0x1000 switches its FPU registers s16-s31'),
-    # Test 3: what tune_fp.c's voice_update relies on in a Sound Generator voice. The stock MIDI note function
-    # (v9.5's midi_event calls it on the voice it claims): the note at +0x194, the pitch +0x5c = note - 48, the
-    # frequency TUNE (+0x60, Hz x 10) x 2^((pitch - 33) / 12) as +0x38 = 2 pi f / 48000 and +0x20 = f / 48000; an idle
-    # voice's level +0x74 = velocity x 100. The oscillator adds +0x20 and +0x38 to its two phases and scales by +0x74
-    # every sample.
-    (0x80132142, 8, ['strb.w r6, [r4, #0x194]', 'vldr s0, [r4, #0x60]'],
-     'SG MIDI note-on: the note at +0x194 (voice_update finds our voice by it), TUNE at +0x60'),
-    (0x80132156, 6, ['sub.w r0, r6, #0x30', 'str r0, [r4, #0x5c]'], 'SG MIDI note-on: pitch +0x5c = note - 48'),
-    (0x80132176, 2, ['subs r0, #0x21'], 'SG MIDI note-on: the frequency from pitch - 33 (TUNE is pitch 33)'),
-    (0x801321A8, 4, ['vstr d1, [r4, #0x38]'], 'SG MIDI note-on: +0x38 = 2 pi f / 48000 (radians a sample)'),
-    (0x801321C4, 4, ['vstr d0, [r4, #0x20]'], 'SG MIDI note-on: +0x20 = f / 48000 (cycles a sample)'),
-    (0x80132250, 8, ['movs r0, #0x64', 'movs r1, #1', 'muls r0, r5, r0', 'str r0, [r4, #0x74]'],
-     'SG MIDI note-on, idle voice: level +0x74 = velocity x 100'),
-    (0x80007B54, 4, ['ldr r0, [r4, #0x74]', 'muls r0, r1, r0'], 'SG oscillator: every sample scaled by +0x74'),
-    (0x80007B6A, 20, ['vldr d0, [r4, #0x18]', 'vldr d1, [r4, #0x20]', 'vldr d2, [r4, #0x30]', 'vldr d3, [r4, #0x38]',
-                      'vadd.f64 d1, d1, d0'],
-     'SG oscillator: its phases +0x18 and +0x30 advance by +0x20 and +0x38 every sample'),
 ]
-SG_CONSTANTS = {0x80132280: 48000.0, 0x80132288: math.pi}   # the note-on's literals (vldr d11 / vldr d2)
 
 MD = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
 KS = Ks(KS_ARCH_ARM, KS_MODE_THUMB | KS_MODE_LITTLE_ENDIAN)
@@ -352,7 +333,7 @@ def sg_midi_entry(img):
 
 def kit_mode_flag(img, entry):
     """The kits' drum-mode byte (kit_mode), which the SG MIDI entry tests first: movw/movt r6 around a mov, then
-    ldrb r7, [r6]; cmp r7, #0; beq (the melodic path). Also that path's address."""
+    ldrb r7, [r6]; cmp r7, #0; beq (the melodic path)."""
     at = entry & ~1
     text = listing(read(img, at, 0x20), at)
     if text[:2] != ['push.w {r4, r5, r6, r7, r8, sb, lr}', 'sub sp, #4'] or not text[2].startswith('movw r6, #') or \
@@ -362,39 +343,7 @@ def kit_mode_flag(img, entry):
     addr = (int(text[4].split('#')[-1], 0) << 16) | int(text[2].split('#')[-1], 0)
     if not (0x83F80000 <= addr < GAP_END and not BASE <= addr < LIMIT):
         raise ValueError(f'kit mode byte {addr:#x} is not in the fork module area')
-    return addr, text[:8], int(text[7].split('#')[-1], 0)
-
-
-def arp_mode_flag(img, melodic):
-    """The arp's mode word (arp_mode), which the entry's melodic path tests first: movw/movt r1, ldr r1, [r1], cbz r1
-    (ARP off: straight to v9.5's MIDI note function)."""
-    text = listing(read(img, melodic, 0x10), melodic)
-    if not text[0].startswith('movw r1, #') or not text[1].startswith('movt r1, #') or text[2] != 'ldr r1, [r1]' or \
-            not text[3].startswith('cbz r1, #'):
-        raise ValueError(f'SG MIDI entry melodic path {melodic:#x}: unexpected start {text[:4]}')
-    addr = (int(text[1].split('#')[-1], 0) << 16) | int(text[0].split('#')[-1], 0)
-    if not (0x83F80000 <= addr < GAP_END and not BASE <= addr < LIMIT) or addr & 3:
-        raise ValueError(f'arp mode word {addr:#x} is not an aligned word in the fork module area')
-    return addr, text[:4]
-
-
-def sg_voice_clones(img):
-    """v9.4's three more Sound Generator voices (SG_CLONES in tune_fp.c): the fork's SG module loads their base,
-    0x8353a310, with movw/movt."""
-    hits = []
-    for load, dst, n, fn in scatter(img):
-        if fn != COPY or not (0x83F80000 <= dst < 0x83FA0000):
-            continue
-        data = bytes(img[load - FLASH:load - FLASH + n])
-        for k in range(0, n - 8, 2):
-            ins = list(MD.disasm(data[k:k + 8], dst + k))
-            if len(ins) == 2 and ins[0].mnemonic == 'movw' and ins[0].op_str.endswith('#0xa310') and \
-                    ins[1].mnemonic == 'movt' and ins[1].op_str.endswith('#0x8353') and \
-                    ins[0].op_str.split(',')[0] == ins[1].op_str.split(',')[0]:
-                hits.append(hex(dst + k))
-    if not hits:
-        raise ValueError("no load of the Sound Generator's voice clones (0x8353a310) in the fork's SG module")
-    return hits
+    return addr, text[:8]
 
 
 def check_guards(img):
@@ -404,11 +353,6 @@ def check_guards(img):
         if got != expect:
             raise ValueError(f'{addr:#x} ({why}): expected {expect}, found {got}')
         found[addr] = dict(size=size, instructions=expect, why=why, hex=read(img, addr, size).hex())
-    for addr, value in SG_CONSTANTS.items():
-        got = struct.unpack('<d', read(img, addr, 8))[0]
-        if got != value:
-            raise ValueError(f'{addr:#x}: the SG note-on literal should be {value}, found {got}')
-        found[addr] = dict(double=value, why="the SG note-on's 48000 and pi")
     literal = PENDSV + 0xA8                                # ldr r4, [pc, #0x90] at PENDSV + 0x14
     if struct.unpack('<I', read(img, literal, 4))[0] != CUR_TASK:
         raise ValueError(f'PendSV literal {literal:#x}: expected the running task pointer {CUR_TASK:#x}')
@@ -456,12 +400,9 @@ def check_guards(img):
         raise ValueError(f'mixer callers: {callers}')
     found['bounce'] = {k: hex(v) for k, v in bridges.items()}
     sg_midi, found['sg_midi'] = sg_midi_entry(img)
-    kit_mode, start, melodic = kit_mode_flag(img, sg_midi)
+    kit_mode, start = kit_mode_flag(img, sg_midi)
     found['kit_mode'] = dict(address=hex(kit_mode), entry_listing=start)
-    arp_mode, path = arp_mode_flag(img, melodic)
-    found['arp_mode'] = dict(address=hex(arp_mode), melodic_path=hex(melodic), listing=path)
-    found['sg_voice_clones'] = sg_voice_clones(img)
-    return found, pre_target, bridges, sg_midi, kit_mode, arp_mode
+    return found, pre_target, bridges, sg_midi, kit_mode
 
 
 # ---- the cabinet IR: a stand-in, not a measured cabinet --------------------------------------------------------
@@ -527,7 +468,7 @@ def integer_spans(map_text, obj):
     return spans
 
 
-def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, arp_mode):
+def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode):
     folder.mkdir(parents=True, exist_ok=True)
     inc = folder / 'include'
     inc.mkdir(exist_ok=True)
@@ -539,7 +480,7 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, ar
     (folder / 'tune_test_links.h').write_text(
         f'#define SG_PRE_TARGET {pre_target:#010x}\n#define BNC_UI {bridges["bnc_ui"]:#010x}u\n'
         f'#define BNC_RX {bridges["bnc_rx"]:#010x}u\n#define SG_MIDI {sg_midi:#010x}u\n'
-        f'#define KIT_MODE {kit_mode:#010x}u\n#define ARP_MODE {arp_mode:#010x}u\n', encoding='ascii', newline='\n')
+        f'#define KIT_MODE {kit_mode:#010x}u\n', encoding='ascii', newline='\n')
     # The integer side (tune_test.o) first, from the base to tt_integer_end; then the FPU side. Unused sections go
     # (--gc-sections: Zig links its compiler_rt, of which only what something calls may stay).
     fp_keep = ' '.join(f'KEEP(*(.text.{n}))' for n in EXPORTS if n not in DATA and not n.startswith(('meter', 'diag')))
@@ -655,7 +596,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
             raise ValueError(f'refusing to overwrite {out / name}')
     if not (BASE <= base and (base & 0xFFF) == 0 and base < LIMIT):
         raise ValueError(f'base {base:#x} outside {BASE:#x}..{LIMIT:#x}')
-    guards, pre_target, bridges, sg_midi, kit_mode, arp_mode = check_guards(img)
+    guards, pre_target, bridges, sg_midi, kit_mode = check_guards(img)
     rows = scatter(img)
     for load, dst, n, fn in rows:
         if max(dst, base) < min(dst + n, LIMIT):
@@ -664,7 +605,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     if hits:
         raise ValueError(f'input refers to the module area: {hits[:4]}')
     code, syms, funcs, text, integer = compile_module(zig, (build_dir or out / 'build').resolve(), base, pre_target,
-                                                      bridges, sg_midi, kit_mode, arp_mode)
+                                                      bridges, sg_midi, kit_mode)
     end = base + len(code)
     if end > LIMIT or end > GAP_END:
         raise ValueError(f'module {base:#x}+{len(code):#x} passes {LIMIT:#x}')
@@ -714,18 +655,19 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='Guitar synth test 3: on the Sound Generator page with EXT SOURCE on, the input the effects chip '
+        description='Guitar synth test 4: on the Sound Generator page with EXT SOURCE on, the input the effects chip '
                     'hands back (RX pair 0, after the input FX) goes through note tracker test 2 (YIN at 6 kHz refined '
-                    'at 12 kHz, an analysis every 4 RX blocks; a pluck is a block peak twice the highest of the 21 ms '
-                    'before), and the UI tick plays its note on the Sound Generator through the entry MIDI IN takes '
-                    "(the kits' note gates' SG route), one note at a time, on when a pluck goes steady, off when the "
-                    "string stops; test 2's rules against extra notes. Test 3, after the SY-1000's Dynamic Synth: "
-                    "the velocity is the pick's peak (200.8 x its square root); the note is the guitar's + 12 + 12 x "
-                    "OCT (the SG sounds MIDI an octave low; drum mode keeps the guitar's note); without ARP or drum "
-                    'mode there are no moves: the voice holding the note follows the string, its pitch step (+0x20, '
-                    "+0x38) bent to the tracked pitch and its level (+0x74) the string's, every RX block. The CPU "
-                    "meter's readout (hold EXIT on the main screen) shows the tracker as in note tracker test 2.",
-        sg_midi_entry=sg_midi, kit_mode_flag=kit_mode, arp_mode_flag=arp_mode,
+                    'at 12 kHz, an analysis every 4 RX blocks), and the UI tick plays its note on the Sound Generator '
+                    "through the entry MIDI IN takes (the kits' note gates' SG route), one note at a time: on when a "
+                    'pluck goes steady, moved when the steady note moves (not in drum mode), off when the string '
+                    'stops. Test 4: a pluck is a block peak twice the highest of the 21 ms before, or a click (the '
+                    'energy over 2 kHz twice the most of the 20 ms before); only analyses with an aperiodicity under '
+                    '0.15 count (strings ringing together read murky and count as nothing heard); a pluck going steady '
+                    'on the note playing restarts it only if the level kept 0.5 x its reference (clicked) or rose 1.2 '
+                    'x (not), another note always plays; velocity 50 + 77 x sqrt(pick peak / 0.4); the note + 12 x '
+                    "the SG's OCT (drum mode: the guitar's note). The CPU meter's readout (hold EXIT on the main "
+                    'screen) shows the tracker as in note tracker test 2.',
+        sg_midi_entry=sg_midi, kit_mode_flag=kit_mode,
         parent_app1=str(inp), parent_sha256=sha(inp.read_bytes()), parent_folder=inp.parent.name,
         parent_revision=parent.get('revision'), parent_parent_revision=parent.get('parent_revision'),
         sha256=sha(img), size=len(img), app0_sha256=APP0_SHA,

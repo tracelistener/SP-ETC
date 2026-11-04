@@ -1,15 +1,16 @@
-/* Guitar synth test 3 (note tracker 3), the FPU side: the note the guitar plays, from the input the effects chip
+/* Guitar synth test 4 (note tracker 3), the FPU side: the note the guitar plays, from the input the effects chip
  * hands back (RX pair 0, after the input FX). Everything here runs on the audio task through tune_fp_call: on the
  * module's own 2 KB stack, with FPSCR and d0-d15 saved around it and FPSCR set to round to nearest, flush to zero
  * and default NaN, as cabinet test 2's cab_fp_call.
  *
- * Test 3 plays like the SY-1000's Dynamic Synth (its controls, read from the SY-1000's own parameter list: PLAY
- * FEEL and DYNAMICS, CHROMATIC OFF, the level following the string): the note starts as hard as it was picked
- * (the velocity is the pick's peak), and while it plays (neither ARP nor drum mode: tt.dyn) its Sound Generator
- * voice follows the string, its pitch bends, vibrato and slides as the string does (no new note for a hammer-on),
- * and its level fades as the string fades. The voice's pitch step (+0x20 cycles a sample, +0x38 radians a
- * sample: the stock code sets them only at a note's start) and level (+0x74, velocity x 100, applied every
- * sample) are written every block.
+ * Test 4, after synth test 3 on the unit ("stuck notes. bad tracking. worse than before"): test 3's voice
+ * following is gone (a pick the tracker missed became a glide of the note before, so a melody played as one
+ * sliding note). Picks at an even strength were missed because the peak test wants twice the ringing level; a
+ * pick's click (the energy over 2 kHz jumping twice the most of the 20 ms before) now counts too. Only clean
+ * readings count (strings ringing together read murky and made wrong low notes); a murky one counts as nothing
+ * heard, so the synth lets go rather than hold or guess. A pluck going steady on another note always plays it;
+ * on the note playing, only if it clicked and the level kept half of what it was, or rose 1.2 x (a thump has
+ * no click). Moves stay test 2's (not in drum mode). Velocity 50..127 from the pick.
  *
  * One step per RX block (tune_rx in tune_test.c decides when):
  *   - the block's 64 frames (48 kHz, (L + R) / 2 of pair 0) through a 4th-order Butterworth low-pass at 1.6 kHz,
@@ -30,9 +31,10 @@
  *     the first voiced analysis and to the steady note. An analysis whose samples were taken before the pluck's
  *     block (it finished under 3 blocks after it) only shows its numbers: the string before may still ring;
  *   - the synth note (tt.syn, played on the Sound Generator by the UI task): on when a pluck goes steady, off
- *     when the steady note is gone. A pluck heard while it plays starts the note again (or the new one) only if
- *     the newest 4 blocks' peak is 1.5 x the pluck's reference by then: else it was a stray pluck (the hand, the
- *     pick near a ringing string; synth test 1 heard extra notes) and the note goes on. Without a pluck it moves
+ *     when the steady note is gone. A pluck heard while it plays and going steady on the same note starts it
+ *     again only if the level shows a pick (below): else it was a stray pluck (the hand, the pick near a ringing
+ *     string; synth test 1 heard extra notes) and the note goes on (test 2 asked this of any note, and missed
+ *     new notes picked while the one before rang: synth test 3 on the unit). Without a pluck it moves
  *     (a slide, a hammer-on) once 3 analyses in a row agree on a note within 30 cents of it, never by an octave
  *     or a harmonic's interval (the tracker's own mistakes), and never in drum mode (each move would be a hit).
  *     It lets go once the steady note is gone and the newest 4 blocks' peak is under 0.3 x what it was at the
@@ -40,14 +42,16 @@
  *     spoils the analyses that span it while the string rings on (synth test 1 let go there, then started the
  *     note again).
  *     A note going steady without a pluck while nothing plays starts nothing.
- *     Test 3: the note's velocity is VEL_K x the square root of the highest block peak from its pluck to its steady
- *     note (127 from 0.4 of full scale, low-passed; half the string's range in dB). With ARP on, moves stay test
- *     2's (the arp needs notes); otherwise there are none: the voice follows instead. It follows every voiced
- *     analysis after the steady note: a step under a semitone at once (a bend, vibrato), a bigger one once 3
- *     analyses in a row agree on its note, never an octave or a harmonic's interval (the tracker's own slips), and
- *     it glides there (0.3 of the way a block). Its level is the same velocity of the string's level now (the
- *     highest peak of the newest 13 blocks, 17 ms: longer than the lowest period), 0.5 of the way a block up and
- *     0.15 down.
+ *     Test 4: a pluck is also a click: the block's energy over 2 kHz (a 2nd-order Butterworth high-pass on the
+ *     input) at least 1e-4 and twice the most of blocks 2-16 back (20 ms, over the lowest period: a low string's
+ *     wave sends its highs once a period), with the block's peak at least -48 dBFS. A ringing string's highs die
+ *     fast, so a pick at its level clicks where the peak does not double. Only analyses whose dip, its bottom
+ *     found by a parabola through it and its neighbours, is under 0.15 count toward the steady note (one string,
+ *     B1 to E6, reads under 0.08; strings ringing together up to 0.33, their wrong low "common" notes 0.23-0.33); a
+ *     murkier one counts as unvoiced. A pluck going steady on the
+ *     note playing starts it again only if the highest peak since 4 blocks after the pluck is 0.5 x its reference
+ *     (the pick clicked) or 1.2 x (it did not: a thump's level never rises). The velocity is 50 + 77 x the square
+ *     root of the pick's peak over 0.4 (127 there), a move's the string's level now (13 blocks' peak).
  *
  * tunetest/tune_ref.py is the same in Python; test_tune_test.py runs both on the same input.
  */
@@ -67,21 +71,24 @@
 #define AGREE 2u                         /* analyses in a row for the steady note */
 #define RELEASE 4u                       /* unvoiced analyses that clear it */
 #define SEMI_PER_LN 17.312340f           /* 12 / ln 2 */
-#define REPICK 1.5f                      /* a pluck while the synth plays: the newest 4 blocks' peak over its reference */
+#define REPICK 1.2f                      /* a pluck on the note playing without a click: the level must rise this */
+#define CLICK_KEEP 0.5f                  /* with one: keep this part of the reference */
+#define CLEAN_APER 0.15f                 /* only analyses this clean count; murkier ones count as unvoiced */
 #define MOVE_AGREE 3u                    /* the synth moves without a pluck: analyses in a row on the new note, */
 #define MOVE_CENTS 30                    /* each within this many cents of it */
 #define SYN_DROP 0.3f                    /* the synth lets go once unvoiced and under this part of the last voiced */
 #define SYN_RELEASE_LONG 12u             /* level (a hand on the string), else after this many unvoiced (64 ms) */
-#define VEL_K 200.8f                     /* velocity = VEL_K x sqrt(peak): 127 at 0.4 (a hard pick, low-passed) */
+#define VEL_FLOOR 50.0f                  /* velocity = VEL_FLOOR + (127 - VEL_FLOOR) x sqrt(peak / VEL_FULL) */
+#define VEL_FULL 0.4f                    /* (a hard pick, low-passed) */
 #define LEVEL_BLOCKS 13u                 /* the string's level: the highest peak of this many newest blocks */
-#define LEV_UP 0.5f                      /* the voice's level, a block: this part of the way up to the string's, */
-#define LEV_DOWN 0.15f                   /* this part down */
-#define BEND_STEP 1.0f                   /* semitones an analysis may move the followed pitch without agreement */
-#define BEND_GLIDE 0.3f                  /* the voice's bend, a block: this part of the way to the followed pitch */
-#define SG_VOICE0 0x80249800u            /* the Sound Generator's voice (stock) */
-#define SG_CLONES 0x8353A310u            /* v9.4's three more, SG_VOICE_SIZE bytes each */
-#define SG_VOICE_SIZE 0x1B0u
-#define SG_RATE (1.0f / 48000.0f)
+#define HF_RATIO 2.0f                    /* a click: the block's energy over 2 kHz this many times */
+#define HF_MIN 1e-4f                     /* (and at least this) */
+#define HF_FROM 2u                       /* the most of blocks HF_FROM..HF_TO back */
+#define HF_TO 16u
+
+/* The click's 2nd-order Butterworth high-pass at 2 kHz (48 kHz): b0, b1, b2, a1, a2. */
+static const float HP[5] = {0.8308980464935303f, -1.6617960929870605f, 0.8308980464935303f, -1.632993221282959f,
+                            0.6905989050865173f};
 
 /* The 4th-order Butterworth low-pass at 1.6 kHz (48 kHz) as two biquads: b0, b1, b2, a1, a2. */
 static const float BQ[2][5] = {
@@ -172,10 +179,10 @@ static void syn_send(tt_t *t, tt_block_t *b, s32 note, u32 vel) {
     b->syn_sends++;
 }
 
-/* A level as a velocity, 1..127 (not rounded): VEL_K x its square root. */
+/* A pick's peak as a velocity, VEL_FLOOR..127 (not rounded): a gentle curve, so a soft pick stays audible. */
 static float vel_f(float peak) {
-    float v = VEL_K * __builtin_sqrtf(peak);
-    return v < 1.0f ? 1.0f : v > 127.0f ? 127.0f : v;
+    float v = VEL_FLOOR + (127.0f - VEL_FLOOR) * __builtin_sqrtf(peak * (1.0f / VEL_FULL));
+    return v > 127.0f ? 127.0f : v;
 }
 
 static u32 velocity(float peak) { return (u32)round_s(vel_f(peak)); }
@@ -191,82 +198,19 @@ static float level(const tt_block_t *b, u32 blk) {
     return m;
 }
 
-/* 2^x for |x| < 100: the exponent from x's floor, the rest as e^r, r = frac(x) ln 2, to r^7 (2e-6 relative). */
-static float exp2_(float x) {
-    s32 n = (s32)x;
-    if ((float)n > x)
-        n--;
-    float r = (x - (float)n) * 0.69314718f;
-    float p = 1.0f + r * (1.0f + r * (0.5f + r * (0.16666667f + r * (0.041666667f + r * (0.0083333333f +
-              r * (0.0013888889f + r * 0.00019841270f))))));
-    union {
-        float f;
-        u32 u;
-    } s;
-    s.u = (u32)(n + 127) << 23;
-    return p * s.f;
-}
-
-/* A double's two words, low first, from a normal float (this FPU has no double instructions); else nothing. */
-static void put_double(volatile u32 *d, float x) {
-    union {
-        float f;
-        u32 u;
-    } v;
-    v.f = x;
-    u32 e = (v.u >> 23) & 0xFFu, m = v.u & 0x007FFFFFu;
-    if (e == 0u || e == 0xFFu)
-        return;
-    d[0] = m << 29;
-    d[1] = (v.u & 0x80000000u) | ((e + 896u) << 20) | (m >> 3);
-}
-
-/* A note starts: the voice follows from here, at the pick's velocity. */
-static void syn_start(tt_block_t *b, float midi, s32 note, u32 vel) {
-    b->bend_est = midi;
-    b->bend_cur = 100.0f * (midi - (float)note);
-    b->lev = (float)vel;
-}
-
-/* The pitch the voice follows, from a voiced analysis while the note plays: a step under BEND_STEP at once (a bend,
- * vibrato); a bigger one (a hammer-on, a slide's end, the tracker's own slip) once MOVE_AGREE analyses in a row
- * agree on its note, and never an octave or a harmonic's interval. */
-static void follow(tt_block_t *b, float midi, s32 note) {
-    float d = midi - b->bend_est;
-    if (d < BEND_STEP && d > -BEND_STEP) {
-        b->bend_est = midi;
-    } else if (b->agree >= MOVE_AGREE && !harmonic_jump(note, round_s(b->bend_est))) {
-        b->bend_est = midi;
-        b->bend_jumps++;
+/* The highest peak since 4 blocks after the last pluck (past a thump's own blocks; by the time a note goes steady
+ * a low string's period fits in it), at most the newest TT_PEAKS - 4 blocks. */
+static float after_peak(const tt_block_t *b, u32 blk) {
+    s32 n = (s32)blk - (b->onset_blk + 4) + 1;
+    if (n > (s32)TT_PEAKS - 4)
+        n = (s32)TT_PEAKS - 4;
+    float m = 0.0f;
+    for (s32 k = 0; k < n; k++) {
+        float v = b->peaks[(blk - (u32)k) & PEAK_MASK];
+        m = v > m ? v : m;
     }
+    return m;
 }
-
-/* Every block while a note plays and neither ARP nor drum mode is on: the voice's bend glides toward the followed
- * pitch and its level toward the string's, and the Sound Generator voice holding our note (sounding, not
- * releasing, its MIDI note at +0x194 the one syn_ui sent; the noise types 13 and 14 keep their own step) takes
- * them: its pitch step from its own pitch (+0x5c) and TUNE (+0x60, Hz x 10) as the stock note-on computes it, bent,
- * and its level. */
-static void voice_update(tt_t *t, tt_block_t *b, u32 blk) {
-    float target = 100.0f * (b->bend_est - (float)b->syn_note);
-    b->bend_cur += (target - b->bend_cur) * BEND_GLIDE;
-    float lt = vel_f(level(b, blk));
-    b->lev += (lt - b->lev) * (lt > b->lev ? LEV_UP : LEV_DOWN);
-    s32 sent = t->sent;
-    if (sent < 0)
-        return;
-    for (u32 i = 0; i < 4u; i++) {
-        volatile u8 *v = (volatile u8 *)(i ? SG_CLONES + (i - 1u) * SG_VOICE_SIZE : SG_VOICE0);
-        if (!v[0] || v[1] || v[0x194] != (u8)sent || (u32)(v[0x70] - 13u) < 2u)
-            continue;
-        float x = (float)(*(volatile s32 *)(v + 0x5C) - 33) * (1.0f / 12.0f) + b->bend_cur * (1.0f / 1200.0f);
-        float dt = (float)*(volatile s32 *)(v + 0x60) * 0.1f * exp2_(x) * SG_RATE;
-        put_double((volatile u32 *)(v + 0x20), dt);
-        put_double((volatile u32 *)(v + 0x38), 6.28318531f * dt);
-        *(volatile s32 *)(v + 0x74) = (s32)(b->lev * 100.0f + 0.5f);
-        b->voice_writes++;
-    }
-}
-
 
 static void begin(tt_t *t) {
     t->rseq++;
@@ -301,7 +245,14 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
             if (dn[k] < dn[tau])
                 tau = k;
     }
-    float aper = dn[tau], power = 0.0f;
+    float aper = dn[tau], power = 0.0f, clean = aper;
+    if (tau > 1u && tau < TT_T6MAX) {                    /* test 4: the dip's own bottom (YIN's step 5): at whole */
+        float den = dn[tau - 1u] - 2.0f * dn[tau] + dn[tau + 1u];   /* lags a period between two (E6: 4.55) */
+        if (den > 0.0f) {                                /* reads up to 0.2 on one clean string */
+            float dd = dn[tau - 1u] - dn[tau + 1u], v = aper - dd * dd / (8.0f * den);
+            clean = v < 0.0f ? 0.0f : v > aper ? aper : v;
+        }
+    }
     for (u32 j = 0; j < TT_W12; j++)
         power += x[j] * x[j];
     power *= 1.0f / (float)TT_W12;
@@ -348,7 +299,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         end(t);
         return;
     }
-    if (voiced) {
+    if (voiced && clean <= CLEAN_APER) {                 /* clean: one string */
         b->unvoiced = 0;
         b->voiced_level = recent_peak(b, blk);
         if (b->first_pending) {
@@ -357,6 +308,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         }
         b->agree = b->agree && b->prev_note == note ? b->agree + 1u : 1u;
         b->prev_note = note;
+        u32 same = b->syn_note >= 0 && note == b->syn_note;
         if (b->agree >= AGREE) {
             r->note = note;
             if (b->lock_pending) {
@@ -369,23 +321,19 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                 if (v > r->lock_max)
                     r->lock_max = v;
                 r->locks++;
-                if (b->syn_note < 0 || recent_peak(b, blk) >= REPICK * b->pluck_ref) {
-                    u32 vel = velocity(b->pick_peak);    /* a pluck went steady: the synth plays it, as hard */
-                    syn_send(t, b, note, vel);
-                    syn_start(b, midi, note, vel);
-                } else {
-                    b->syn_strays++;                     /* the level never rose: a stray pluck, the note goes on */
-                }
-            } else if (b->syn_note >= 0 && note != b->syn_note && !t->drum && !t->dyn && b->agree >= MOVE_AGREE &&
-                       r->cents <= MOVE_CENTS && r->cents >= -MOVE_CENTS && !harmonic_jump(note, b->syn_note)) {
-                u32 vel = velocity(level(b, blk));       /* ARP: the pitch moved while it plays, a new note */
-                syn_send(t, b, note, vel);
-                syn_start(b, midi, note, vel);
+                float keep = b->pluck_click ? CLICK_KEEP : REPICK;
+                if (!same || after_peak(b, blk) >= keep * b->pluck_ref)
+                    syn_send(t, b, note, velocity(b->pick_peak));   /* a pluck went steady: the synth plays it */
+                else
+                    b->syn_strays++;                     /* its own note, no pick's level: a stray pluck */
+            } else if (b->syn_note >= 0 && !same && !t->drum && b->agree >= MOVE_AGREE && r->cents <= MOVE_CENTS &&
+                       r->cents >= -MOVE_CENTS && !harmonic_jump(note, b->syn_note)) {
+                syn_send(t, b, note, velocity(level(b, blk)));      /* the pitch moved while it plays */
             }
         }
-        if (b->syn_note >= 0 && !b->lock_pending)
-            follow(b, midi, note);                       /* the voice follows (tt.dyn: voice_update) */
     } else {
+        if (voiced)
+            b->murky++;                                  /* strings ringing together: counts as nothing heard */
         b->agree = 0;
         b->prev_note = -1;
         b->unvoiced++;
@@ -412,9 +360,14 @@ u32 tune_fp_step(tt_t *t) {
         b->syn_note = -1;
     }
     float z00 = b->z[0][0], z01 = b->z[0][1], z10 = b->z[1][0], z11 = b->z[1][1], pk = 0.0f;
+    float h0 = b->zh[0], h1 = b->zh[1], e = 0.0f;
     for (u32 f = 0; f < FRAMES; f++) {
         float v = (float)t->in[f] * IN_SCALE;
-        float y = BQ[0][0] * v + z00;
+        float y = HP[0] * v + h0;                        /* the click's high-pass, on the input itself */
+        h0 = HP[1] * v - HP[3] * y + h1;
+        h1 = HP[2] * v - HP[4] * y;
+        e += y * y;
+        y = BQ[0][0] * v + z00;
         z00 = BQ[0][1] * v - BQ[0][3] * y + z01;
         z01 = BQ[0][2] * v - BQ[0][4] * y;
         v = y;
@@ -432,15 +385,26 @@ u32 tune_fp_step(tt_t *t) {
     b->z[0][1] = z01;
     b->z[1][0] = z10;
     b->z[1][1] = z11;
+    b->zh[0] = h0;
+    b->zh[1] = h1;
     u32 blk = b->blk;
     b->peaks[blk & PEAK_MASK] = pk;
+    b->hfe[blk & PEAK_MASK] = e;
     if (blk >= P_TO) {
-        float ref = 0.0f;
+        float ref = 0.0f, href = 0.0f;
         for (u32 k = P_FROM; k <= P_TO; k++) {
             float v = b->peaks[(blk - k) & PEAK_MASK];
             ref = v > ref ? v : ref;
         }
-        if (pk >= P_MIN && pk >= P_RATIO * ref && (s32)blk - b->last_onset >= REFRACTORY) {
+        for (u32 k = HF_FROM; k <= HF_TO; k++) {
+            float v = b->hfe[(blk - k) & PEAK_MASK];
+            href = v > href ? v : href;
+        }
+        u32 jump = pk >= P_MIN && pk >= P_RATIO * ref;
+        u32 click = e >= HF_MIN && e >= HF_RATIO * href && pk >= P_MIN;
+        if ((jump || click) && (s32)blk - b->last_onset >= REFRACTORY) {
+            b->clicks += !jump;
+            b->pluck_click = click;
             b->pluck_ref = ref;
             b->pick_peak = pk;
             b->last_onset = b->onset_blk = (s32)blk;
@@ -462,8 +426,6 @@ u32 tune_fp_step(tt_t *t) {
         b->d6[k] = diff(b->span, 2u, k, TT_W6);
     if (phase == 3u)
         decide(t, b, blk);
-    if (t->dyn && b->syn_note >= 0)
-        voice_update(t, b, blk);
     b->blk = blk + 1u;
     return TT_RUN;
 }

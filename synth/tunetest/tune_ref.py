@@ -16,12 +16,26 @@ LEVEL_MIN = 0.0019952622
 P_MIN, P_RATIO, P_FROM, P_TO = 0.0039810717, 2.0, 3, 18   # a pluck: -48 dBFS, twice the peaks 3..18 blocks back
 THRESHOLD, APER_MAX = 0.2, 0.35
 REFRACTORY, AGREE, RELEASE = 24, 2, 4
-REPICK, MOVE_AGREE, MOVE_CENTS = 1.5, 3, 30       # the synth: a pluck while it plays; a move without a pluck
+REPICK, MOVE_AGREE, MOVE_CENTS = 1.2, 3, 30       # the synth: a pluck on its own note; a move without a pluck
+CLEAN_APER = 0.15                                 # test 4: only readings this clean count (strings ringing together
+                                                  # read murkier); a murky one counts as nothing heard
+CLICK_KEEP = 0.5                                  # a pluck going steady on the note playing: the level it keeps
+                                                  # when the pick clicked (else it must rise REPICK)
 SYN_DROP, SYN_RELEASE_LONG = 0.3, 12              # the synth lets go: quieter than the last voiced level, or late
 HARMONIC_JUMPS = (12, 19, 24, 28, 31)
-VEL_K, LEVEL_BLOCKS = 200.8, 13                   # test 3: velocity = VEL_K sqrt(peak); the string's level window
-LEV_UP, LEV_DOWN = 0.5, 0.15                      # the voice's level, a block, toward the string's
-BEND_STEP, BEND_GLIDE = 1.0, 0.3                  # the followed pitch: a step taken at once; the voice's glide
+VEL_FLOOR, VEL_FULL, LEVEL_BLOCKS = 50, 0.4, 13   # test 4: velocity 50..127 by sqrt(peak / VEL_FULL); level window
+HF_FC, HF_RATIO, HF_MIN, HF_FROM, HF_TO = 2000.0, 2.0, 1e-4, 2, 16   # the click: energy over 2 kHz in a block,
+                                                  # HF_RATIO x the most of blocks HF_FROM..HF_TO back, over HF_MIN
+
+
+def _hp2(fc, fs=48000):
+    """A 2nd-order Butterworth high-pass (bilinear): b0, b1, b2, a1, a2, rounded to float32 as tune_fp.c has them."""
+    k = math.tan(math.pi * fc / fs)
+    n = 1 / (1 + k * math.sqrt(2) + k * k)
+    return tuple(float(np.float32(c)) for c in (n, -2 * n, n, 2 * (k * k - 1) * n, (1 - k * math.sqrt(2) + k * k) * n))
+
+
+HP = _hp2(HF_FC)
 BQ = ((0.009165618568658829, 0.018331237137317657, 0.009165618568658829, -1.641069769859314, 0.6777322292327881),
       (0.010120933875441551, 0.020241867750883102, 0.010120933875441551, -1.8121154308319092, 0.8525991439819336))
 NAMES = ('C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B')
@@ -42,8 +56,8 @@ def round_s(x):
 
 
 def vel_f(peak):
-    """A level as a velocity, 1..127, not rounded."""
-    return min(127.0, max(1.0, VEL_K * math.sqrt(peak)))
+    """A pick's peak as a velocity, VEL_FLOOR..127, not rounded (test 4: a gentle curve, soft picks stay audible)."""
+    return min(127.0, VEL_FLOOR + (127 - VEL_FLOOR) * math.sqrt(peak / VEL_FULL))
 
 
 def velocity(peak):
@@ -51,14 +65,16 @@ def velocity(peak):
 
 
 class Tracker:
-    def __init__(self, drum=False, arp=False):
+    def __init__(self, drum=False, click=True, hf_ratio=HF_RATIO, hf_min=HF_MIN, repick=REPICK):
         self.drum = drum            # tt.drum: the kits' drum mode, only plucks play notes
-        self.dyn = not drum and not arp     # tt.dyn: the voice follows the string (test 3)
+        self.click, self.hf_ratio, self.hf_min, self.repick = click, hf_ratio, hf_min, repick
         self.ring = np.zeros(RING)
         self.span = np.zeros(SPAN)
         self.d6 = np.zeros(T6MAX + 1)
         self.peaks = np.zeros(PEAKS)
+        self.hfe = np.zeros(PEAKS)
         self.z = [[0.0, 0.0], [0.0, 0.0]]
+        self.zh = [0.0, 0.0]
         self.w = self.blk = 0
         self.last_onset, self.onset_blk, self.prev_note = -1000, 0, -1
         self.first_pending = self.lock_pending = False
@@ -66,18 +82,23 @@ class Tracker:
         self.res = dict.fromkeys(RESULT, 0)
         self.res['note'] = -1
         self.analyses = []          # (block, voiced, freq, aperiodicity, nearest note)
-        self.syn, self.syn_note, self.syn_sends = 0, -1, 0      # tt.syn: seq << 16 | (note + 1), 0 none
+        self.syn, self.syn_note, self.syn_sends = 0, -1, 0      # tt.syn: seq << 16 | vel << 8 | (note + 1), 0 none
         self.pluck_ref, self.syn_strays = 0.0, 0
         self.voiced_level, self.syn_holds = 0.0, 0
-        self.pick_peak = self.bend_est = self.bend_cur = self.lev = 0.0
-        self.bend_jumps = 0
-        self.voice = []             # (block, bend cents, level as a velocity): what voice_update writes, dyn only
+        self.pick_peak, self.clicks = 0.0, 0                    # clicks: plucks only the click test heard
+        self.pluck_click = False                                # the last pluck clicked (a pick, not a thump)
 
     def recent_peak(self, blk):
         return max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(4))
 
     def level(self, blk):
         return max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(LEVEL_BLOCKS))
+
+    def after_peak(self, blk):
+        """The highest peak since 4 blocks after the last pluck (past a thump's own blocks; a low string's period
+        fits in it by the time a note on it goes steady), at most the newest PEAKS - 4 blocks."""
+        n = min(blk - (self.onset_blk + 4) + 1, PEAKS - 4)
+        return max((self.peaks[(blk - k) & (PEAKS - 1)] for k in range(n)), default=0.0)
 
     def syn_send(self, note, vel=0):
         seq = self.syn >> 16
@@ -87,32 +108,17 @@ class Tracker:
         self.syn_note = note
         self.syn_sends += 1
 
-    def syn_start(self, midi, note, vel):
-        self.bend_est = midi
-        self.bend_cur = 100.0 * (midi - note)
-        self.lev = float(vel)
-
-    def follow(self, midi, note):
-        d = midi - self.bend_est
-        if -BEND_STEP < d < BEND_STEP:
-            self.bend_est = midi
-        elif self.agree >= MOVE_AGREE and abs(note - round_s(self.bend_est)) not in HARMONIC_JUMPS:
-            self.bend_est = midi
-            self.bend_jumps += 1
-
-    def voice_update(self, blk):
-        target = 100.0 * (self.bend_est - self.syn_note)
-        self.bend_cur += (target - self.bend_cur) * BEND_GLIDE
-        lt = vel_f(self.level(blk))
-        self.lev += (lt - self.lev) * (LEV_UP if lt > self.lev else LEV_DOWN)
-        self.voice.append((blk, self.bend_cur, self.lev))
-
     def step(self, block):
         """block: the 64 int16 values the integer side copies, (L + R) >> 1 of pair 0."""
-        z = self.z
-        pk = 0.0
+        z, zh = self.z, self.zh
+        h0, h1, h2, g1, g2 = HP
+        pk = e = 0.0
         for f, s in enumerate(block):
             v = s / 32768.0
+            y = h0 * v + zh[0]                              # the click's high-pass, on the input itself
+            zh[0] = h1 * v - g1 * y + zh[1]
+            zh[1] = h2 * v - g2 * y
+            e += y * y
             for k in (0, 1):
                 b0, b1, b2, a1, a2 = BQ[k]
                 y = b0 * v + z[k][0]
@@ -125,9 +131,15 @@ class Tracker:
                 pk = max(pk, abs(v))
         blk = self.blk
         self.peaks[blk & (PEAKS - 1)] = pk
+        self.hfe[blk & (PEAKS - 1)] = e
         if blk >= P_TO:
             ref = max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(P_FROM, P_TO + 1))
-            if pk >= P_MIN and pk >= P_RATIO * ref and blk - self.last_onset >= REFRACTORY:
+            href = max(self.hfe[(blk - k) & (PEAKS - 1)] for k in range(HF_FROM, HF_TO + 1))
+            jump = pk >= P_MIN and pk >= P_RATIO * ref
+            click = self.click and e >= self.hf_min and e >= self.hf_ratio * href and pk >= P_MIN
+            if (jump or click) and blk - self.last_onset >= REFRACTORY:
+                self.clicks += not jump
+                self.pluck_click = click
                 self.pluck_ref = ref
                 self.pick_peak = pk
                 self.last_onset = self.onset_blk = blk
@@ -147,8 +159,6 @@ class Tracker:
             self.d6[k] = float(np.dot(a, a))
         if phase == 3:
             self.decide(blk)
-        if self.dyn and self.syn_note >= 0:
-            self.voice_update(blk)
         self.blk = blk + 1
 
     def decide(self, blk):
@@ -170,6 +180,13 @@ class Tracker:
         if not tau:
             tau = T6MIN + int(np.argmin(dn[T6MIN:T6MAX + 1]))
         aper = float(dn[tau])
+        # test 4: the dip's own bottom, a parabola through it and its neighbours (YIN's step 5): at whole lags a
+        # period between two of them (high notes: E6 is 4.55 lags) reads up to 0.2 on one clean string
+        clean = aper
+        if 1 < tau < T6MAX:
+            den = dn[tau - 1] - 2 * dn[tau] + dn[tau + 1]
+            if den > 0:
+                clean = max(0.0, min(aper, aper - (dn[tau - 1] - dn[tau + 1]) ** 2 / (8 * den)))
         power = float(np.dot(x[:W12], x[:W12])) / W12
         c = 2 * tau
         dd = []
@@ -208,17 +225,18 @@ class Tracker:
         r['freq10'] = int(freq * 10 + 0.5)
         r['cents'] = round_s((midi - note) * 100)
         r['quality'] = 0 if aper >= 1 else int((1 - aper) * 100 + 0.5)
-        self.analyses.append((blk, voiced, freq, aper, note))
+        self.analyses.append((blk, voiced, freq, aper, note, clean))
         if blk - self.onset_blk < 3:
             return
-        if voiced:
-            self.unvoiced = 0
+        if voiced and clean <= CLEAN_APER:                  # test 4: clean (one string; strings ringing together
+            self.unvoiced = 0                               # read murky, and murky counts as nothing heard)
             self.voiced_level = self.recent_peak(blk)
             if self.first_pending:
                 self.first_pending = False
                 r['first_ms'] = ms(blk - self.onset_blk)
             self.agree = self.agree + 1 if self.agree and self.prev_note == note else 1
             self.prev_note = note
+            same = self.syn_note >= 0 and note == self.syn_note
             if self.agree >= AGREE:
                 r['note'] = note
                 if self.lock_pending:
@@ -230,20 +248,15 @@ class Tracker:
                         r['lock_min'] = v
                     r['lock_max'] = max(r['lock_max'], v)
                     r['locks'] += 1
-                    if self.syn_note < 0 or self.recent_peak(blk) >= REPICK * self.pluck_ref:
-                        vel = velocity(self.pick_peak)      # a pluck went steady: the synth plays it, as hard
-                        self.syn_send(note, vel)
-                        self.syn_start(midi, note, vel)
+                    keep = CLICK_KEEP if self.pluck_click else self.repick
+                    if not same or self.after_peak(blk) >= keep * self.pluck_ref:
+                        self.syn_send(note, velocity(self.pick_peak))   # a pluck went steady: the synth plays it
                     else:
-                        self.syn_strays += 1                # the level never rose: a stray pluck
-                elif (self.syn_note >= 0 and note != self.syn_note and not self.drum and not self.dyn and
+                        self.syn_strays += 1                # its own note, no pick's level: a stray pluck
+                elif (self.syn_note >= 0 and not same and not self.lock_pending and not self.drum and
                       self.agree >= MOVE_AGREE and abs(r['cents']) <= MOVE_CENTS and
                       abs(note - self.syn_note) not in HARMONIC_JUMPS):
-                    vel = velocity(self.level(blk))         # ARP: the pitch moved while it plays, a new note
-                    self.syn_send(note, vel)
-                    self.syn_start(midi, note, vel)
-            if self.syn_note >= 0 and not self.lock_pending:
-                self.follow(midi, note)                     # the voice follows (dyn: voice_update)
+                    self.syn_send(note, velocity(self.level(blk)))      # the pitch moved while it plays
         else:
             self.agree = 0
             self.prev_note = -1

@@ -1,7 +1,7 @@
-"""Checks for guitar synth test 3 (build_tune_test.py): the CPU meter as in cabinet test 2, the tracker (note
-tracker test 2's), and the synth: the tracker's note on the Sound Generator with test 2's rules against extra notes,
-and test 3's Dynamic Synth ways: the pick's velocity, the guitar's own pitch (OCT moves it), and without ARP or drum
-mode a voice that follows the string's pitch (bends, vibrato, hammer-ons) and level, every write against the twin.
+"""Checks for guitar synth test 4 (build_tune_test.py): the CPU meter as in cabinet test 2, the tracker (note
+tracker test 2's, with test 4's click and clean readings), and the synth: the tracker's note on the Sound Generator,
+the cases synth test 3 got wrong on the unit (picks at the ringing string's level, strings ringing together) and
+test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT.
 
 usage: python synth/test_tune_test.py OUT_DIR --kits KITS_MANIFEST [--seeds N] [--blocks N] [--mixer-runs N] [--only ...]
 
@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import struct
 import sys
@@ -69,8 +68,8 @@ class Layout:
               self.peak == 4 * len(TT_HEAD) and self.inp == self.peak + 8 and self.w_n == self.inp + 128 and
               self.pub == self.w_n + 20 and self.rseq == self.w_n + 4 * (len(TT_MID) - 1) and
               self.res == self.rseq + 4 and self.res_bytes == 4 * len(ref.RESULT) and
-              self.tt_bytes == self.syn + 16 and self.b_pick + 24 <= self.b_stack,
-              'tt_t layout as the test reads it (syn, drum, sent, dyn at the end)')
+              self.tt_bytes == self.syn + 8 and self.b_pick + 16 <= self.b_stack,
+              'tt_t layout as the test reads it (syn, drum at the end)')
 
 
 def tt_state(m, sym, lay):
@@ -82,7 +81,7 @@ def tt_state(m, sym, lay):
     r = dict(zip(ref.RESULT, struct.unpack(f'<{len(ref.RESULT)}i', m.bytes(t + lay.res, lay.res_bytes))))
     st['res'] = r
     st['syn'] = struct.unpack('<I', m.bytes(t + lay.syn, 4))[0]
-    st['drum'], st['sent'], st['dyn'] = struct.unpack('<IiI', m.bytes(t + lay.syn + 4, 12))
+    st['drum'] = struct.unpack('<I', m.bytes(t + lay.syn + 4, 4))[0]
     return st
 
 
@@ -283,7 +282,7 @@ def tracker_checks(parent_img, img, man):
     for label, notes, blocks, legato, tol in runs:
         mm = TuneMachine(img, man)
         mm.ui(1)
-        tr = ref.Tracker(arp=True)          # no syn_ui here: tt.dyn stays 0, so the synth word moves as with ARP on
+        tr = ref.Tracker()
         locks, probe = [], None
         for b, values in enumerate(blocks):
             st = mm.rx(values)
@@ -474,77 +473,37 @@ def tracker_checks(parent_img, img, man):
 
 # ---------------------------------------------------------------------------------------------
 SG_PAGE = 0x1E
-SG_VOICE0, SG_CLONES, SG_VOICE_SIZE = 0x80249800, 0x8353A310, 0x1B0   # the Sound Generator's four voices (v9.4)
-SG_TUNE = 4400                                                         # TUNE 440.0 Hz
 SG_OCT = 0x80591C4C                                                    # the Sound Generator's OCT (keyboard + 4)
-
-
-def sg_hz(note):
-    """The frequency the Sound Generator gives MIDI note `note` (stock: pitch note - 48, TUNE at pitch 33)."""
-    return SG_TUNE / 10 * 2 ** ((note - 48 - 33) / 12)
 
 
 class SynthMachine(TuneMachine):
     """TuneMachine on a page, with the Sound Generator's MIDI entry (the kits' gates' target) stubbed: every call
-    recorded as (block, r0, note, velocity, r3), and played on voice 0 as the stock note-on and note-off set it up
-    (sounding, the note at +0x194, pitch +0x5c, TUNE +0x60, the pitch steps +0x20 / +0x38, level +0x74; a note-off
-    marks it releasing). After every RX block, a voice write (tt_block's voice_writes moved) is logged with the
-    voice's fields and the tracker's bend and level."""
-    def __init__(self, img, man, page=SG_PAGE, oct=0, arp=0, **kw):
+    recorded as (block, r0, note, velocity, r3)."""
+    def __init__(self, img, man, page=SG_PAGE, oct=0, **kw):
         super().__init__(img, man, **kw)
-        self.midi, self.blk, self.vlog, self.writes = [], 0, [], 0
+        self.midi, self.blk = [], 0
         a = man['sg_midi_entry'] & ~1
         self.uc.hook_add(UC_HOOK_CODE, self._midi, begin=a, end=a)
         self.page(page)
-        for i in range(4):
-            self.uc.mem_write(self.voice(i), bytes(SG_VOICE_SIZE))
         self.put(SG_OCT, oct & 0xFFFFFFFF, '<I')
-        self.put(man['arp_mode_flag'], arp, '<I')
-
-    @staticmethod
-    def voice(i):
-        return SG_CLONES + (i - 1) * SG_VOICE_SIZE if i else SG_VOICE0
 
     def page(self, p):
         self.put(base.PAGE, p, '<h')
 
     def _midi(self, uc, a, s, _):
-        call = (self.blk,) + tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(4))
-        self.midi.append(call)
-        _, _, note, vel, off = call
-        v = SG_VOICE0
-        if vel and not off:
-            f = sg_hz(note)
-            uc.mem_write(v, bytes([1, 0, 0, 0]))
-            uc.mem_write(v + 0x20, struct.pack('<d', f / 48000))
-            uc.mem_write(v + 0x38, struct.pack('<d', 2 * math.pi * f / 48000))
-            uc.mem_write(v + 0x5C, struct.pack('<ii', note - 48, SG_TUNE))
-            uc.mem_write(v + 0x70, bytes([0]))
-            uc.mem_write(v + 0x74, struct.pack('<i', vel * 100))
-            uc.mem_write(v + 0x194, bytes([note]))
-        else:
-            uc.mem_write(v + 1, bytes([1]))
-            uc.mem_write(v + 0x194, bytes([0xFF]))
+        self.midi.append((self.blk,) + tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(4)))
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
 
     def gsyn(self):
         return dict(zip(('sounding', 'done', 'ons', 'offs'), struct.unpack('<iIII', self.bytes(self.sym['gsyn'], 16))))
 
     def bfields(self):
-        f = struct.unpack('<4f2I', self.bytes(self.block + self.lay.b_pick, 24))
-        return dict(zip(('pick_peak', 'bend_est', 'bend_cur', 'lev', 'bend_jumps', 'voice_writes'), f))
+        f = struct.unpack('<f3I', self.bytes(self.block + self.lay.b_pick, 16))
+        return dict(zip(('pick_peak', 'pluck_click', 'clicks', 'murky'), f))
 
     def tick(self, values=None):
         """One RX block (silence if None), then syn_ui as the next UI tick runs it."""
         st = self.rx(values if values is not None else [0] * 64)
-        bf = self.bfields()
-        if bf['voice_writes'] != self.writes:
-            self.writes = bf['voice_writes']
-            v = SG_VOICE0
-            dt, = struct.unpack('<d', self.bytes(v + 0x20, 8))
-            w, = struct.unpack('<d', self.bytes(v + 0x38, 8))
-            level, = struct.unpack('<i', self.bytes(v + 0x74, 4))
-            self.vlog.append((self.blk, dt, w, level, bf['bend_cur'], bf['lev'], self.bytes(v + 0x194, 1)[0]))
         self.call(self.sym['syn_ui'])
         self.blk += 1
         return st
@@ -561,7 +520,7 @@ def syn_model(words, drum=False, oct=0):
                 out.append((b, 2, sounding, 0, 1))
                 sounding = -1
             if note >= 0:
-                n = note if drum else note + 12 + 12 * max(-3, min(4, oct))
+                n = note if drum else note + 12 * max(-3, min(4, oct))
                 if 12 <= n <= 127:
                     out.append((b, 2, n, vel or 100, 0))
                     sounding = n
@@ -573,20 +532,18 @@ def syn_model(words, drum=False, oct=0):
 
 class Run:
     """One signal through the module (SynthMachine) and the twin, side by side."""
-    def __init__(self, img, man, x, noise=0.0, drum=False, arp=0, oct=0, after=None):
-        ms = self.ms = SynthMachine(img, man, oct=oct, arp=arp)
+    def __init__(self, img, man, x, noise=0.0, drum=False, oct=0):
+        ms = self.ms = SynthMachine(img, man, oct=oct)
         if drum:
             ms.uc.mem_write(man['kit_mode_flag'], b'\x01')               # kit_mode: a kit, drum mode
         ms.ui(0)
         ms.ui(0)                                                         # the first reads EXT SOURCE, the second starts
         self.started = ms.tt()['req'] == 1
-        tr = self.tr = ref.Tracker(drum=drum, arp=bool(arp))
+        tr = self.tr = ref.Tracker(drum=drum)
         self.words, self.locks, self.seen, prev = [], [], [], 0
         for b, values in enumerate(ref.to_blocks(x, noise=noise, seed=4)):
             st = ms.tick(values)
             tr.step(values)
-            if after:
-                after(self, b)
             if tr.syn != prev:
                 self.words.append((b, tr.syn))
                 prev = tr.syn
@@ -597,6 +554,7 @@ class Run:
         self.st = st
         self.model = syn_model(self.words, drum, oct)
         self.g = ms.gsyn()
+        self.bf = ms.bfields()
 
     def calls(self):
         return [(n, 'on' if v else 'off') for _, _, n, v, _ in self.ms.midi]
@@ -604,37 +562,21 @@ class Run:
     def ons(self):
         return [(n, v) for _, _, n, v, off in self.ms.midi if v]
 
-    def parity(self):
-        """Every voice write against the twin's voice_update in the same block, and against the module's own bend
-        and level: (ok, writes, worst bend diff, worst level diff, worst pitch step error)."""
-        twin = {b: (c, lv) for b, c, lv in self.tr.voice}
-        db = dl = de = 0.0
-        ok = bool(self.ms.vlog)
-        for b, dt, w, level, cur, lev, note in self.ms.vlog:
-            if b not in twin:
-                ok = False
-                continue
-            db, dl = max(db, abs(cur - twin[b][0])), max(dl, abs(lev - twin[b][1]))
-            want = sg_hz(note) * 2 ** (cur / 1200) / 48000
-            de = max(de, abs(dt / want - 1))
-            ok &= abs(w / (2 * math.pi * dt) - 1) < 1e-6 and abs(level - int(lev * 100 + 0.5)) <= 1
-        return ok and db < 0.05 and dl < 0.02 and de < 3e-6, len(self.ms.vlog), db, dl, de
-
-    def bends(self):
-        return [cur for _, _, _, _, cur, _, _ in self.ms.vlog]
+    def times(self):
+        return [(round(b * 64 / 48000, 3), n, 'on' if v else 'off') for b, _, n, v, _ in self.ms.midi]
 
 
 def synth_checks(img, man, kit_sym):
     import numpy as np
-    sym = man['symbols']
     entry = man['sg_midi_entry']
     gates = man['guards']['sg_midi']
     check(entry == kit_sym.get('arp_midi_event') and all(g['entry'] == hex(entry & ~1) for g in gates.values()) and
-          man['kit_mode_flag'] == kit_sym.get('kit_mode') and man['arp_mode_flag'] == kit_sym.get('arp_mode'),
+          man['kit_mode_flag'] == kit_sym.get('kit_mode'),
           f"the synth's notes go to arp_midi_event {entry & ~1:#x}, where both of the kits' note gates' SG routes "
-          f"jump; drum mode is the byte it tests first, {man['kit_mode_flag']:#x}, ARP the word its melodic path tests "
-          f"first, {man['arp_mode_flag']:#x} (the kits' own symbols agree): {[g['listing'] for g in gates.values()]}")
+          f"jump, and drum mode is the byte it tests first, {man['kit_mode_flag']:#x} (the kits' own symbols agree): "
+          f"{[g['listing'] for g in gates.values()]}")
     fs = 48000
+    hz = {n: 440 * 2 ** ((n - 69) / 12) for n in range(30, 90)}
 
     def noisy(x, seed):
         r = np.random.default_rng(seed)
@@ -647,131 +589,119 @@ def synth_checks(img, man, kit_sym):
         x[-d:] *= np.linspace(1, 0, d)
         return x
 
-    def framed(*parts, seed=0):
-        return noisy(np.concatenate([np.zeros(fs // 5)] + [p for q in parts for p in (stopped(q), np.zeros(fs // 2))]),
-                     seed)
+    def one_string(notes, gap, amps=None, seed=0):
+        """Picked one after another on one string, each pick restarting it (no gap), the last stopped by hand."""
+        parts = [ref.guitar(hz[n], gap, amp=amps[k] if amps else 0.45, seed=seed + k, B=1e-4 if n < 55 else 3e-5)
+                 for k, n in enumerate(notes)]
+        return noisy(np.concatenate([np.zeros(fs // 5), stopped(np.concatenate(parts)), np.zeros(fs // 2)]), seed)
 
-    hz = {n: 440 * 2 ** ((n - 69) / 12) for n in range(30, 90)}
+    def ringing(notes, gap, seed=0):
+        """Each note on its own string, `gap` s apart, every string left ringing; all stopped at the end."""
+        total = gap * len(notes) + 1.0
+        x = np.zeros(int(total * fs))
+        for k, n in enumerate(notes):
+            at = int(k * gap * fs)
+            s = ref.guitar(hz[n], total - k * gap, seed=seed + k, B=1e-4 if n < 55 else 3e-5)
+            x[at:at + len(s)] += s[:len(x) - at]
+        return noisy(np.concatenate([np.zeros(fs // 5), stopped(x), np.zeros(fs // 2)]), seed)
+
     report['synth'] = {}
-    # 0. The stub against the stock MIDI note-on, which v9.5's midi_event calls on the voice it claims.
-    mv, ok, rows = Machine(img, m7=True), True, []
-    for note, vel in ((57, 100), (40, 127)):
-        mv.uc.mem_write(SG_VOICE0, bytes(SG_VOICE_SIZE))
-        mv.uc.mem_write(SG_VOICE0 + 0x60, struct.pack('<i', SG_TUNE))
-        mv.call(0x80132119, SG_VOICE0, note, vel, 0)
-        b = mv.bytes(SG_VOICE0, SG_VOICE_SIZE)
-        dt, w = struct.unpack_from('<d', b, 0x20)[0], struct.unpack_from('<d', b, 0x38)[0]
-        pitch, level = struct.unpack_from('<i', b, 0x5C)[0], struct.unpack_from('<i', b, 0x74)[0]
-        ok &= (b[0] == 1 and b[1] == 0 and b[0x194] == note and pitch == note - 48 and level == vel * 100 and
-               abs(dt * 48000 / sg_hz(note) - 1) < 1e-6 and abs(w / (2 * math.pi * dt) - 1) < 1e-9)
-        rows.append((note, round(dt * 48000, 3), round(hz[note], 3)))
-    check(ok, f'the stock MIDI note-on (0x80132118) sets a voice as the stub does: sounding, the note at +0x194, '
-              f'pitch note - 48, level velocity x 100, the steps of TUNE x 2^((pitch - 33) / 12), an octave below '
-              f'the note: (note, Hz, standard Hz) {rows}')
-    # 1. Six open strings on the Sound Generator page, EXT SOURCE on, the readout hidden: one note a string, at the
-    # guitar's pitch (+12: the SG sounds MIDI an octave low), as hard as it was picked, the voice following.
+    # 1. Six open strings on the Sound Generator page, EXT SOURCE on, the readout hidden: one note a string, each on
+    # in the block its pluck went steady, at the pick's velocity, off when its string is stopped.
     r = Run(img, man, ref.open_strings(OPEN))
     ons = [(b, n, v) for b, r0, n, v, off in r.ms.midi if v]
     pairs = [(n, r.ms.midi[k + 1][2]) for k, (b, r0, n, v, off) in enumerate(r.ms.midi) if v and k + 1 < len(r.ms.midi)]
-    par = r.parity()
-    check(r.started and r.ms.midi == r.model and [n for _, n, _ in ons] == [n + 12 for n in OPEN] and
-          all(a == c for a, c in pairs) and r.ms.midi[-1][2:] == (OPEN[-1] + 12, 0, 1) and
+    check(r.started and r.ms.midi == r.model and [n for _, n, _ in ons] == list(OPEN) and
+          all(a == c for a, c in pairs) and r.ms.midi[-1][2:] == (OPEN[-1], 0, 1) and
           [b for b, _, _ in ons] == [b for b, _ in r.locks] and all(100 <= v <= 127 for _, _, v in ons) and
           r.g['sounding'] == -1 and r.g['ons'] == 6 and r.g['offs'] == 6,
-          f"six open strings: six notes at the guitar's pitch (MIDI + 12), each on in the block its pluck went "
-          f"steady, at the pick's velocity, off when its string is stopped: {r.ons()}")
-    check(par[0], f'every voice write matches the twin (bend within 0.05 c, level 0.02) and the module\'s own bend '
-                  f'and level (pitch step within 3e-6, radians = 2 pi x it, level = velocity x 100): {par[1]} writes, '
-                  f'worst {par[2]:.4f} c / {par[3]:.4f} / {par[4]:.2e}')
-    report['synth']['open_strings'] = dict(ons=r.ons(), writes=par[1])
-    # 2. Pick strength: the same A2 hard, then soft.
-    r = Run(img, man, framed(ref.guitar(hz[45], 1.0, amp=0.45, seed=3), ref.guitar(hz[45], 1.0, amp=0.05, seed=4),
-                             seed=3))
+          f"six open strings: six notes, each on in the block its pluck went steady "
+          f"({[lk for _, lk in r.locks]} ms after it), at the pick's velocity, off when its string is stopped "
+          f"(the module's tt.syn the twin's after every block): {r.ons()}")
+    report['synth']['open_strings'] = dict(ons=r.ons(), lock_ms=[lk for _, lk in r.locks])
+    # 2. Synth test 3 on the unit: "stuck notes. bad tracking". A pick at the level of the ringing string never
+    # doubled the peak; its click counts now.
+    r = Run(img, man, one_string((52,) * 6, 0.3))
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [52] * 6 and r.st['res']['onsets'] == 6 and
+          r.bf['clicks'] == 5,
+          f"E3 picked six times on one string, 0.3 s apart, as hard: six notes (five plucks only the click heard, "
+          f"test 2 heard one and held it) {r.times()}")
+    r = Run(img, man, one_string((52, 55, 57, 59, 57, 55), 0.3, seed=10))
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [52, 55, 57, 59, 57, 55] and
+          r.st['res']['onsets'] == 6,
+          f"a melody on one string (E3 G3 A3 B3 A3 G3, 0.3 s each, no gaps): each note once, on its pick "
+          f"({r.times()})")
+    r = Run(img, man, one_string((40, 40, 43, 45, 40), 0.25, seed=20))
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [40, 40, 43, 45, 40],
+          f"a riff on the low E (E2 E2 G2 A2 E2, 0.25 s each): every note, the repeat too ({r.ons()})")
+    r = Run(img, man, one_string((45,) * 4, 0.4, amps=(0.45, 0.2, 0.08, 0.03), seed=30))
     vels = [v for _, v in r.ons()]
-    want = [ref.velocity(p) for p in (r.tr.pick_peak,)]
-    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [57, 57] and len(vels) == 2 and vels[0] >= vels[1] + 50
-          and vels[1] >= 25 and vels[1] == want[0],
-          f'the velocity is the pick\'s: an A2 picked hard then softly (peak 0.45, 0.05 of full scale) plays '
-          f'velocities {vels} (200.8 x the square root of the low-passed peak)')
-    # 3. A whole-step bend on G3 (0.4 s in, over 0.15 s): one note, its voice bent 200 cents, its level fading.
-    r = Run(img, man, framed(ref.guitar(hz[55], 1.5, B=3e-5, seed=5, bend=(0.4, 0.55, 200)), seed=5))
-    par, bends = r.parity(), r.bends()
-    lv = [level for _, _, _, level, _, _, _ in r.ms.vlog]
-    late = [cur for b, _, _, _, cur, _, _ in r.ms.vlog if b - r.ms.vlog[0][0] > 700]
-    check(r.ms.midi == r.model and r.calls() == [(67, 'on'), (67, 'off')] and par[0] and abs(bends[0]) < 15 and
-          late and all(abs(c - 200) < 6 for c in late) and lv[len(lv) // 2] < lv[0] - 1000,
-          f'a whole-step bend on G3: one note, its voice bent from {bends[0]:.1f} to {late[-1] if late else 0:.1f} '
-          f'cents; its level fades with the string ({lv[0]} -> {lv[len(lv) // 2]} halfway) ({r.calls()}, '
-          f'{par[1]} writes)')
-    report['synth']['bend'] = dict(start=bends[0], end=late[-1] if late else None, levels=[lv[0], lv[-1]])
-    # 4. Legato (hammer-ons, no new pluck): one note, its voice glides to each new note.
-    r = Run(img, man, signal((40, 43, 45, 47), 0.0, 40, True), noise=1e-4)
-    par, bends, bf = r.parity(), r.bends(), r.ms.bfields()
-    check(r.ms.midi == r.model and r.calls() == [(52, 'on')] and par[0] and bf['bend_jumps'] == 3 and
-          r.tr.bend_jumps == 3 and abs(max(bends) - 700) < 10,
-          f'legato (hammer-ons E2 G2 A2 B2, no new pluck; the phrase ends ringing): one note, its voice takes 3 '
-          f'steps and glides up to {max(bends):.0f} cents ({r.calls()})')
-    # 5. ARP on: the arp needs notes, so the moves stay test 2's; no voice writes.
-    r = Run(img, man, signal((40, 43, 45, 47), 0.0, 40, True), noise=1e-4, arp=1)
-    ons = [n for n, _ in r.ons()]
-    check(r.ms.midi == r.model and ons and ons[0] == 52 and len(ons) >= 2 and not r.ms.vlog and
-          all(r.ms.midi[k][3] == 0 for k in range(1, len(r.ms.midi), 2)),
-          f'ARP on, the legato phrase: the synth follows the steady note as in test 2, each move an off then an on, '
-          f'and leaves the voices alone ({r.calls()})')
-    # 6. Test 2's stray pluck, re-pick, drum mode and vibrato.
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [45] * 4 and vels == sorted(vels, reverse=True) and
+          vels[0] >= 115 and vels[-1] <= 75 and min(vels) >= 50,
+          f"an A2 picked four times, softer each time (0.45, 0.2, 0.08, 0.03 of full scale): four notes, "
+          f"velocities {vels} (50 + 77 x the square root of the pick's peak over 0.4)")
+    report['synth']['repeats'] = dict(softer=vels)
+    # 3. Strings left ringing together read murky: no wrong low notes, and the synth lets go rather than hold one.
+    r = Run(img, man, ringing((55, 57, 59, 62, 64, 67), 0.3, seed=40))
+    tms = r.times()
+    off_at = [t for t, n, k in tms if k == 'off']
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [55] and off_at and 0.5 < off_at[0] < 0.6 and
+          r.bf['murky'] > 100,
+          f"G3 A3 B3 D4 E4 G4 picked 0.3 s apart on six strings, all left ringing: G3 plays, then the strings read "
+          f"murky ({r.bf['murky']} analyses) and the synth lets go {off_at[0] if off_at else None} s in, 0.1 s after "
+          f"the A3 (test 3 on the twin: a stuck G3 or C2..G2 'common' notes): {tms}")
+    # 4. Test 2's cases: a thump, a re-pick, a sharp note with vibrato, drum mode; and a hammer-on.
     ring = ref.guitar(hz[40], 1.6, seed=21)
     at, w = int(0.8 * fs), int(0.003 * fs)
     bump = np.zeros(len(ring))
     bump[at:at + w] = 2.5 * np.max(np.abs(ring[at - 960:at])) * np.sin(np.pi * np.arange(w) / w)
     r = Run(img, man, noisy(np.concatenate([np.zeros(fs // 5), stopped(ring + bump), np.zeros(fs // 2)]), 21))
-    check(r.ms.midi == r.model and r.calls() == [(52, 'on'), (52, 'off')] and r.st['res']['onsets'] == 2 and
-          r.tr.syn_strays == 1 and r.parity()[0],
-          f"a thump on a ringing low E (2.5 x its peak for 3 ms, 0.8 s on): heard as a pluck ({r.st['res']['onsets']} "
-          f"plucks), but its level never rose, so the synth note goes on ({r.calls()})")
+    check(r.ms.midi == r.model and r.calls() == [(40, 'on'), (40, 'off')] and r.st['res']['onsets'] == 2 and
+          r.tr.syn_strays == 1 and r.bf['clicks'] == 0,
+          f"a thump on a ringing low E (2.5 x its peak for 3 ms, 0.8 s on): a pluck without a click, its level never "
+          f"rose, so the synth note goes on ({r.calls()})")
     r = Run(img, man, noisy(np.concatenate([np.zeros(fs // 5), ref.guitar(hz[40], 2.0, seed=31),
                                             stopped(ref.guitar(hz[40], 1.0, seed=32)), np.zeros(fs // 2)]), 31))
-    check(r.ms.midi == r.model and r.calls() == [(52, 'on'), (52, 'off'), (52, 'on'), (52, 'off')] and
-          r.st['res']['onsets'] == 2 and r.tr.syn_strays == 0,
-          f'the low E picked again 2 s on, as hard: its level rose, so the synth starts the note again ({r.calls()})')
-    r = Run(img, man, signal((40, 43, 45, 47), 0.0, 40, True), noise=1e-4, drum=True, oct=2)
-    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [40] and len(r.seen) >= 2 and not r.ms.vlog,
-          f"drum mode (kit_mode set, OCT +2), the legato phrase: the steady note moves "
-          f"({[ref.name(n) for n in r.seen]}) but only the pluck plays, one hit at the guitar's own note (the pad), "
-          f"no voice writes ({r.ons()})")
+    check(r.ms.midi == r.model and r.calls() == [(40, 'on'), (40, 'off'), (40, 'on'), (40, 'off')] and
+          r.st['res']['onsets'] == 2,
+          f'the low E picked again 2 s on, as hard: the synth starts the note again ({r.calls()})')
     r = Run(img, man, noisy(np.concatenate([np.zeros(fs // 5), stopped(ref.guitar(hz[55], 1.5, seed=41, B=3e-5,
                                                                                    cents=40, vibrato=(-25, 5.5))),
                                             np.zeros(fs // 2)]), 41))
-    bends = r.bends()[40:]
-    check(r.ms.midi == r.model and r.calls() == [(67, 'on'), (67, 'off')] and 56 in r.seen and r.parity()[0] and
-          min(bends) < 25 and max(bends) > 55,
-          f'a G3 40 cents sharp with 25 cents of vibrato: the steady note flickers ({[ref.name(n) for n in r.seen]}), '
-          f'one note plays, and its voice follows the vibrato ({min(bends):.0f}..{max(bends):.0f} cents)')
-    # 7. OCT moves it; a noise type keeps its own pitch step.
-    one = framed(ref.guitar(hz[45], 0.8, seed=6), seed=6)
+    check(r.ms.midi == r.model and r.calls() == [(55, 'on'), (55, 'off')] and 56 in r.seen,
+          f'a G3 40 cents sharp with 25 cents of vibrato: the steady note flickers '
+          f'({[ref.name(n) for n in r.seen]}), the synth holds G3 ({r.calls()})')
+    hammer = noisy(np.concatenate([np.zeros(fs // 5), stopped(ref.guitar(hz[40], 1.4, seed=50, bend=(0.6, 0.601, 300))),
+                                   np.zeros(fs // 2)]), 50)
+    r = Run(img, man, hammer)
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [40, 43] and r.st['res']['onsets'] == 1,
+          f'a hammer-on on the low E, E2 to G2 0.6 s in (no pick, no click): one pluck, the note moves '
+          f'({r.times()})')
+    r = Run(img, man, hammer, drum=True, oct=2)
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [40] and len(r.seen) >= 2,
+          f"drum mode (kit_mode set, OCT +2), the hammer-on: the steady note moves ({[ref.name(n) for n in r.seen]}) "
+          f"but only the pick plays, one hit at the guitar's own note, the pad ({r.ons()})")
+    r = Run(img, man, one_string((40, 40, 43, 45, 40), 0.25, seed=20), drum=True)
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [40, 40, 43, 45, 40],
+          f'drum mode, the riff: a hit for every pick ({r.ons()})')
+    # 5. OCT moves the note (0: the octave tests 1 and 2 played, as the Sound Generator sounds MIDI).
+    one = noisy(np.concatenate([np.zeros(fs // 5), stopped(ref.guitar(hz[45], 0.8, seed=6)), np.zeros(fs // 2)]), 6)
     got = {}
     for oct in (1, -1, 9, -7):
-        rr = Run(img, man, one, oct=oct)
-        got[oct] = [n for n, _ in rr.ons()]
-    check(got == {1: [69], -1: [45], 9: [105], -7: [21]},
+        got[oct] = [n for n, _ in Run(img, man, one, oct=oct).ons()]
+    check(got == {1: [57], -1: [33], 9: [93], -7: []},
           f"the Sound Generator's OCT moves the note: A2 at OCT +1, -1, 9 and -7 (held to -3..+4 as OCT is) plays "
-          f"{got}")
-
-    def noise_type(run, b):
-        if run.ms.midi and run.ms.bytes(SG_VOICE0 + 0x194, 1)[0] != 0xFF:
-            run.ms.uc.mem_write(SG_VOICE0 + 0x70, bytes([13]))
-    r = Run(img, man, one, after=noise_type)
-    check(r.calls() == [(57, 'on'), (57, 'off')] and not r.ms.vlog,
-          f'a voice of a noise type (13, 14) keeps its own pitch step: no voice writes ({r.calls()})')
-    # 8. Off the page (the readout shown, the tracker running): nothing to the Sound Generator.
+          f"{got} (under MIDI 12: nothing)")
+    # 6. Off the page (the readout shown, the tracker running): nothing to the Sound Generator.
     mo = SynthMachine(img, man, page=1)
     mo.ui(1)
+    st = None
     for values in ref.to_blocks(ref.open_strings((40, 45), ring=0.8))[:1200]:
         st = mo.tick(values)
-    check(st['state'] == TT_RUN and st['res']['locks'] >= 1 and not mo.midi and mo.gsyn()['sounding'] == -1 and
-          not mo.vlog and mo.tt()['sent'] == -1,
-          f"off the Sound Generator page the tracker runs for the readout but plays nothing and writes no voice "
-          f"({st['res']['locks']} steady notes, {len(mo.midi)} calls)")
-    # 9. EXT SOURCE off on the page: the tracker stays off.
+    check(st['state'] == TT_RUN and st['res']['locks'] >= 1 and not mo.midi and mo.gsyn()['sounding'] == -1,
+          f"off the Sound Generator page the tracker runs for the readout but plays nothing ({st['res']['locks']} "
+          f"steady notes, {len(mo.midi)} calls)")
+    # 7. EXT SOURCE off on the page: the tracker stays off.
     me = SynthMachine(img, man, ext=0)
     me.ui(0)
     me.ui(0)
@@ -779,7 +709,7 @@ def synth_checks(img, man, kit_sym):
         st = me.tick(values)
     check(st['req'] == 0 and st['state'] == TT_OFF and st['steps'] == 0 and not me.midi,
           'Sound Generator page with EXT SOURCE off: the tracker stays off, nothing plays')
-    # 10. A note playing, then EXT SOURCE off: the tracker stops and lets go of it.
+    # 8. A note playing, then EXT SOURCE off: the tracker stops and lets go of it.
     sig = ref.to_blocks(ref.open_strings((40,), ring=1.5))
     mx = SynthMachine(img, man)
     mx.ui(0)
@@ -794,10 +724,10 @@ def synth_checks(img, man, kit_sym):
     mx.ui(0)
     for k in range(3):
         st = mx.tick(sig[b + k])
-    check(len(on) == 1 and on[0][2] == 52 and on[0][4] == 0 and st['state'] == TT_OFF and
-          mx.midi[1:] == [(on[0][0] + 1, 2, 52, 0, 1)] and mx.gsyn()['sounding'] == -1 and mx.tt()['sent'] == -1,
+    check(len(on) == 1 and on[0][2] == 40 and on[0][4] == 0 and st['state'] == TT_OFF and
+          mx.midi[1:] == [(on[0][0] + 1, 2, 40, 0, 1)] and mx.gsyn()['sounding'] == -1,
           f'a note playing when the tracker stops (EXT SOURCE off): let go at the next UI tick ({mx.midi})')
-    # 11. A note playing, then the page closed: forgotten (the SG stops its own voices), nothing replays on return.
+    # 9. A note playing, then the page closed: forgotten (the SG stops its own voices), nothing replays on return.
     ml = SynthMachine(img, man)
     ml.ui(0)
     ml.ui(0)
@@ -807,7 +737,7 @@ def synth_checks(img, man, kit_sym):
         b += 1
     ml.page(1)
     ml.tick(sig[b])
-    gone = ml.gsyn()['sounding'] == -1 and len(ml.midi) == 1 and ml.tt()['sent'] == -1
+    gone = ml.gsyn()['sounding'] == -1 and len(ml.midi) == 1
     ml.page(SG_PAGE)
     for k in range(1, 900):
         ml.tick(sig[b + k] if b + k < len(sig) else None)

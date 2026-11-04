@@ -1,10 +1,11 @@
-# Note tracker tests 1 and 2, guitar synth tests 1 to 3
+# Note tracker tests 1 and 2, guitar synth tests 1 to 4
 
 Test-only builds, not for the patcher: v9.52 (combined-test17) with the CPU meter of IR diagnostic test 3 and a
 note tracker on the input. Test 2 (tune-test2) is test 1 with a new pluck test and the plucks heard on the readout
 (see "Test 1 on the unit" below). Guitar synth test 1 (gtr-synth-test1) is test 2 playing the Sound Generator (next
 section); synth test 2 (gtr-synth-test2) is synth test 1 without its extra notes; synth test 3 (gtr-synth-test3)
-plays like the SY-1000's Dynamic Synth (the sections after).
+plays like the SY-1000's Dynamic Synth; synth test 4 (gtr-synth-test4) undoes test 3's voice following and fixes
+what made test 3 worse on the unit (the sections after).
 
 ## Guitar synth test 1 (gtr-synth-test1)
 
@@ -83,6 +84,49 @@ decay or release of their own.
 
 Stock pitch bend would not do: the SP-404MKII's MIDI implementation chart receives pitch bend only for the Vocoder
 input FX (channel 11), never the Sound Generator. Hence the voice writes.
+
+**On the unit (2026-11-03):** "stuck notes. bad tracking. worse than before."
+
+## Guitar synth test 4 (gtr-synth-test4): test 3's stuck notes
+
+Why test 3 got worse, in `tune_ref.py` with strings played as on a guitar (the emulator's phrases had stopped each
+string before the next, or played legato without picks):
+
+- **Picks at the ringing string's level were missed.** The pluck test wants a block peak twice the highest of the 21
+  ms before. A melody on one string, each note picked as hard as the last (E3 G3 A3 B3 A3 G3, 0.3 s each), is 1
+  pluck of 6; E3 picked 6 times is 1 pluck, one held note. Test 2 still played the melody through its moves (the
+  steady note changes); test 3 had no moves, so its voice slid the first note through the melody: one stuck,
+  sliding note.
+- **Strings ringing together** (an arpeggio, a melody across strings) mix into a "common" period below them: the
+  tracker read C2, D2, E2, G2 for G3..G4 ringing, and every pluck it heard there started a wrong low note.
+
+Test 4 (`tune_fp.c`, the same in `tune_ref.py`):
+
+- No voice following (test 3's pitch and level writes, the ARP read and the voice guards are gone); moves are test
+  2's again, everywhere but drum mode.
+- **A pick's click** is a pluck too: the block's energy over 2 kHz (a 2nd-order Butterworth high-pass on the input,
+  before the low-pass) at least 1e-4 and twice the most of blocks 2-16 back (20 ms, over the lowest period, since a
+  low string's wave sends its highs once a period), with the block's peak at least -48 dBFS. A ringing string's
+  highs die fast; a new pick brings them back. On the pickup model the click at picks is 2.3-36 x (2.3: a re-pick
+  at less than half the ringing level) and elsewhere at most 1.6 (a thump); heavy overdrive reaches 2.9 only within
+  6 blocks after a pick, inside the 32 ms where no new pluck can start.
+- **Only clean readings count:** an analysis whose dip bottom is over 0.15 counts as unvoiced. The bottom is a
+  parabola's through the 6 kHz dip and its neighbours (YIN's step 5): at whole lags, a period between two of them
+  reads murky on one clean string (E6, 4.55 lags: 0.2; the first build of test 4 lost its E6 there). With it, one
+  string from B1 to E6 reads under 0.08 (vibrato, fast bends, decays and heavy overdrive included); strings ringing
+  together read up to 0.33, their wrong low notes 0.23-0.33. So a mix plays nothing new, and after 12 murky
+  analyses (64 ms) the synth lets go instead of holding a stuck note.
+- **A pluck going steady on another note always plays it** (test 2 asked any pluck heard while a note played for a
+  1.5 x rise). On the note playing it starts it again if the highest peak since 4 blocks after the pluck is 0.5 x
+  its reference when the pick clicked (an even or softer re-pick), else 1.2 x (a thump has no click and its level
+  never rises).
+- Velocity 50 + 77 x the square root of the pick's peak over 0.4 (127 there), a move's the string's level now:
+  softer than test 3's curve, so a soft pick stays audible.
+- OCT moves the note; at 0 the octave tests 1 and 2 played (the Sound Generator sounds MIDI an octave low), +1 the
+  guitar's own pitch. Drum mode keeps the guitar's note.
+
+Cost on the twin: the steady note comes about 6 ms later (the first readings after a pick are murkier): the open
+strings run AVG 29 ms (test 2: 22), a re-pick about 30 ms.
 
 The first step towards a guitar synth (the Sound Generator played from the guitar): how
 well and how fast the SP's main processor can follow the note. Nothing goes to the output; the meter's readout (hold
@@ -167,11 +211,29 @@ The six open strings once each, low to high, each stopped by hand before the nex
 
 `python synth/test_tune_test.py OUT_DIR --kits kits-v9.46-test3/kits-manifest.json`: NAM test 2's meter checks
 (imported) on this image, and the tracker on Unicorn's Cortex-M7 model, against `tune_ref.py` after every block.
-126 checks pass on `release/gtr-synth-test3` (APP1 `03679e29…420d`, 3,182,304 bytes; the module 24,640 bytes), 111
+128 checks pass on `release/gtr-synth-test4` (APP1 `daf588a7…d52f`, 3,182,432 bytes; the module 24,768 bytes), 126
+on `release/gtr-synth-test3` (APP1 `03679e29…420d`, 3,182,304 bytes; the module 24,640 bytes), 111
 on `release/gtr-synth-test2` (APP1 `637424b5…1a63`, 3,180,576 bytes; the module 22,912 bytes), 103 on
 `release/gtr-synth-test1` (APP1 `19df4dda…1559`), 90 on `release/tune-test2` (APP1 `68691893…96d2`), 87 on
 `release/tune-test1` (APP1 `7cd37ebf…17cb`). Test 3's tracker step, without voice writes: 14,746 / 12,417 / 12,417 /
 26,136 instructions by phase, 272 bytes of its own stack; the voice writes' cost is not measured.
+
+Synth test 4's own checks (the module against `tune_ref.py` after every block, the MIDI entry stubbed):
+
+- Six open strings: notes 40 45 50 55 59 64, velocities 126 124 121 123 124 122, each on 39 31 27 29 25 23 ms after
+  its pluck (test 2: 28 31 21 19 20 17).
+- E3 picked six times on one string, 0.3 s apart, as hard: six notes (five plucks only the click heard; test 2 heard
+  one and held it). A melody on one string (E3 G3 A3 B3 A3 G3, no gaps): each note once, on its pick. A riff on the
+  low E (E2 E2 G2 A2 E2, 0.25 s each): every note, the repeat too; in drum mode, a hit for each.
+- An A2 picked four times, softer each time (0.45, 0.2, 0.08, 0.03 of full scale): velocities 123 97 81 69.
+- G3 A3 B3 D4 E4 G4 picked 0.3 s apart on six strings, all left ringing: G3 plays, then 149 murky analyses and the
+  synth lets go 0.569 s in, 0.1 s after the A3 (no wrong low note, no stuck G3).
+- Test 2's thump (a pluck without a click: the note goes on), re-pick 2 s on (plays again) and sharp vibrato (G3
+  held while the steady note flickers) hold. A hammer-on (E2 to G2, no click): the note moves 36 ms after it; in
+  drum mode at OCT +2, one hit at the guitar's note.
+- OCT +1, -1, 9 and -7 play an A2 as 57, 33, 93 (held to +4) and nothing (held to -3: MIDI 9, under 12).
+- The step: 15,333 / 13,004 / 13,004 / 26,632 instructions by phase (the click's high-pass adds about 590 a block),
+  316 bytes of its own stack.
 
 Synth test 3's own checks (the MIDI entry stubbed as a voice the stock note-on sets up; every voice write against
 `tune_ref.py`'s in the same block and against the module's own bend and level):
@@ -236,15 +298,16 @@ The tracker (tune-test2, and gtr-synth-test1 the same):
   post comes before tune_ui starts the tracker: an all-zero result read C-1); bounce's own bnc_rx and bnc_ui run as
   in the parent; the meter's checks.
 
-## Not known (synth tests 2 and 3 on the unit)
+## Not known (synth test 4 on the unit)
 
-- Synth test 1 played on the unit (no stuck notes), so the UI tick reaches the Sound Generator as MIDI does.
-- Whether test 2's rules remove the extra notes the unit made, and what "tracking not the best" means there: wrong
-  notes, late notes or missed ones.
-- Test 3: how the bends sound (the voice follows analyses 5.3 ms apart, gliding 0.3 of the way a block), whether
-  200.8 suits the unit's input level (the readout's LV is the raw peak in %; a quiet input plays soft notes), and
-  whether a level following the string makes long notes too quiet next to tests 1 and 2's fixed 100. The voice writes
-  were checked against a stubbed voice, not the Sound Generator's own code.
-- How late the synth feels (the steady note 15-32 ms after a pluck, then the voice).
-- Re-picking a string that still rings: no new pluck until it has faded to about half, so the synth note goes on
-  rather than starting again. A pick's click (the highs, which a ringing string loses fast) may tell a re-pick.
+- Synth test 1 played on the unit (no stuck notes), so the UI tick reaches the Sound Generator as MIDI does. Test 2
+  was not reported on its own; test 3 was worse (above).
+- Whether a real pick clicks as the pickup model's do (the model has no pick noise; a real pick should click more),
+  and whether fret or hand noise clicks: a click on the note playing restarts it only if the level kept half, a
+  click with no steady note plays nothing.
+- Whether a real string reads as clean as the model's (under 0.08). A guitar that reads murkier (a chorus or a
+  noisy input before the SP) would play fewer notes: the readout's Q is 100 minus the whole-lag reading x 100, a
+  rough guide (Q 85 or more is clean either way).
+- Strings ringing together still play nothing new: a mono tracker on one input hears a chord's common pitch. Play
+  one string at a time, or stop the one before.
+- How late the synth feels: the steady note about 6 ms later than test 2's (23-39 ms after a pick on the model).
