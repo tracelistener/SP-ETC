@@ -145,6 +145,9 @@ range. Its "extra notes especially with drum kits" fit the same loop: each drum 
 
 Next on the unit: test 4 again on ROUTING ExtIn (SHIFT + EXT SOURCE, CTRL 2), no new build.
 
+**On ExtIn (2026-11-03):** "does not get stuck now. tracks pretty well too". So the echo was the cause. Known limit:
+the build does not read ROUTING, so on Mix the synth still holds its own note.
+
 The first step towards a guitar synth (the Sound Generator played from the guitar): how
 well and how fast the SP's main processor can follow the note. Nothing goes to the output; the meter's readout (hold
 EXIT a second on the main screen) shows what the tracker hears.
@@ -318,8 +321,6 @@ The tracker (tune-test2, and gtr-synth-test1 the same):
 
 ## Not known (synth test 4 on the unit)
 
-- Whether ROUTING ExtIn ends the stuck notes, and how test 4 tracks with the echo gone. Tests 2 to 4 were all heard
-  on Mix. The build does not read ROUTING yet.
 - Synth test 1 played on the unit (no stuck notes), so the UI tick reaches the Sound Generator as MIDI does. Test 2
   was not reported on its own; test 3 was worse (above).
 - Whether a real pick clicks as the pickup model's do (the model has no pick noise; a real pick should click more),
