@@ -1,4 +1,4 @@
-/* SY synth test 2, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
+/* SY synth test 3, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
  * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
  * BOSS's SY pedals work: 49 semitone bands, each with its own oscillators, from RX pair 0, added to the DRY pair of
  * TX line 3 one block later, on every page but the Sound Generator's while EXT SOURCE is on and ROUTING on ExtIn.
@@ -7,6 +7,12 @@
  * through FX deep edit's bridges (their call to fde_key_down / fde_key_up, re-pointed by the builder to sy_key_down /
  * sy_key_up, which hand every key on to them first / unless the pick took it). The UI reads the SP's tempo every
  * 0.1 s for the SEQ tone's steps.
+ * Test 3: hold VALUE and turn CTRL 1-3 (where the synth can play): the tone playing's BRIGHT, its own setting and LEVEL
+ * (sy.knob, the knob's position; a popup names the tone, the setting and the position), and the bus effect never sees
+ * the turn. The knob events come through FX deep edit's knob bridge as the keys do (its call to fde_knob, re-pointed
+ * to sy_knob). The picks and the knobs are kept in B:/_sy_tones.bin beside FX deep edit's file, read at the first key
+ * or knob event after the boot and written when VALUE is let go after a change, never while an FX screen is up (as FX
+ * deep edit learned on the unit).
  * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
@@ -49,9 +55,10 @@
  * the whole mixer 0x1c2d0, entry to return; PAD and SG are still kept (the readout does not show them). This file is
  * the integer side: the builder checks that none of its functions has an FPU instruction.
  */
-#include "tune_test_links.h"   /* from the builder: SG_PRE_TARGET, BNC_UI, BNC_RX, SG_MIDI, KIT_MODE, FDE_DOWN, FDE_UP */
+#include "tune_test_links.h"   /* from the builder: SG_PRE_TARGET, BNC_UI, BNC_RX, SG_MIDI, KIT_MODE, FDE_DOWN, FDE_UP,
+                                  FDE_KNOB */
 #include "tune_test.h"
-#include "sy_names.h"          /* from the builder (sy_ref.py): SY_POPUP, SY_OFF_PAD */
+#include "sy_names.h"          /* from the builder (sy_ref.py): SY_POPUP, SY_OFF_PAD, SY_KNOB_NAMES, SY_P2_NAMES */
 
 #define EXPORT __attribute__((used))
 #define S_(x) #x
@@ -151,7 +158,9 @@ EXPORT meter_t meter;
 EXPORT tt_t tt;
 EXPORT tt_block_t tt_block;
 EXPORT sy_t sy;
-EXPORT sy_block_t sy_block;
+/* SY test 3: the engine's memory outside the module, in a slot of its own (the builder places .sybss and gives it a
+ * boot zero row); sy_start clears it before each start anyway. */
+EXPORT __attribute__((section(".sybss"))) sy_block_t sy_block;
 #define OFFSET(t, f) ((u32)__builtin_offsetof(t, f))
 EXPORT const u32 tt_layout[] = {                          /* the tests read these */
     sizeof(tt_t), OFFSET(tt_t, state), OFFSET(tt_t, peak), OFFSET(tt_t, in), OFFSET(tt_t, w_n), OFFSET(tt_t, pub),
@@ -164,7 +173,7 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
     OFFSET(sy_t, tot_max_ever), sizeof(sy_block_t), OFFSET(sy_block_t, e), OFFSET(sy_block_t, per),
     OFFSET(sy_block_t, ph), OFFSET(sy_block_t, amp), OFFSET(sy_block_t, owned), OFFSET(sy_block_t, env),
     OFFSET(sy_block_t, started), OFFSET(sy_block_t, tone), OFFSET(sy_block_t, nper), OFFSET(sy_t, tone_req),
-    OFFSET(sy_block_t, fe)};
+    OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
@@ -191,7 +200,23 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 /* FX deep edit's key handlers (the builder reads them from its bridges' calls): 1 takes the key. */
 #define FDE_KEY_DOWN ((u32 (*)(const s16 *))FDE_DOWN)
 #define FDE_KEY_UP ((u32 (*)(const s16 *))FDE_UP)
+#define FDE_KNOB_TURN ((u32 (*)(const s16 *))FDE_KNOB)
 #define SY_POPUP_MS 1500
+#define SY_TONE_COUNT 15u
+/* Test 3: the file, with the stock calls FX deep edit's file uses (the builder checks their code). */
+#define FILE_OPEN ((s32 (*)(const char *, s32))0x800DEC61u)    /* 0 read, 0x601 write (create, truncate); < 0 fails */
+#define FILE_READ ((s32 (*)(s32, void *, s32))0x800DEC49u)
+#define FILE_WRITE ((s32 (*)(s32, const void *, s32))0x800DD9B9u)
+#define FILE_CLOSE ((s32 (*)(s32))0x800DEBD9u)
+#define SY_FILE_MAGIC 0x4E545953u                              /* "SYTN" */
+#define SY_FILE_VERSION 1u
+#define SY_FILE_BYTES 60                                       /* magic, version, tone, muted, 15; 45 knobs, 3 zero; FNV */
+#define FNV 2166136261u
+/* Test 3: an FX screen up (as FX deep edit finds it: the view on TOP's list whose vtable is the FX screen's). */
+#define TOP_OBJECT (*(u8 *const volatile *)0x80CFD350u)
+#define VIEW_AT ((u8 *(*)(u8 *, s32))0x800A01C1u)              /* (TOP + 0x38, i): TOP's i-th view, 0 past the last */
+#define FX_VIEW_VTABLE 0x802269C0u
+#define VIEWS 0x200
 #define DRY_MAX 0x7FFFF                                /* the packer clips every stem to 20 bits */
 #define DRY_MIN (-0x80000)
 
@@ -968,10 +993,87 @@ EXPORT UI_SMALL void sy_ui(void) {
     if (!s->req && s->state == SY_OFF) sy_start(s);
 }
 
+EXPORT const char sy_path[] = "B:/_sy_tones.bin";
+EXPORT u8 sy_file[SY_FILE_BYTES] __attribute__((aligned(4)));
+
+UI_SMALL static u32 sy_fnv(const u8 *p, u32 n) {
+    u32 h = FNV;
+    while (n--) h = (h ^ *p++) * 16777619u;
+    return h;
+}
+
+UI_SMALL static u32 get32(const u8 *p) { return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24; }
+
+UI_SMALL static void put32(u8 *p, u32 v) {
+    for (u32 i = 0; i < 4u; i++) p[i] = (u8)(v >> (8u * i));
+}
+
+/* Test 3: the file into RAM, once (the first key or knob event after the boot): a missing, short, long or bad file
+ * (magic, version, tones, sum) leaves the tones as designed. */
+UI_SMALL static void sy_ready(void) {
+    sy_t *s = &sy;
+    if (s->loaded) return;
+    s->loaded = 1;
+    s32 fd = FILE_OPEN(sy_path, 0);
+    if (fd < 0) return;
+    s32 n = FILE_READ(fd, sy_file, SY_FILE_BYTES);
+    FILE_CLOSE(fd);
+    if (n != SY_FILE_BYTES || get32(sy_file) != SY_FILE_MAGIC || sy_file[4] != SY_FILE_VERSION ||
+        sy_file[7] != SY_TONE_COUNT || get32(sy_file + 56) != sy_fnv(sy_file, 56)) {
+        s->bad_files++;
+        return;
+    }
+    for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) {
+        u32 v = sy_file[8 + i];
+        s->knob[i / 3u][i % 3u] = (s8)((v > 127u ? 127u : v) - 64u);
+    }
+    s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
+    s->muted = sy_file[6] & 1u;
+    s->loads++;
+}
+
+/* Test 3: an FX screen on TOP's list (writing the file with one up sent the display to the main screen: FX deep edit's
+ * test 12 on the unit). */
+UI_SMALL static u32 sy_fx_screen(void) {
+    u8 *top = TOP_OBJECT;
+    if (!top) return 0;
+    for (s32 i = 0; i < VIEWS; i++) {
+        u8 *w = VIEW_AT(top + 0x38, i);
+        if (!w) break;
+        if (*(const volatile u32 *)w == FX_VIEW_VTABLE) return 1;
+    }
+    return 0;
+}
+
+/* Test 3: RAM into the file, whole (create, truncate); a failed open or short write is counted and stays pending. */
+UI_SMALL static void sy_save(void) {
+    sy_t *s = &sy;
+    put32(sy_file, SY_FILE_MAGIC);
+    sy_file[4] = SY_FILE_VERSION;
+    sy_file[5] = (u8)s->tone_req;
+    sy_file[6] = (u8)s->muted;
+    sy_file[7] = SY_TONE_COUNT;
+    for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) sy_file[8 + i] = (u8)(s->knob[i / 3u][i % 3u] + 64);
+    sy_file[53] = sy_file[54] = sy_file[55] = 0;
+    put32(sy_file + 56, sy_fnv(sy_file, 56));
+    s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
+    if (fd >= 0) {
+        n = FILE_WRITE(fd, sy_file, SY_FILE_BYTES);
+        FILE_CLOSE(fd);
+    }
+    if (n == SY_FILE_BYTES) {
+        s->dirty = 0;
+        s->saves++;
+    } else {
+        s->save_errors++;
+    }
+}
+
 /* Test 2: VALUE + pad n picks tone n (pad 16: off), with a popup naming it. */
 UI_SMALL static void sy_pick(u32 pad) {
     sy_t *s = &sy;
     s->picks++;
+    s->dirty = 1;
     if (pad == SY_OFF_PAD) {
         s->muted = 1;
     } else {
@@ -987,6 +1089,7 @@ static inline u32 key_held(u32 k) { return (KEYS[k >> 3] >> (k & 7u)) & 1u; }
  * fde_key_down): FX deep edit's first; then, while VALUE is held where the synth can play, a pad picks a tone and
  * goes no further (1: taken, so no sample plays and its bit in the held-key bitmap stays clear). */
 EXPORT u32 sy_key_down(const s16 *ev) {
+    sy_ready();
     if (FDE_KEY_DOWN(ev)) return 1;
     s32 key = ev[1];
     if ((u32)key < PADS && key_held(KEY_VALUE) && sy_can_play()) {
@@ -998,14 +1101,49 @@ EXPORT u32 sy_key_down(const s16 *ev) {
 }
 
 /* Every key release (in place of fde_key_up): the release of a pad whose press the pick took is taken too; any other
- * goes to FX deep edit's. */
+ * goes to FX deep edit's. Test 3: VALUE let go after a pick or a knob writes the file (no FX screen up). */
 EXPORT u32 sy_key_up(const s16 *ev) {
     s32 key = ev[1];
+    sy_ready();
+    if (key == KEY_VALUE && sy.dirty && !sy_fx_screen()) sy_save();
     if ((u32)key < PADS && ((sy.taken >> key) & 1u)) {
         sy.taken &= ~(1u << key);
         return 1;
     }
     return FDE_KEY_UP(ev);
+}
+
+/* Test 3: a knob's popup: the tone, then the setting and the knob's position ("SY 4 SUPERSAW", "DETUNE 75"). */
+static char sy_text[40];
+
+UI_SMALL static void sy_knob_popup(u32 tone, u32 k, u32 pos) {
+    char *p = put_str(sy_text, SY_POPUP[tone]);
+    *p++ = '\n';
+    p = put_str(p, k == 1u ? SY_P2_NAMES[tone] : SY_KNOB_NAMES[k]);
+    *p++ = ' ';
+    p = put_u(p, pos);
+    *p = 0;
+    POPUP_POST(sy_text, SY_POPUP_MS);
+}
+
+/* Every knob turn, on any page (FX deep edit's knob bridge calls this in place of fde_knob): FX deep edit's first
+ * (its input FX screens); then, with VALUE held where the synth can play, CTRL 1-3 set the picked tone's BRIGHT, its
+ * own setting and LEVEL to the knob's position (0..127; 64 is the tone as designed), and the bus effect never sees
+ * the turn. */
+EXPORT u32 sy_knob(const s16 *ev) {
+    sy_ready();
+    if (FDE_KNOB_TURN(ev)) return 1;
+    s32 k = ev[1] - 1, pos = ev[2];
+    if ((u32)k < 3u && key_held(KEY_VALUE) && sy_can_play()) {
+        sy_t *s = &sy;
+        u32 tone = s->tone_req < SY_TONE_COUNT ? s->tone_req : 0u;
+        pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
+        s->knob[tone][k] = (s8)(pos - 64);
+        s->dirty = 1;
+        sy_knob_popup(tone, (u32)k, (u32)pos);
+        return 1;
+    }
+    return 0;
 }
 
 /* Every UI tick, on the Sound Generator page: the tracker's note there, through the entry MIDI IN on the page's

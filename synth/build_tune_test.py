@@ -1,4 +1,4 @@
-"""SY synth test 2, with guitar synth test 6 (note tracker 3), on v9.52 (test only).
+"""SY synth test 3, with guitar synth test 6 (note tracker 3), on v9.52 (test only).
 
 SY synth test 1: a polyphonic guitar synth in the way BOSS's SY pedals work (Roland's patent US 9,542,923). The
 input the effects chip hands back (RX pair 0) is split into 49 bands a semitone apart, E2..E6; each band's pitch
@@ -12,6 +12,10 @@ play (a popup names it; the pad's press and release go no further). The key pres
 bridges in v9.52: the UI dispatcher's key press and release handlers (0x8003abd0, 0x8003ada0) jump to them, and each
 calls its handler (bl); the builder re-points those two calls to sy_key_down / sy_key_up, which hand every key to
 FX deep edit's handlers first / unless the pick took it. The engine now runs on the tracker's stack.
+
+SY synth test 3: VALUE held + CTRL 1-3 set the picked tone's BRIGHT, its own setting and LEVEL (the knob events through
+FX deep edit's knob bridge, its call re-pointed to sy_knob, which asks FX deep edit's handler first). The picks and
+knobs are kept in B:/_sy_tones.bin, with the stock file calls FX deep edit's file uses (their code checked here).
 
 On the Sound Generator page, guitar synth test 6 as before:
 The input the effects chip hands back (RX pair 0, after the input FX) goes through a note tracker on the main
@@ -66,11 +70,14 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test2'
+REVISION = 'sy-synth-test3'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
 BOUNCE_SLOT = (0x83FE8000, 0x83FED000)
+# SY test 3: sy_block (the engine's memory, section .sybss) outside the module, in the slot no v9.52 feature uses
+# between FX deep edit's (to 0x83FE6000) and bounce's (from 0x83FE8000); a boot zero row clears it.
+SY_BSS = (0x83FE6000, 0x83FE8000)
 TX_BRIDGE, RX_BRIDGE, UI_BRIDGE = 0x83FE8000, 0x83FE8030, 0x83FE8080   # bounce-3-test9's bridges
 TX_SITE, RX_SITE, FEED, LOOP, TX_BACK, TICK_REST = 0x0001D090, 0x0001D0C2, 0x0001CA80, 0x0001D05C, 0x0001D09A, 0x8006B95C
 
@@ -85,7 +92,22 @@ ROUTING_GETTER = 0x80081158         # a stock getter of system 0x5c (INPUT SETTI
 # goes on in stock code, and FX deep edit's slot.
 FDE_HOOKS = ((0x8003ABD0, 'down', 0x8003ABDD, ['push {r4, r5, r6, r7, lr}', 'sub sp, #4', 'ldrsh.w r4, [r0, #2]',
                                                'movw r0, #0xd314']),
-             (0x8003ADA0, 'up', 0x8003ADAB, ['push {r4, r5, r7, lr}', 'ldrsh.w r4, [r0, #2]', 'movw r0, #0xd314']))
+             (0x8003ADA0, 'up', 0x8003ADAB, ['push {r4, r5, r7, lr}', 'ldrsh.w r4, [r0, #2]', 'movw r0, #0xd314']),
+             (0x8003A8D8, 'knob', 0x8003A8E5, ['push {r4, r5, r6, lr}', 'mov r6, r0', 'ldrsh.w r4, [r0, #2]',
+                                               'ldrsh.w r5, [r0, #4]']))
+# SY test 3: stock code the file and the FX screen check rely on, unchanged since FX deep edit's test 11/12 checked it:
+# (start, end, SHA-256 of the runtime bytes, what it establishes)
+SHA_GUARDS = [
+    (0x800DEC48, 0x800DEC74, '4c47643ec8919640e6d5e25d52995230bcb2544ac00915fb0b4f3a6c79718504',
+     'file read (fd, buf, n) and open (path, flags: 0 read, 0x601 write, create, truncate)'),
+    (0x800DEBD8, 0x800DEC48, '22abec76d1aba2f98baf9ba58a4383d2075417a6d981e86b791054dccef5d6bf', 'file close (fd)'),
+    (0x800DD9B8, 0x800DD9F8, 'd204acf3596d8eab1eca7a6d4e1cf2aec6429890e0b05a88ed1357982cda0fb6',
+     'file write (fd, buf, n): bytes written'),
+    (0x800A01C0, 0x800A01D8, '3bc4ce29b1296cab9716835efe4a5882e6bd89469d756e884a858981940aaee2',
+     'a page\'s i-th view (list = page + 0x38), 0 past the last: the FX screen check walks TOP\'s'),
+    (0x8005EDA8, 0x8005EE4A, 'c20fec979fc3f36e617c845a861d61a6201739654a997ff567b796b9c1dc2a3a',
+     'TOP\'s registry handler: the page object [0x80cfd350] with vtable 0x8022ce5c (TOP\'s views at +0x38)'),
+]
 FDE_SLOT = (0x83FE2000, 0x83FE6000)
 PAD_TEMPO = 0x80047DD0              # the stock sample tempo (BPM x 100) for a pad, as the arp asks it
 
@@ -93,8 +115,8 @@ EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', '
            'meter_mix_begin', 'meter_mix_end', 'meter_ui_tick', 'tune_format', 'diag_ui', 'diag_rx',
            'tune_rx', 'tune_ui', 'tune_pairs', 'diag_rx_c', 'tune_fp_call', 'tune_fp_step', 'syn_ui', 'memset',
            'memcpy', 'meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy_rx', 'sy_tx', 'sy_ui', 'sy_fp_call',
-           'sy_fp_step', 'sy', 'sy_block', 'sy_layout', 'sy_key_down', 'sy_key_up')
-DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout')
+           'sy_fp_step', 'sy', 'sy_block', 'sy_layout', 'sy_key_down', 'sy_key_up', 'sy_knob', 'sy_path', 'sy_file')
+DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file')
 
 # Exact instructions at and around every site (capstone text).
 GUARDS = [
@@ -474,6 +496,10 @@ def check_guards(img):
     fde = fde_bridges(img)
     found['fde'] = {k: dict(bridge=hex(v['bridge']), call=hex(v['call']), handler=hex(v['handler']),
                             listing=v['listing']) for k, v in fde.items()}
+    for lo, hi, digest, why in SHA_GUARDS:
+        if sha(read(img, lo, hi - lo)) != digest:
+            raise ValueError(f'{lo:#x}..{hi:#x} ({why}): its code is not the one FX deep edit checked')
+        found[f'sha_{lo:#x}'] = dict(end=hex(hi), sha256=digest, why=why)
     return found, pre_target, bridges, sg_midi, kit_mode, fde
 
 
@@ -493,13 +519,18 @@ def elf_sections(data):
     return sections, names
 
 
-def read_module(data, base, limit):
+def read_module(data, base, limit, extra=None):
     """Allocated ELF sections (BSS as zeros), the global symbols, every function symbol with its size, and the
-    .text span with its mapping symbols."""
+    .text span with its mapping symbols. A NOBITS section inside `extra` (lo, hi) is left out of the image; its span
+    goes to extra_spans (SY test 3: sy_block)."""
     sections, names = elf_sections(data)
     syms, funcs, blocks, end, text = {}, [], [], base, None
+    extra_spans = []
     for name, kind, flags, addr, off, size, link, info, align, entsize in sections:
         if flags & 2 and size:
+            if extra and kind == 8 and extra[0] <= addr and addr + size <= extra[1]:
+                extra_spans.append((addr, addr + size))
+                continue
             if not base <= addr < limit or addr + size > limit:
                 raise ValueError(f'ELF section at {addr:#x}+{size:#x} outside {base:#x}..{limit:#x}')
             blocks.append((addr, bytes(size) if kind == 8 else data[off:off + size]))
@@ -525,6 +556,7 @@ def read_module(data, base, limit):
     out = bytearray(end - base)
     for addr, block in blocks:
         out[addr - base:addr - base + len(block)] = block
+    read_module.extra_spans = extra_spans
     return bytes(out), syms, funcs, (text[0], text[1], sorted(set(maps)))
 
 
@@ -553,7 +585,8 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fd
         f'#define SG_PRE_TARGET {pre_target:#010x}\n#define BNC_UI {bridges["bnc_ui"]:#010x}u\n'
         f'#define BNC_RX {bridges["bnc_rx"]:#010x}u\n#define SG_MIDI {sg_midi:#010x}u\n'
         f'#define KIT_MODE {kit_mode:#010x}u\n#define FDE_DOWN {fde["down"]["handler"] | 1:#010x}u\n'
-        f'#define FDE_UP {fde["up"]["handler"] | 1:#010x}u\n', encoding='ascii', newline='\n')
+        f'#define FDE_UP {fde["up"]["handler"] | 1:#010x}u\n#define FDE_KNOB {fde["knob"]["handler"] | 1:#010x}u\n',
+        encoding='ascii', newline='\n')
     (folder / 'sy_tables.h').write_text(sy_ref.c_header(), encoding='ascii', newline='\n')
     (folder / 'sy_names.h').write_text(sy_ref.c_names(), encoding='ascii', newline='\n')
     # The integer side (tune_test.o) first, from the base to tt_integer_end; then the FPU side. Unused sections go
@@ -566,6 +599,7 @@ SECTIONS {{
  .rodata : ALIGN(4) {{ KEEP(*(.rodata.tt_layout)) KEEP(*(.rodata.sy_layout)) *(.rodata*) }}
  .data : ALIGN(4) {{ *(.data*) }}
  .bss : ALIGN(32) {{ *(.bss*) *(COMMON) }}
+ .sybss {SY_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.sybss)) }}
  /DISCARD/ : {{ *(.ARM.exidx*) *(.ARM.extab*) *(.comment) *(.note*) *(.ARM.attributes) }}
 }}
 ''', encoding='ascii', newline='\n')
@@ -586,7 +620,11 @@ SECTIONS {{
     subprocess.run([str(zig), 'cc', *target, '-nostdlib', '-Wl,--no-undefined', '-Wl,--build-id=none',
                     '-Wl,--gc-sections', '-Wl,-e,meter_mix_entry', '-Wl,-T,' + str(folder / 'tune_test.ld'),
                     *map(str, objs), '-o', str(elf)], check=True, env=env)
-    code, syms, funcs, text = read_module(elf.read_bytes(), base, LIMIT)
+    code, syms, funcs, text = read_module(elf.read_bytes(), base, LIMIT, SY_BSS)
+    extra = read_module.extra_spans
+    if len(extra) != 1 or extra[0][0] != SY_BSS[0] or syms.get('sy_block') != SY_BSS[0]:
+        raise ValueError(f'sy_block not alone at {SY_BSS[0]:#x}: {extra} {syms.get("sy_block")}')
+    compile_module.sy_bss = extra[0]
     missing = [n for n in EXPORTS + ('tt_integer_end',) if n not in syms]
     if missing:
         raise ValueError(f'module symbols missing: {missing}')
@@ -679,6 +717,12 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     hits = refs_into(bytes(img), base, LIMIT)
     if hits:
         raise ValueError(f'input refers to the module area: {hits[:4]}')
+    for load, dst, n, fn in rows:                              # SY test 3: sy_block's slot is free in the input
+        if max(dst, SY_BSS[0]) < min(dst + n, SY_BSS[1]):
+            raise ValueError(f'row {dst:#x}+{n:#x} overlaps sy_block\'s slot')
+    hits = refs_into(bytes(img), SY_BSS[0], SY_BSS[1])
+    if hits:
+        raise ValueError(f'input refers to sy_block\'s slot: {hits[:4]}')
     code, syms, funcs, text, integer = compile_module(zig, (build_dir or out / 'build').resolve(), base, pre_target,
                                                       bridges, sg_midi, kit_mode, fde)
     end = base + len(code)
@@ -718,7 +762,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
                             target=t & ~1, original_target=original & ~1, what=f"bounce's bridge call -> {name}"))
         img[off:off + 8] = new
     # SY test 2: FX deep edit's bridges call sy_key_down / sy_key_up in place of its handlers (one bl each)
-    for name, ours in (('down', 'sy_key_down'), ('up', 'sy_key_up')):
+    for name, ours in (('down', 'sy_key_down'), ('up', 'sy_key_up'), ('knob', 'sy_knob')):
         site, t = fde[name]['call'], syms[ours] & ~1
         off = file_offset(img, site, 4)
         new = bytes(KS.asm(f'bl #{t:#x}', site)[0])
@@ -726,11 +770,12 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
             raise ValueError(f'bad {ours} call encoding')
         patches.append(dict(address=site, size=4, original_hex=bytes(img[off:off + 4]).hex(), replacement_hex=new.hex(),
                             target=t, original_target=fde[name]['handler'],
-                            what=f"FX deep edit's key {name} bridge: bl -> {ours} (which calls its handler)"))
+                            what=f"FX deep edit's {name} bridge: bl -> {ours} (which calls its handler)"))
         img[off:off + 4] = new
     file_at = append(img, code, 16)
     table = append(img, b'', 16)
-    for row in rows + [[FLASH + file_at, base, len(code), COPY]]:
+    sy_lo, sy_hi = compile_module.sy_bss
+    for row in rows + [[FLASH + file_at, base, len(code), COPY], [0, sy_lo, sy_hi - sy_lo, ZERO]]:
         img += struct.pack('<4I', *row)
     struct.pack_into('<2I', img, 0x80, table - 0x80, len(img) - 0x80)
     if FLASH + len(img) > FLASH_END:
@@ -742,7 +787,11 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 2: 15 tones and OFF (sy_ref.py TONES: saw lead, square, pulse, supersaw, pad, '
+        description='SY synth test 3: VALUE held + CTRL 1-3 set the picked tone\'s BRIGHT (-2..+2 octaves), its own '
+                    'setting (sy_ref TONES p2) and LEVEL (0..2 x), through FX deep edit\'s knob bridge (its call '
+                    're-pointed to sy_knob); picks and knobs kept in B:/_sy_tones.bin (read at the first key or knob '
+                    'event, written when VALUE is let go after a change, no FX screen up). '
+                    'SY synth test 2: 15 tones and OFF (sy_ref.py TONES: saw lead, square, pulse, supersaw, pad, '
                     'strings, organ, flute, FM bell, brass, bass, sweep, wah, a 16-step gate at the SP\'s tempo, '
                     'warm; each band\'s waves A/B, FM, attack and release, the filter mode, range, pick envelope and '
                     'LFO, noise, gain), picked with VALUE held + pad 1-16 where the synth can play (popup; the pad\'s '
@@ -790,7 +839,9 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
         source_sha256={str(p.relative_to(HERE)): sha(lf(p)) for p in SOURCES + HEADERS},
         test_plan_sha256=sha(lf(TEST_PLAN)), tool_sha256=sha(lf(Path(__file__))),
         compiler='zig 0.13.0 cc -target thumb-freestanding-eabihf -mcpu=cortex_m7+fp_armv8d16sp -O2',
-        rows_added=[dict(kind='copy', address=base, size=len(code))],
+        rows_added=[dict(kind='copy', address=base, size=len(code)),
+                    dict(kind='zero', address=sy_lo, size=sy_hi - sy_lo, what='sy_block (SY test 3: out of the module)')],
+        sy_bss=dict(slot=[SY_BSS[0], SY_BSS[1]], used=[sy_lo, sy_hi]),
         patches=patches, guards={hex(k) if isinstance(k, int) else k: v for k, v in guards.items()},
         tune=dict(memory='tt_block in the module (tt_block_bytes): the 12 kHz ring, an analysis\' span, the '
                          'difference functions, a 2 KB stack',
@@ -804,6 +855,10 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
                        'tunetest/sy_ref.py) in .rodata',
                 tones=[t['name'] for t in sy_ref.TONES],
                 pick='VALUE held + pad 1-16 where the synth can play: tone 1-15, pad 16 off; popup',
+                knobs='VALUE held + CTRL 1-3 where the synth can play: BRIGHT, ' +
+                      '/'.join(sorted({t['p2'][0] for t in sy_ref.TONES})) + ', LEVEL of the picked tone; popup',
+                file='B:/_sy_tones.bin, 60 bytes: "SYTN", version 1, tone, muted, 15, 45 knob positions, 3 zero, '
+                     'FNV-1a of the first 56',
                 steps='every RX block, after the tracker: pair 0 (L + R) / 2 -> 4th-order low-pass 2 kHz -> 12 kHz '
                       '-> 49 bands x 16 samples; the sounding bands\' saws x 64 samples; the output filter; 64 '
                       'values for TX\'s DRY pair',

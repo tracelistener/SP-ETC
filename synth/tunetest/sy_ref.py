@@ -25,6 +25,12 @@ Test 2: 15 tones (TONES) and OFF, picked on the unit with VALUE held + pad 1-16.
 bands' attack and release, the filter (low-, band- or high-pass, its cutoff range, resonance, a pick envelope), an
 LFO (vibrato, tremolo, cutoff), breath noise, a 16-step gate at the SP's tempo, and an output gain. A new tone fades
 the output out over 8 blocks, switches, and fades it in again.
+
+Test 3: three knobs per tone, CTRL 1-3 turned with VALUE held: BRIGHT (the cutoff, -2..+2 octaves), one setting of
+the tone's own (P2: resonance, pulse width, detune, attack, LFO speed, breath, FM depth, the pick envelope's depth, the
+sub's level, the steps' rate) and LEVEL (the output, 0..2 x). Each tone keeps its own three (knob positions 0..127,
+64 = the tone as designed); the unit keeps them, with the tone picked, in a file. knob_tone() applies them to a copy
+of the tone each block; a setting at 64 leaves the tone's own value untouched.
 """
 import math
 
@@ -60,6 +66,9 @@ EXP2_C = (0.6951786, 0.22657681, 0.07902149)   # 2^f ~ 1 + f (c1 + f (c2 + f c3)
 
 SAW, PULSE, TRI, SINE = range(4)
 LP, BP, HP = range(3)
+P_Q, P_PW, P_DETUNE, P_ATT, P_LFO, P_NOISE, P_FM, P_FENV, P_LB, P_SEQ = range(10)   # test 3: what CTRL 2 sets
+BLOCK_MS = BLOCK_S * 1000
+LOG2E = 1.4426950408889634
 
 
 def _tc(ms):
@@ -80,46 +89,54 @@ def _steps(bits):
 # quiet .. at a hard pick, q, fmode; fenv: octaves a pick adds (decaying over fdec ms); lfo Hz, vib cents, trem 0..1,
 # lfo_oct octaves of cutoff; noise: breath; seq: the 16 steps (1 = sound) at 1/16 of the SP's tempo; gain.
 TONES = [
-    dict(name='SAW LEAD', wa=SAW, fc_lo=300, fc_hi=5000, q=2.0, gain=1.0),
-    dict(name='SQUARE', wa=PULSE, pw=0.0, fc_lo=400, fc_hi=4000, q=1.5, gain=0.59),
-    dict(name='PULSE', wa=PULSE, pw=-0.5, fc_lo=500, fc_hi=6000, q=2.0, gain=0.36),
+    dict(name='SAW LEAD', wa=SAW, fc_lo=300, fc_hi=5000, q=2.0, gain=1.0, p2=('RESO', P_Q, 0.0, 2.0)),
+    dict(name='SQUARE', wa=PULSE, pw=0.0, fc_lo=400, fc_hi=4000, q=1.5, gain=0.59, p2=('WIDTH', P_PW, 0.0, 0.9)),
+    dict(name='PULSE', wa=PULSE, pw=-0.5, fc_lo=500, fc_hi=6000, q=2.0, gain=0.36, p2=('WIDTH', P_PW, 0.0, 0.45)),
     dict(name='SUPERSAW', wa=SAW, wb=SAW, rb=2 ** (12 / 1200), lb=1.0, att=20, rel=150, fc_lo=400, fc_hi=6000,
-         q=1.2, gain=0.61),
+         q=1.2, gain=0.61, p2=('DETUNE', P_DETUNE, 12.0, 2.0)),
     dict(name='PAD', wa=SAW, wb=SAW, rb=2 ** (-9 / 1200), lb=1.0, att=350, rel=900, fc_lo=250, fc_hi=2500, q=1.0,
-         lfo=0.25, lfo_oct=0.6, gain=0.9),
-    dict(name='STRINGS', wa=SAW, att=160, rel=450, fc_lo=500, fc_hi=4000, q=0.9, lfo=5.5, vib=6, gain=1.03),
+         lfo=0.25, lfo_oct=0.6, gain=0.9, p2=('ATTACK', P_ATT, 350.0, 2.0)),
+    dict(name='STRINGS', wa=SAW, att=160, rel=450, fc_lo=500, fc_hi=4000, q=0.9, lfo=5.5, vib=6, gain=1.03,
+         p2=('ATTACK', P_ATT, 160.0, 2.0)),
     dict(name='ORGAN', wa=SINE, wb=SINE, rb=2.0, lb=0.5, rel=60, fc_lo=3000, fc_hi=10000, q=0.7, lfo=6.5, vib=3,
-         trem=0.2, gain=0.81),
-    dict(name='FLUTE', wa=SINE, noise=0.25, att=60, rel=160, fc_lo=900, fc_hi=5000, q=0.8, lfo=5.0, vib=7, gain=0.8),
+         trem=0.2, gain=0.81, p2=('ROTARY', P_LFO, 0.0, 2.0)),
+    dict(name='FLUTE', wa=SINE, noise=0.25, att=60, rel=160, fc_lo=900, fc_hi=5000, q=0.8, lfo=5.0, vib=7, gain=0.8,
+         p2=('BREATH', P_NOISE, 0.0, 0.0)),
     dict(name='BELL', wa=SINE, wb=SINE, fm=1, rb=3.5, lb=0.15, fm_env=2.0, fdec=450, rel=900, fc_lo=4000,
-         fc_hi=12000, q=0.7, gain=0.57),
-    dict(name='BRASS', wa=SAW, att=35, rel=120, fc_lo=250, fc_hi=2500, fenv=1.6, fdec=260, q=1.4, gain=0.9),
-    dict(name='BASS', wa=PULSE, pw=0.0, wb=TRI, rb=0.5, lb=1.2, rel=40, fc_lo=150, fc_hi=1500, q=1.6, gain=0.5),
-    dict(name='SWEEP', wa=SAW, rel=300, fc_lo=200, fc_hi=1600, lfo=0.35, lfo_oct=1.6, q=5.0, gain=0.6),
-    dict(name='WAH', wa=SAW, fmode=BP, fc_lo=300, fc_hi=3600, fenv=1.0, fdec=150, q=4.0, gain=5.0),
+         fc_hi=12000, q=0.7, gain=0.57, p2=('METAL', P_FM, 0.0, 0.0)),
+    dict(name='BRASS', wa=SAW, att=35, rel=120, fc_lo=250, fc_hi=2500, fenv=1.6, fdec=260, q=1.4, gain=0.9,
+         p2=('OPEN', P_FENV, 0.0, 0.0)),
+    dict(name='BASS', wa=PULSE, pw=0.0, wb=TRI, rb=0.5, lb=1.2, rel=40, fc_lo=150, fc_hi=1500, q=1.6, gain=0.5,
+         p2=('SUB', P_LB, 0.0, 0.0)),
+    dict(name='SWEEP', wa=SAW, rel=300, fc_lo=200, fc_hi=1600, lfo=0.35, lfo_oct=1.6, q=5.0, gain=0.6,
+         p2=('SPEED', P_LFO, 0.0, 3.0)),
+    dict(name='WAH', wa=SAW, fmode=BP, fc_lo=300, fc_hi=3600, fenv=1.0, fdec=150, q=4.0, gain=5.0,
+         p2=('RESO', P_Q, 0.0, 1.5)),
     dict(name='SEQ', wa=SAW, wb=TRI, rb=0.5, lb=0.7, rel=80, fc_lo=400, fc_hi=5000, q=2.5,
-         seq=(1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0), gain=1.0),
-    dict(name='WARM', wa=TRI, wb=SINE, rb=0.5, lb=0.5, att=8, rel=120, fc_lo=700, fc_hi=4000, q=0.7, gain=0.74),
+         seq=(1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0), gain=1.0, p2=('RATE', P_SEQ, 0.0, 0.0)),
+    dict(name='WARM', wa=TRI, wb=SINE, rb=0.5, lb=0.5, att=8, rel=120, fc_lo=700, fc_hi=4000, q=0.7, gain=0.74,
+         p2=('SUB', P_LB, 0.0, 0.0)),
 ]
 OFF_PAD = 15                             # pad 16: the synth off
-TONE_FIELDS_U = ('wa', 'wb', 'fm', 'fmode', 'seq')
+TONE_FIELDS_U = ('wa', 'wb', 'fm', 'fmode', 'seq', 'p2kind', 'seqdiv')
 TONE_FIELDS_F = ('pw', 'rb', 'lb', 'fm_env', 'att', 'rel', 'fc_lo', 'oct', 'xmax', 'r2', 'fenv', 'fdec', 'lfo_inc',
-                 'vib', 'trem', 'lfo_oct', 'noise', 'gain')
+                 'vib', 'trem', 'lfo_oct', 'noise', 'gain', 'p2base', 'p2span', 'bright')
 
 
 def tone_params(t):
     """A tone as the C's sy_tone_t: integers, and single-precision values per block."""
     u = dict(wa=t['wa'], wb=0 if t.get('wb') is None else 1 + t['wb'], fm=t.get('fm', 0), fmode=t.get('fmode', LP),
-             seq=_steps(t['seq']) if t.get('seq') else 0)
+             seq=_steps(t['seq']) if t.get('seq') else 0, p2kind=t['p2'][1], seqdiv=4)
     f = dict(pw=t.get('pw', 0.0), rb=t.get('rb', 1.0), lb=t.get('lb', 0.0), fm_env=t.get('fm_env', 0.0),
              att=_tc(t.get('att', 0)), rel=_tc(t.get('rel', 0)), fc_lo=t['fc_lo'],
              oct=math.log2(t['fc_hi'] / t['fc_lo']), xmax=math.log2(FC_MAX / t['fc_lo']), r2=1 / t['q'],
              fenv=t.get('fenv', 0.0), fdec=_dec(t.get('fdec', 0)), lfo_inc=2 * t.get('lfo', 0.0) * BLOCK_S,
              vib=2 ** (t.get('vib', 0.0) / 1200) - 1, trem=t.get('trem', 0.0), lfo_oct=t.get('lfo_oct', 0.0),
-             noise=t.get('noise', 0.0), gain=t['gain'])
+             noise=t.get('noise', 0.0), gain=t['gain'], p2base=t['p2'][2], p2span=t['p2'][3], bright=0.0)
     out = {k: int(v) for k, v in u.items()}
     out.update({k: F32(v) for k, v in f.items()})
     out['name'] = t['name']
+    out['p2name'] = t['p2'][0]
     return out
 
 
@@ -168,13 +185,57 @@ def tables():
              RDYN=1 / DYN_REF, PI_FS=math.pi / FS, ENV_K=math.exp(-FRAMES / FS / ENV_TAU), OUT_SCALE=OUT_SCALE,
              TL_MIN=TL_MIN, IN_SCALE=1 / 32768, C1=EXP2_C[0], C2=EXP2_C[1], C3=EXP2_C[2], T3=1 / 3, T5=2 / 15,
              FADE=1 / (FADE_BLOCKS * FRAMES), AMP_EPS=AMP_EPS, P_MIN=P_MIN, P_RATIO=P_RATIO, GATE_K=GATE_K,
-             X_MIN=X_MIN, BEAT=BLOCK_S / 6000)
+             X_MIN=X_MIN, BEAT=BLOCK_S / 6000, BLOCK_MS=BLOCK_MS, INV1200=1 / 1200)
     g = {n: F32(v) for n, v in g.items()}
     tones = [tone_params(t) for t in TONES]
     return band, dec, g, tones
 
 
 BAND, DEC, G, TONE = tables()
+
+
+def exp2(x):
+    """2^x for x in (-32, 32): the cubic for the fraction, the power of two from the exponent bits."""
+    i = int(F32(x + F32(32))) - 32
+    fr = x - F32(i)
+    p = fma_s(fr, fma_s(fr, fma_s(fr, G['C3'], G['C2']), G['C1']), F32(1))
+    return p * F32(2.0 ** i)
+
+
+def knob_tone(T, kd):
+    """Test 3: the tone with its three knobs (deltas from 64: kd) applied, as sy_fp.c's sy_knobs."""
+    t = dict(T)
+    c1 = F32(kd[0]) * F32(0.015625)
+    t['bright'] = c1 * F32(2)
+    t['gain'] = T['gain'] * (F32(64 + kd[2]) * F32(0.015625))
+    if kd[1]:
+        c2 = F32(kd[1]) * F32(0.015625)
+        v2 = F32(64 + kd[1]) * F32(0.015625)
+        k = T['p2kind']
+        if k == P_Q:
+            t['r2'] = T['r2'] * exp2(-c2 * T['p2span'])
+        elif k == P_PW:
+            t['pw'] = fma_s(c2, T['p2span'], T['pw'])
+        elif k == P_DETUNE:
+            cents = T['p2base'] * exp2(c2 * T['p2span'])
+            t['rb'] = exp2(cents * G['INV1200'])
+        elif k == P_ATT:
+            tau = T['p2base'] * exp2(c2 * T['p2span'])
+            x = G['BLOCK_MS'] / tau                         # 1 - e^-x as x - x^2 / 2 (x <= 0.04: within 0.1%)
+            t['att'] = fma_s(F32(-0.5) * x, x, x)
+        elif k == P_LFO:
+            t['lfo_inc'] = T['lfo_inc'] * exp2(c2 * T['p2span'])
+        elif k == P_NOISE:
+            t['noise'] = T['noise'] * v2
+        elif k == P_FM:
+            t['fm_env'] = T['fm_env'] * v2
+        elif k == P_FENV:
+            t['fenv'] = T['fenv'] * v2
+        elif k == P_LB:
+            t['lb'] = T['lb'] * v2
+        elif k == P_SEQ:
+            t['seqdiv'] = 2 if kd[1] < -21 else (4 if kd[1] < 22 else 8)
+    return t
 
 
 def popup_name(pad):
@@ -205,9 +266,9 @@ def c_header():
     lines.append('};')
     lines.append('/* the tones, pads 1-15: ' + ', '.join(t['name'] for t in TONE) + ' */')
     lines.append('static const sy_tone_t SY_TONE[SY_TONES] = {')
-    for t in TONE:
-        lines.append('    {' + ', '.join(f'{t[n]}u' for n in TONE_FIELDS_U) + ', ' +
-                     ', '.join(hx(t[n]) for n in TONE_FIELDS_F) + '},')
+    for t in TONE:                                      # designated: the struct's own order does not matter
+        lines.append('    {' + ', '.join(f'.{n} = {t[n]}u' for n in TONE_FIELDS_U) + ', ' +
+                     ', '.join(f'.{n} = {hx(t[n])}' for n in TONE_FIELDS_F) + '},')
     lines.append('};')
     lines.append('#endif')
     return '\n'.join(lines) + '\n'
@@ -219,7 +280,10 @@ def c_names():
              '#ifndef SY_NAMES_H', '#define SY_NAMES_H', f'#define SY_OFF_PAD {OFF_PAD}u',
              'static const char *const SY_POPUP[16] = {']
     lines += [f'    "{popup_name(p)}",' for p in range(16)]
-    lines += ['};', '#endif']
+    lines += ['};', '/* test 3: what CTRL 1-3 set (CTRL 2: by tone) */',
+              'static const char *const SY_KNOB_NAMES[3] = {"BRIGHT", 0, "LEVEL"};',
+              f'static const char *const SY_P2_NAMES[{len(TONE)}] = {{' +
+              ', '.join(f'"{t["p2name"]}"' for t in TONE) + '};', '#endif']
     return '\n'.join(lines) + '\n'
 
 
@@ -278,6 +342,7 @@ class Engine:
         self.last_pick = -1000
         self.ns = 0                                     # the noise's LCG
         self.tone = tone
+        self.knobs = np.zeros((len(TONE), 3), np.int64)  # test 3: each tone's knobs, deltas from 64
         self.blocks = self.crossings = 0
         self.sounding = 0                               # bands sounding in the last block
         self.last = None                                # (own, target, frequency, cutoff) of the last block
@@ -287,7 +352,7 @@ class Engine:
         the engine is still running (False once a stop has faded)."""
         if tone_req is None:
             tone_req = self.tone
-        T = TONE[self.tone]
+        T = knob_tone(TONE[self.tone], [int(v) for v in self.knobs[self.tone]])
         x48 = np.asarray(ins16, np.int64).astype(F32) * G['IN_SCALE']
         z = self.dz
         x12 = np.zeros(SUB, F32)
@@ -479,6 +544,7 @@ class Engine:
             d = F32(1)
         xo = fma_s(T['fenv'], self.fe, T['lfo_oct'] * lfo)
         xo = fma_s(T['oct'], np.sqrt(d), xo)
+        xo = xo + T['bright']
         if xo > T['xmax']:
             xo = T['xmax']
         if xo < G['X_MIN']:
@@ -497,11 +563,13 @@ class Engine:
         gb = T['gain'] * tm
         gt = F32(1)
         if T['seq']:
+            div = T['seqdiv']
+            wrap = F32(16 // div)
             sp = self.seq_ph + F32(bpm100) * G['BEAT']
-            if sp >= F32(4):
-                sp = sp - F32(4)
+            if sp >= wrap:
+                sp = sp - wrap
             self.seq_ph = sp
-            gt = F32(1) if (T['seq'] >> (int(sp * F32(4)) & 15)) & 1 else F32(0)
+            gt = F32(1) if (T['seq'] >> (int(sp * F32(div)) & 15)) & 1 else F32(0)
         mgt = F32(0) if stopping or tone_req != self.tone else F32(1)
         s1, s2, mg, gate = self.s1, self.s2, self.mg, self.gate
         res = np.empty(FRAMES, np.int64)

@@ -1,4 +1,4 @@
-"""Checks for SY synth test 2 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
+"""Checks for SY synth test 3 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
 tracker (note tracker test 2's, with test 4's click and clean readings), the SY engine (12. below), and the synth: the tracker's note on the Sound Generator,
 the cases synth test 3 got wrong on the unit (picks at the ringing string's level, strings ringing together) and
 test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT; test 5's ROUTING gate (silent on Mix,
@@ -41,7 +41,12 @@ image. On top of them:
    - test 2: every tone value for value against sy_ref.py (the SEQ tone at the stub's tempo); VALUE + pad picks a
      tone (popup, the pad's press and release taken, FX deep edit's handlers asked first / for every other key),
      pad 16 stops the synth and another pad starts it again; a new tone fades out, switches and fades in, value for
-     value; the builder's two calls in FX deep edit's bridges; the popups fit the screen.
+     value; the builder's two calls in FX deep edit's bridges; the popups fit the screen;
+   - test 3: VALUE + CTRL 1-3 set the picked tone's knobs (FX deep edit's knob handler asked first, the turn taken, a
+     popup); every tone with its knobs turned value for value against sy_ref.py; the file (the stock file calls
+     emulated): written when VALUE is let go after a change (not with an FX screen up), read at the first key event of
+     a fresh start (the tone and knobs back, the engine as the twin with them), a bad or missing file ignored;
+     sy_block in its own zeroed slot.
 
 Not a hardware test: no timing (instructions are counted as a proxy), no screen, synthetic strings.
 """
@@ -107,7 +112,10 @@ def static_checks(out, man, parent_img, img):
     check(sha((out / 'SP404MKII_APP0.bin').read_bytes()) == man['app0_sha256'], 'APP0 is stock 5.52')
     rows_p, rows = scatter(parent_img), scatter(img)
     new_row = [FLASH + man['module_file_offset'], man['module_base'], man['module_size'], COPY]
-    check(rows == rows_p + [new_row], 'scatter table = parent rows + the module row')
+    zero_rows = [[0, r['address'], r['size'], base.ZERO] for r in man['rows_added'] if r['kind'] == 'zero']
+    check(rows == rows_p + [new_row] + zero_rows and len(zero_rows) == 1 and
+          zero_rows[0][1] == man['symbols']['sy_block'],
+          'scatter table = parent rows + the module row + sy_block\'s zero row (SY test 3: out of the module)')
     module = img[man['module_file_offset']:man['module_file_offset'] + man['module_size']]
     check(sha(module) == man['module_sha256'] and man['module_base'] + man['module_size'] <= man['module_limit'],
           f"module bytes match the manifest and end below {man['module_limit']:#x}")
@@ -149,9 +157,9 @@ def readout(img, man):
 
     def sy_put(state=0, sounding=0, avg=0, mx=0, tot_max_ever=0, over=0):
         at = sym['sy']
-        m.put(at + 4 * SY_HEAD.index('state'), state, '<I')
-        m.put(at + 4 * SY_HEAD.index('sounding'), sounding, '<I')
-        tail = at + 4 * len(SY_HEAD) + 256
+        m.put(at + SY_RUN_AT + 4 * SY_RUNF.index('state'), state, '<I')
+        m.put(at + SY_RUN_AT + 4 * SY_RUNF.index('sounding'), sounding, '<I')
+        tail = at + SY_OUT_AT + 256
         for k, v in (('seq', 0), ('p_avg', avg), ('p_max', mx), ('tot_max_ever', tot_max_ever), ('over', over)):
             m.put(tail + 4 * SY_TAIL.index(k), v, '<I')
 
@@ -965,11 +973,16 @@ def synth_checks(img, man, kit_sym):
 
 
 # ---------------------------------------------------------------------------------------------
-# SY synth tests 1 and 2: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx, sy_key_down,
-# sy_key_up) and its twin (sy_ref.py).
+# SY synth tests 1 to 3: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx, sy_key_down,
+# sy_key_up, sy_knob, the file) and its twin (sy_ref.py).
 SY_OFF, SY_RUN, SY_SLOW = range(3)
-SY_HEAD = ('req starts stops reset_req tone_req muted picks taken bpm100 tempo_checked state rx steps tx fresh stopping '
-           'sounding last_mix').split()
+SY_HEAD = 'req starts stops reset_req tone_req muted picks taken bpm100 tempo_checked'.split()
+SY_FILE = 'loads saves save_errors bad_files'.split()
+SY_RUNF = 'state rx steps tx fresh stopping sounding last_mix'.split()
+SY_KNOB_AT = 4 * len(SY_HEAD)                  # test 3: s8 knob[15][3], dirty, loaded, a pad byte
+SY_FILE_AT = SY_KNOB_AT + 48
+SY_RUN_AT = SY_FILE_AT + 4 * len(SY_FILE)
+SY_OUT_AT = SY_RUN_AT + 4 * len(SY_RUNF)
 SY_TAIL = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack'.split()
 DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own screens)
 
@@ -977,11 +990,12 @@ DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own 
 class SyLayout:
     """sy_t and sy_block_t offsets, from the module's sy_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<18I', m.bytes(sym['sy_layout'], 72))
+        v = struct.unpack('<21I', m.bytes(sym['sy_layout'], 84))
         (self.sy_bytes, self.state, self.out, self.w_n, self.pub, self.tot_max_ever, self.block_bytes, self.e,
          self.per, self.ph, self.amp, self.owned, self.env, self.started, self.tone, self.nper, self.tone_req,
-         self.fe) = v
-        check(self.state == 4 * SY_HEAD.index('state') and self.out == 4 * len(SY_HEAD) and
+         self.fe, self.knob, self.dirty, self.loads) = v
+        check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
+              self.dirty == SY_KNOB_AT + 45 and self.loads == SY_FILE_AT and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
               self.sy_bytes == self.tot_max_ever + 20 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
               self.started + 12 <= self.block_bytes,
@@ -991,13 +1005,19 @@ class SyLayout:
 class SyMachine(SynthMachine):
     """SynthMachine on the main screen, its RX block running tune_rx then sy_rx (as diag_rx_c), then the UI tick's
     syn_ui and sy_ui."""
-    def __init__(self, img, man, page=1, **kw):
+    def __init__(self, img, man, page=1, store=None, **kw):
         super().__init__(img, man, page=page, **kw)
         self.sl = SyLayout(self, self.sym)
+        self.files = Files(self, store)                # test 3: the stock file calls, on files kept in Python
 
     def sy(self):
         s = self.sym['sy']
         st = dict(zip(SY_HEAD, struct.unpack(f'<{len(SY_HEAD)}I', self.bytes(s, 4 * len(SY_HEAD)))))
+        kb = self.bytes(s + SY_KNOB_AT, 48)
+        st['knob'] = [list(struct.unpack('<3b', kb[3 * t:3 * t + 3])) for t in range(15)]
+        st['dirty'], st['loaded'] = kb[45], kb[46]
+        st.update(zip(SY_FILE, struct.unpack(f'<{len(SY_FILE)}I', self.bytes(s + SY_FILE_AT, 4 * len(SY_FILE)))))
+        st.update(zip(SY_RUNF, struct.unpack(f'<{len(SY_RUNF)}I', self.bytes(s + SY_RUN_AT, 4 * len(SY_RUNF)))))
         st['out'] = list(struct.unpack('<64i', self.bytes(s + self.sl.out, 256)))
         st.update(zip(SY_TAIL, struct.unpack(f'<{len(SY_TAIL)}I', self.bytes(s + self.sl.w_n, 4 * len(SY_TAIL)))))
         return st
@@ -1441,17 +1461,179 @@ def sy_tone_checks(img, man):
     check(not mism and switched == 207 and fade[2][2] > 0 and fade[9][2] < fade[2][2],
           f'VALUE + pad 9 while playing: the output fades out over 8 blocks, tone 9 from block {switched}, fades in; '
           f'the module = sy_ref.py value for value across it (first differences {mism[:3]})')
-    # 4. The builder's two calls: FX deep edit's bridges now call sy_key_down / sy_key_up.
-    calls = {}
-    for name, fn in (('down', 'sy_key_down'), ('up', 'sy_key_up')):
-        site = int(fde[name]['call'], 16)
-        code = mk.bytes(site, 4)
-        calls[name] = (code.hex(), fn)
+    # 4. The builder's three calls: FX deep edit's bridges now call sy_key_down / sy_key_up / sy_knob.
+    pairs = (('down', 'sy_key_down'), ('up', 'sy_key_up'), ('knob', 'sy_knob'))
+    calls = {name: (mk.bytes(int(fde[name]['call'], 16), 4).hex(), fn) for name, fn in pairs}
     patched = [p for p in man['patches'] if 'FX deep edit' in p.get('what', '')]
-    check(len(patched) == 2 and all(p['target'] == sym[fn] & ~1 and p['original_target'] == int(fde[n]['handler'], 16)
-                                    for p, (n, fn) in zip(patched, (('down', 'sy_key_down'), ('up', 'sy_key_up')))) and
+    check(len(patched) == 3 and all(p['target'] == sym[fn] & ~1 and p['original_target'] == int(fde[n]['handler'], 16)
+                                    for p, (n, fn) in zip(patched, pairs)) and
           all(mk.bytes(p['address'], 4).hex() == p['replacement_hex'] for p in patched),
-          f'FX deep edit\'s bridges call sy_key_down and sy_key_up (bl), in place of its handlers {calls}')
+          f'FX deep edit\'s bridges call sy_key_down, sy_key_up and sy_knob (bl), in place of its handlers {calls}')
+    sy_knob_checks(img, man)
+
+
+FILE_OPEN, FILE_READ, FILE_WRITE, FILE_CLOSE = 0x800DEC60, 0x800DEC48, 0x800DD9B8, 0x800DEBD8
+VIEW_AT, TOP_OBJECT, FX_VIEW_VTABLE = 0x800A01C0, 0x80CFD350, 0x802269C0
+SY_PATH = 'B:/_sy_tones.bin'
+
+
+class Files:
+    """The stock file calls (open, read, write, close) on a machine, on files kept here: path -> bytes."""
+    def __init__(self, m, store=None):
+        self.m, self.store, self.fds, self.writes = m, dict(store or {}), {}, []
+        for a, fn in ((FILE_OPEN, self._open), (FILE_READ, self._read), (FILE_WRITE, self._write),
+                      (FILE_CLOSE, self._close)):
+            m.uc.hook_add(UC_HOOK_CODE, fn, begin=a, end=a)
+
+    def _ret(self, uc, v):
+        uc.reg_write(ar.UC_ARM_REG_R0, v & 0xFFFFFFFF)
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def _open(self, uc, a, s_, _):
+        path = self.m.bytes(uc.reg_read(ar.UC_ARM_REG_R0), 64).split(b'\0')[0].decode('ascii')
+        mode = uc.reg_read(ar.UC_ARM_REG_R1)
+        if mode == 0 and path not in self.store:
+            return self._ret(uc, -1)
+        if mode:
+            self.store[path] = b''
+        fd = 3 + len(self.fds)
+        self.fds[fd] = [path, 0]
+        self._ret(uc, fd)
+
+    def _read(self, uc, a, s_, _):
+        fd, buf, n = (uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(3))
+        path, pos = self.fds[fd]
+        data = self.store[path][pos:pos + n]
+        uc.mem_write(buf, data)
+        self.fds[fd][1] += len(data)
+        self._ret(uc, len(data))
+
+    def _write(self, uc, a, s_, _):
+        fd, buf, n = (uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(3))
+        data = self.m.bytes(buf, n)
+        self.store[self.fds[fd][0]] += data
+        self.writes.append((self.fds[fd][0], data))
+        self._ret(uc, n)
+
+    def _close(self, uc, a, s_, _):
+        self._ret(uc, 0)
+
+
+def sy_file_bytes(tone, muted, knobs):
+    """B:/_sy_tones.bin as sy_save writes it: "SYTN", version 1, tone, muted, 15, 45 knob positions, 3 zero, FNV-1a."""
+    body = b'SYTN' + bytes([1, tone, muted, 15]) + bytes(64 + d for row in knobs for d in row) + bytes(3)
+    h = 2166136261
+    for c in body:
+        h = ((h ^ c) * 16777619) & 0xFFFFFFFF
+    return body + struct.pack('<I', h)
+
+
+def sy_knob_checks(img, man):
+    """SY test 3: the knobs and the file."""
+    import sy_ref
+    sym = man['symbols']
+    fde = man['guards']['fde']
+    down, up, knob = (int(fde[n]['handler'], 16) for n in ('down', 'up', 'knob'))
+    ev = SCRATCH + 0x200
+
+    def machine(store=None, **kw):
+        x = SyMachine(img, man, store=store, **kw)
+        for a in (down, up, knob):
+            x.stub(a, 0)
+        x.start()
+        return x, x.files
+
+    def send(x, fn, kind, k, pos=0):
+        x.uc.mem_write(ev, struct.pack('<4h', kind, k, pos, 0))
+        x.log.clear()
+        r = x.call(sym[fn], ev)
+        return r, [a for a, *_ in x.log]
+
+    def value(x, held):
+        b = x.get(base.KEYS + 6, '<B')
+        x.put(base.KEYS + 6, (b | 2) if held else (b & ~2), '<B')
+    # 1. VALUE + CTRL 1-3 on the picked tone (SUPERSAW): the knob's position, the popup, the turn taken.
+    m, files = machine()
+    value(m, True)
+    send(m, 'sy_key_down', 5, 3)
+    send(m, 'sy_key_up', 6, 3)
+    m.popups()
+    turned = send(m, 'sy_knob', 9, 2, 100)
+    text = m.posted()
+    st = m.sy()
+    m.popups()
+    bright = send(m, 'sy_knob', 9, 1, 0)
+    level = send(m, 'sy_knob', 9, 3, 127)
+    ctrl4 = send(m, 'sy_knob', 9, 4, 30)
+    value(m, False)
+    plain = send(m, 'sy_knob', 9, 2, 10)
+    st2 = m.sy()
+    check(turned == (1, [knob]) and text == 'SY 4 SUPERSAW\nDETUNE 100' and st['knob'][3] == [0, 36, 0] and
+          st['dirty'] == 1 and bright[0] == 1 and level[0] == 1 and st2['knob'][3] == [-64, 36, 63] and
+          ctrl4 == (0, [knob]) and plain == (0, [knob]) and st2['knob'][3][1] == 36,
+          f'VALUE + CTRL 2 on SUPERSAW: FX deep edit\'s knob handler asked first, then DETUNE to the knob\'s 100 '
+          f'({text!r}), the turn taken; CTRL 1 and 3 BRIGHT and LEVEL; CTRL 4, and a turn without VALUE, go on')
+    # 2. The file: written when VALUE is let go after the change, not with an FX screen up.
+    m.put(TOP_OBJECT, SCRATCH + 0x400, '<I')
+    m.put(SCRATCH + 0x600, FX_VIEW_VTABLE, '<I')
+    shown = [True]
+
+    def view_at(uc, a, s_, _):
+        i = uc.reg_read(ar.UC_ARM_REG_R1)
+        uc.reg_write(ar.UC_ARM_REG_R0, SCRATCH + 0x600 if (shown[0] and i == 0) else 0)
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+    m.uc.hook_add(UC_HOOK_CODE, view_at, begin=VIEW_AT, end=VIEW_AT)
+    value(m, True)
+    send(m, 'sy_key_down', 5, 0x31)
+    rel = send(m, 'sy_key_up', 6, 0x31)
+    held_back = (len(files.writes), m.sy()['dirty'])
+    shown[0] = False
+    rel2 = send(m, 'sy_key_up', 6, 0x31)
+    st3 = m.sy()
+    want = sy_file_bytes(3, 0, st3['knob'])
+    check(held_back == (0, 1) and rel == (0, [up]) and rel2 == (0, [up]) and
+          files.writes == [(SY_PATH, want)] and st3['dirty'] == 0 and st3['saves'] == 1,
+          f'VALUE let go with an FX screen up: no file yet; with none, {SY_PATH} written once ({len(want)} bytes: '
+          f'"SYTN", version 1, tone 4, the 45 knobs, FNV-1a), the release still FX deep edit\'s')
+    # 3. A fresh start with that file: read at the first key event; the tone and knobs back; the engine as the twin.
+    mf, f2 = machine({SY_PATH: want})
+    before = mf.sy()['loaded']
+    send(mf, 'sy_key_down', 5, 0x12)                                   # EXT SOURCE: any key reads the file first
+    st4 = mf.sy()
+    eng = sy_ref.Engine(3)
+    eng.knobs[3] = st4['knob'][3]
+    mf.call(sym['sy_ui'])
+    mism = []
+    blocks = ref.to_blocks(sy_strum('G')[0])
+    for b, values in enumerate(blocks[:300]):
+        mf.feed(values)
+        mf.call(sym['sy_rx'])
+        got = list(struct.unpack('<64i', mf.bytes(sym['sy'] + mf.sl.out, 256)))
+        if got != eng.step(values, bpm100=mf.sy()['bpm100'])[0]:
+            mism.append(b)
+    check(before == 0 and st4['loaded'] == 1 and st4['loads'] == 1 and st4['tone_req'] == 3 and
+          st4['knob'][3] == [-64, 36, 63] and not mism,
+          f'a fresh start with the file: read at the first key event (EXT SOURCE), tone 4 and its knobs back, the '
+          f'engine = sy_ref.py with them, value for value (300 blocks; first differences {mism[:3]})')
+    bad = bytearray(want)
+    bad[20] ^= 1
+    mb, f3 = machine({SY_PATH: bytes(bad)})
+    send(mb, 'sy_key_down', 5, 0x12)
+    mn, f4 = machine()
+    send(mn, 'sy_knob', 9, 2, 50)
+    sb, sn = mb.sy(), mn.sy()
+    check(sb['bad_files'] == 1 and sb['loads'] == 0 and sb['tone_req'] == 0 and all(r == [0, 0, 0] for r in sb['knob'])
+          and sn['loaded'] == 1 and sn['loads'] == 0 and sn['bad_files'] == 0 and not f4.writes,
+          'a file whose sum is wrong is ignored (the tones as designed); no file: nothing read, nothing written yet')
+    # 4. The popups fit the screen: the tone's line and the setting's at the knob's top.
+    width, line = base.font_widths(img)
+    texts = [f'{sy_ref.popup_name(t)}\n{n} 127' for t in range(len(sy_ref.TONES))
+             for n in ('BRIGHT', sy_ref.TONE[t]['p2name'], 'LEVEL')]
+    widest = max(sum(width(c) for c in ln) for t in texts for ln in t.split('\n'))
+    check(widest - 1 + 18 <= 128 and 2 * line - 1 + 8 <= 64,
+          f'every knob popup fits the screen: widest line {widest} px')
+    report['sy']['knobs'] = dict(p2=[t['p2name'] for t in sy_ref.TONE], file=SY_PATH, file_bytes=len(want),
+                                 widest_popup_px=widest)
 
 
 def entry_checks(parent_img, img, sym):

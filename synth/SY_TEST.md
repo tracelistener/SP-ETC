@@ -210,6 +210,69 @@ sequencer), then said "Build it".
   - The meter's popup-tick entry check no longer compares LR at the resume point. Bounce's bridge saves LR before
     calling diag_ui, so LR is dead there, and since test 2 diag_ui's last call (the tempo read) leaves its own.
 
+## SY synth test 3 (sy-synth-test3): knob editing, saved
+
+The user asked about parameter editing, then chose to include saving.
+
+- **Editing:** hold VALUE and turn CTRL 1-3 where the synth can play. Each turn sets that knob of the picked tone to
+  the knob's position (0..127; 64 is the tone as designed). A popup shows the tone, the setting and the position,
+  for example `SY 4 SUPERSAW` / `DETUNE 100`. The bus effect never sees the turn, but the knob's position is shared:
+  the next turn without VALUE moves the bus effect to it.
+  - **CTRL 1, BRIGHT:** -2..+2 octaves on the cutoff.
+  - **CTRL 3, LEVEL:** the output, 0..2x.
+  - **CTRL 2, by tone** (`sy_ref.TONES` p2):
+
+    | Tone | CTRL 2 | Range |
+    | --- | --- | --- |
+    | saw lead | RESO | Q x 2^(+-2) |
+    | wah | RESO | Q x 2^(+-1.5) |
+    | square, pulse | WIDTH | the pulse edge +-0.9 and +-0.45 |
+    | supersaw | DETUNE | 12 cents x 2^(+-2) |
+    | pad, strings | ATTACK | 350 ms and 160 ms x 2^(+-2) |
+    | organ | ROTARY | 6.5 Hz x 2^(+-2) |
+    | sweep | SPEED | 0.35 Hz x 2^(+-3) |
+    | flute | BREATH | 0..2x |
+    | bell | METAL | the FM depth at a pick, 0..2x |
+    | brass | OPEN | the pick envelope's octaves, 0..2x |
+    | bass, warm | SUB | wave B's level, 0..2x |
+    | seq | RATE | 1/8, 1/16 or 1/32 |
+
+  - A CTRL 2 at 64 leaves the tone's own value untouched. The exp2 the knobs use is a close approximation, not the
+    table's exact value. Attack is computed as x - x^2/2: through exp2, 1 - 2^-x lost 40% of itself at long
+    attacks.
+- **How the turns arrive:** v9.52's FX deep edit also hooks the dispatcher's knob handler (0x8003a8d8). Its bridge
+  calls fde_knob, and the builder re-points that call to sy_knob, which asks FX deep edit's handler first: it takes
+  turns only on its own input FX screens.
+- **The file:** `B:/_sy_tones.bin`, beside FX deep edit's `B:/_fx_hidden.bin`, written with the stock file calls
+  FX deep edit uses. The builder checks their code, the view list call and TOP's handler against the hashes FX deep
+  edit recorded.
+  - 60 bytes: "SYTN", version 1, the tone picked, OFF, 15, the 45 knob positions, 3 zero bytes, and an FNV-1a of
+    the first 56.
+  - Read once, at the first key or knob event after the boot. EXT SOURCE has to be pressed before the synth plays,
+    so the file is read before it plays.
+  - Written when VALUE is let go after a pick or a knob turn, never while an FX screen is up. FX deep edit learned
+    that one on the unit: a write with the FX screen up sent the display to the main screen.
+  - A missing, short or bad file (magic, version, count, sum) leaves the tones as designed.
+- **Memory:** the module overflowed its slot by 260 bytes. So `sy_block` (2,560 bytes, section `.sybss`) moved out to
+  0x83FE6000, in the free slot between FX deep edit's (to 0x83FE6000) and bounce's (from 0x83FE8000). The builder
+  checks that no row overlaps that slot and nothing in the input refers to it, and gives it a boot zero row. The
+  module is 42,756 bytes of 45,056.
+- **Emulator checks:** 264 pass on `release/sy-synth-test3` (APP1 `d3d4365a…aa0fe`, 3,200,448 bytes). The SY
+  section has 107 of them, 11 for test 3:
+  - VALUE + CTRL 2 on SUPERSAW sets DETUNE to the knob's 100. FX deep edit's handler is asked first, the popup reads
+    `SY 4 SUPERSAW` / `DETUNE 100`, and the turn is taken.
+  - CTRL 1 and 3 set BRIGHT and LEVEL; CTRL 4, or a turn without VALUE, goes on.
+  - With the stock file calls emulated:
+    - VALUE let go with an FX screen up writes nothing;
+    - with no FX screen, the file is written once, byte for byte as expected;
+    - a fresh start reads it at the first key event, and tone 4 comes back with its knobs, the engine equal to
+      `sy_ref.py` with them;
+    - a file with a wrong sum is ignored, and with no file nothing is read or written.
+  - The popups fit the screen.
+  - The scatter table has `sy_block`'s zero row.
+  - The builder's three calls are in FX deep edit's bridges.
+  - Separately, every tone with its knobs turned (four settings across the tones) equals the twin value for value.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -217,7 +280,7 @@ sequencer), then said "Build it".
   about 1.4-1.6 times the saw lead's instructions.
 - Whether anything on the unit uses VALUE + pad (nothing in v9.52's modules does; stock is not known to).
 - How the low notes' 20-30 ms feel in longer playing (nothing was reported against them).
-- Whether the synth's level against the dry guitar is right. There is no level control yet; the test's output peaks
-  near -6 dBFS.
+- Test 3: whether the file saves and comes back on the unit (FX deep edit's way of saving works there), and whether
+  the shared knob positions (the bus effect jumping after an edit) get in the way.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

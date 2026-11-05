@@ -38,6 +38,10 @@
  *   A new tone fades the output out over 8 blocks, switches (the filter, LFO, pick envelope and gate from rest), and
  *   fades it in again.
  *
+ * Test 3: each block, the tone playing with its three knobs (sy.knob[tone], knob positions - 64, set on the unit with
+ * VALUE + CTRL 1-3; sy_knobs): BRIGHT adds -2..+2 octaves to the cutoff, LEVEL scales the output 0..2 x, and CTRL 2
+ * sets the tone's own P2 (sy_ref.TONES p2). A knob at 64 leaves the tone's value as designed.
+ *
  * Single precision throughout, no contraction (the pragma below): every fused multiply-add is an explicit fmaf, so
  * tunetest/sy_ref.py computes the same numbers; test_tune_test.py runs both on the same input.
  */
@@ -46,6 +50,7 @@
 #include "sy_tables.h"     /* from the builder (sy_ref.py's tables): SY_DEC, SY_BAND, SY_TONE, the constants */
 
 #define FMA(a, b, c) __builtin_fmaf((a), (b), (c))
+_Static_assert(SY_TONES == 15, "sy_t's knob table holds 15 tones");
 
 /* fn(arg) on the stack that ends at stack_top (8-byte aligned), with FPSCR and d0-d15 saved on it. */
 __attribute__((naked, used)) u32 sy_fp_call(u32 (*fn)(sy_t *), sy_t *arg, void *stack_top) {
@@ -179,6 +184,66 @@ static u32 sy_bands(sy_block_t *b, const float *dx) {
         if (e < SY_E_FLOOR) b->nper[k] = 0;
     }
     return crossings;
+}
+
+/* 2^x for x in (-32, 32): the cubic for the fraction, the power of two from the exponent bits (test 3). */
+static float sy_exp2(float x) {
+    s32 i = (s32)(x + 32.0f) - 32;
+    float fr = x - (float)i;
+    float p = FMA(fr, FMA(fr, FMA(fr, SY_C3, SY_C2), SY_C1), 1.0f);
+    union {
+        u32 u;
+        float f;
+    } q;
+    q.u = (u32)(i + 127) << 23;
+    return p * q.f;
+}
+
+/* Test 3: the tone with its knobs (kd: CTRL 1-3 as knob position - 64). CTRL 2 is left alone at 64, so the tone's
+ * value stays exactly as designed (the exp2 above is a close approximation, not the table's). */
+static void sy_knobs(sy_tone_t *t, const volatile s8 *kd) {
+    s32 k1 = kd[0], k2 = kd[1], k3 = kd[2];
+    t->bright = ((float)k1 * 0.015625f) * 2.0f;
+    t->gain = t->gain * ((float)(64 + k3) * 0.015625f);
+    if (!k2) return;
+    float c2 = (float)k2 * 0.015625f, v2 = (float)(64 + k2) * 0.015625f;
+    switch (t->p2kind) {
+    case 0:                                             /* resonance: Q x 2^(c span) */
+        t->r2 = t->r2 * sy_exp2(-c2 * t->p2span);
+        break;
+    case 1:                                             /* pulse width */
+        t->pw = FMA(c2, t->p2span, t->pw);
+        break;
+    case 2: {                                           /* detune: cents x 2^(c span) */
+        float cents = t->p2base * sy_exp2(c2 * t->p2span);
+        t->rb = sy_exp2(cents * SY_INV1200);
+        break;
+    }
+    case 3: {                                           /* attack: ms x 2^(c span); 1 - e^-x as x - x^2 / 2 */
+        float tau = t->p2base * sy_exp2(c2 * t->p2span);
+        float x = SY_BLOCK_MS / tau;
+        t->att = FMA(-0.5f * x, x, x);
+        break;
+    }
+    case 4:                                             /* LFO speed */
+        t->lfo_inc = t->lfo_inc * sy_exp2(c2 * t->p2span);
+        break;
+    case 5:                                             /* breath */
+        t->noise = t->noise * v2;
+        break;
+    case 6:                                             /* FM depth at a pick */
+        t->fm_env = t->fm_env * v2;
+        break;
+    case 7:                                             /* the pick envelope's octaves */
+        t->fenv = t->fenv * v2;
+        break;
+    case 8:                                             /* wave B's level (the sub) */
+        t->lb = t->lb * v2;
+        break;
+    default:                                            /* the steps a beat: 2, 4, 8 */
+        t->seqdiv = k2 < -21 ? 2u : k2 < 22 ? 4u : 8u;
+        break;
+    }
 }
 
 /* sin(pi ph) for ph in [-1, 1): a parabola, then one correction (error about 0.001). */
@@ -345,6 +410,7 @@ static float sy_output(sy_t *s, sy_block_t *b, const sy_tone_t *t, float lfo, u3
     if (d > 1.0f) d = 1.0f;
     float xo = FMA(t->fenv, b->fe, t->lfo_oct * lfo);
     xo = FMA(t->oct, __builtin_sqrtf(d), xo);
+    xo = xo + t->bright;                                /* test 3: CTRL 1 */
     if (xo > t->xmax) xo = t->xmax;
     if (xo < SY_X_MIN) xo = SY_X_MIN;
     s32 i = (s32)(xo + 8.0f) - 8;
@@ -366,10 +432,12 @@ static float sy_output(sy_t *s, sy_block_t *b, const sy_tone_t *t, float lfo, u3
     float gb = t->gain * tm;
     float gt = 1.0f;
     if (t->seq) {
+        u32 div = t->seqdiv;                            /* test 3: 2, 4 or 8 a beat; the 16 steps then wrap */
+        float wrap = (float)(16u / div);
         float sp = b->seq_ph + (float)s->bpm100 * SY_BEAT;
-        if (sp >= 4.0f) sp = sp - 4.0f;
+        if (sp >= wrap) sp = sp - wrap;
         b->seq_ph = sp;
-        gt = (t->seq >> ((u32)(s32)(sp * 4.0f) & 15u)) & 1u ? 1.0f : 0.0f;
+        gt = (t->seq >> ((u32)(s32)(sp * (float)div) & 15u)) & 1u ? 1.0f : 0.0f;
     }
     float mgt = (s->stopping || req != b->tone) ? 0.0f : 1.0f;
     float s1 = b->s1, s2 = b->s2, mg = b->mg, gate = b->gate;
@@ -416,7 +484,9 @@ u32 sy_fp_step(sy_t *s) {
     if (!b->started) sy_init(b, s);
     u32 req = s->tone_req;
     if (req >= SY_TONES) req = b->tone;
-    const sy_tone_t *t = &SY_TONE[b->tone];
+    sy_tone_t tone = SY_TONE[b->tone];                  /* test 3: with its knobs */
+    sy_knobs(&tone, s->knob[b->tone]);
+    const sy_tone_t *t = &tone;
     float pk = sy_input(b, x12, dx);
     float ev = b->env * SY_ENV_K;
     b->env = pk > ev ? pk : ev;

@@ -8,6 +8,7 @@ typedef int s32;
 typedef unsigned short u16;
 typedef short s16;
 typedef unsigned char u8;
+typedef signed char s8;
 
 #define FRAMES 64u                          /* frames an RX block (48 kHz) */
 #define STACK_BYTES 2048u                   /* the FPU side's own stack (tune_fp_call) */
@@ -137,6 +138,8 @@ typedef struct {
     float lfo_inc, vib, trem, lfo_oct;      /* the LFO's step per block (ramp units); vibrato (ratio), tremolo, cutoff
                                                (octaves) */
     float noise, gain;                      /* breath noise (x the bands' summed amplitude); the output gain */
+    u32 p2kind, seqdiv;                     /* test 3: what CTRL 2 sets (sy_ref P_*); the steps a beat (4) */
+    float p2base, p2span, bright;           /* test 3: CTRL 2's base value and span; CTRL 1's octaves (0) */
 } sy_tone_t;
 
 /* sy.state, written by the audio task only */
@@ -160,6 +163,10 @@ typedef struct {
     u32 picks, taken;                       /* tones picked; the pads whose press the pick took (their releases too) */
     volatile u32 bpm100;                    /* the SP's tempo for the step gate (BPM x 100), every 0.1 s */
     u32 tempo_checked;
+    volatile s8 knob[15][3];                /* test 3: each tone's CTRL 1-3, as knob position - 64 (0: as designed) */
+    u8 dirty, loaded;                       /* test 3: picks or knobs not in the file yet; the file was read */
+    u8 pad3[1];
+    u32 loads, saves, save_errors, bad_files;   /* test 3: the file */
     /* written by the audio task */
     volatile u32 state;
     u32 rx, steps, tx, fresh;               /* fresh: out[] holds a block TX has not added yet */
