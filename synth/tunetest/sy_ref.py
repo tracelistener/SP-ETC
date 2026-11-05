@@ -44,6 +44,22 @@ The output's ceiling goes up 3 dB (OUT_SCALE 23170, -3 dBFS at the clip) and the
 A band's first SKIP (4) periods after it wakes are counted, not tracked: they span the band-pass's start and read long
 (-138, -51, -22, -12 cents on every string). With the overtones gone (FUND) the low E's start was heard 36 cents flat,
 coming up over 100 ms; now every open string is within 5 cents from its first sounding block.
+
+Test 6: single notes sounded rough on the unit (chords less so). A band's ownership flickers while a note starts (the
+neighbour rule, a band-pass's settling: 1,460 on/off switches in the first 150 ms of seven single notes, and on the
+low E and the B string all through the note), and since FUND a note hangs on one band: when that band drops for a
+block the note drops, or its harmonics come back. Now:
+  - the gate: a band more than 20 dB (GATE) under the loudest owned band does not sound (the pick's ring in empty
+    bands, weak partials);
+  - the hold: a band that stops owning sounds on for HOLD (4) blocks, 5.3 ms, while its energy keeps HOLD_E (0.8) of
+    what it had when it last owned (a pick's ring and a stopped string fall away at once);
+  - FUND only from a band at least FUND_REL (-20 dB) of the multiple's energy: a pick's ring an octave below a note
+    muted the note (and with the next rule would have taken its level);
+  - FUND to the 16th harmonic (the low E's 13th and 14th owned bands of their own);
+  - a note's level is its loudest partial's (FUND's fundamental at the level of the strongest band it silenced: a
+    pickup's fundamental can be under its harmonics, so the note sounded weaker than the guitar);
+  - DYNAMICS 0..100 per tone: how far a note's level follows the band's (100, as designed, all the way; 0: every
+    note at DYN_LEV), in dB: L x (L / DYN_LEV)^(d - 1).
 """
 import math
 
@@ -77,7 +93,13 @@ GATE_K = 0.02                            # the step gate's smoothing per sample 
 FC_MAX = 12000.0                         # the output filter's highest cutoff
 X_MIN = -4.0                             # its lowest: fc_lo / 16
 EXP2_C = (0.6951786, 0.22657681, 0.07902149)   # 2^f ~ 1 + f (c1 + f (c2 + f c3)), f in [0, 1): error < 1e-4
-HARM_MAX, HARM_TOL = 8, 0.03             # test 5, FUND: whole multiples 2..8 of a lower sounding band, within 3%
+HARM_MAX, HARM_TOL = 16, 0.03            # FUND: whole multiples 2..16 (test 5: 8) of a lower sounding band, within 3%
+GATE = 0.1                               # test 6: a band under 0.1 x the loudest owned band's level (-20 dB) is silent
+HOLD = 4                                 # test 6: blocks a band sounds on after it stops owning,
+HOLD_E = 0.8                             #   while its energy keeps 0.8 x what it was when it last owned
+FUND_REL = 0.01                          # test 6: a lower band mutes a multiple only at 0.01 x its energy (-20 dB) or more
+DYN_LEV = 0.1                            # test 6: DYNAMICS 0 puts every note at this band level
+LOG2_C = (1.4191330077337858, -0.5760056527240476, 0.15687264499026177)   # log2(1 + f) ~ f (c1 + f (c2 + f c3))
 SUS_MS0, SUS_STEP = 40.0, 0.08           # test 5, SUSTAIN s: a falling level's time constant 40 ms x 2^(0.08 s)
 OCTAVES = (-2, -1, 0, 1, 2)              # test 5: OCTAVE's settings (knob zones)
 
@@ -106,43 +128,46 @@ def _steps(bits):
 # quiet .. at a hard pick, q, fmode; fenv: octaves a pick adds (decaying over fdec ms); lfo Hz, vib cents, trem 0..1,
 # lfo_oct octaves of cutoff; noise: breath; seq: the 16 steps (1 = sound) at 1/16 of the SP's tempo; gain.
 # Test 5: fund (1: only each note's lowest band sounds), sus (SUSTAIN 0..100), oct (OCTAVE -2..+2). Every tone but
-# STRINGS and PAD plays its notes from their lowest band; the gains are levelled by level_tones() (strummed chord RMS).
+# STRINGS and PAD plays its notes from their lowest band; the gains are levelled by level_tones() (strummed chord RMS;
+# test 6: on single notes, E2, G3 and E4, to test 5's (sy6/level6.py): a note now sounds at its loudest partial's level,
+# which lifts chords more (an octave string lifts the note under it): chords 0.7..3.1 dB over test 5, peaks <= 0.71).
 TONES = [
     dict(name='SAW LEAD', wa=SAW, fund=1, sus=60, att=3, rel=150, fc_lo=350, fc_hi=4500, fenv=1.2, fdec=300, q=2.6,
-         gain=1.973, p2=('RESO', P_Q, 0.0, 2.0)),
+         gain=1.276, p2=('RESO', P_Q, 0.0, 2.0)),
     dict(name='SQR LEAD', wa=PULSE, pw=0.0, fund=1, sus=60, att=3, rel=150, fc_lo=500, fc_hi=5000, q=1.6, lfo=5.5,
-         vib=6, gain=1.158, p2=('WIDTH', P_PW, 0.0, 0.9)),
+         vib=6, gain=0.744, p2=('WIDTH', P_PW, 0.0, 0.9)),
     dict(name='SYN BASS', wa=PULSE, pw=0.0, wb=SAW, rb=0.5, lb=0.7, fund=1, oct=-1, sus=40, rel=70, fc_lo=120,
-         fc_hi=1400, fenv=2.2, fdec=180, q=3.2, gain=1.016, p2=('ENV', P_FENV, 0.0, 0.0)),
+         fc_hi=1400, fenv=2.2, fdec=180, q=3.2, gain=0.691, p2=('ENV', P_FENV, 0.0, 0.0)),
     dict(name='SUPERSAW', wa=SAW, wb=SAW, rb=2 ** (16 / 1200), lb=1.0, fund=1, sus=70, att=12, rel=300, fc_lo=500,
-         fc_hi=7000, q=1.0, gain=1.405, p2=('DETUNE', P_DETUNE, 16.0, 2.0)),
+         fc_hi=7000, q=1.0, gain=0.879, p2=('DETUNE', P_DETUNE, 16.0, 2.0)),
     dict(name='PAD', wa=SAW, wb=SAW, rb=2 ** (-9 / 1200), lb=1.0, sus=100, att=400, rel=1500, fc_lo=250, fc_hi=2500,
-         q=1.0, lfo=0.25, lfo_oct=0.6, gain=0.904, p2=('ATTACK', P_ATT, 400.0, 2.0)),
-    dict(name='STRINGS', wa=SAW, sus=90, att=180, rel=600, fc_lo=500, fc_hi=4000, q=0.9, lfo=5.5, vib=7, gain=1.012,
+         q=1.0, lfo=0.25, lfo_oct=0.6, gain=0.882, p2=('ATTACK', P_ATT, 400.0, 2.0)),
+    dict(name='STRINGS', wa=SAW, sus=90, att=180, rel=600, fc_lo=500, fc_hi=4000, q=0.9, lfo=5.5, vib=7, gain=0.984,
          p2=('ATTACK', P_ATT, 180.0, 2.0)),
     dict(name='ORGAN', wa=SINE, wb=SINE, rb=2.0, lb=0.5, fund=1, sus=100, att=5, rel=60, fc_lo=3000, fc_hi=10000,
-         q=0.7, lfo=6.5, vib=3, trem=0.2, gain=1.428, p2=('ROTARY', P_LFO, 0.0, 2.0)),
+         q=0.7, lfo=6.5, vib=3, trem=0.2, gain=0.887, p2=('ROTARY', P_LFO, 0.0, 2.0)),
     dict(name='FLUTE', wa=SINE, noise=0.25, fund=1, sus=80, att=60, rel=160, fc_lo=900, fc_hi=5000, q=0.8, lfo=5.0,
-         vib=7, gain=1.683, p2=('BREATH', P_NOISE, 0.0, 0.0)),
+         vib=7, gain=1.081, p2=('BREATH', P_NOISE, 0.0, 0.0)),
     dict(name='BELL', wa=SINE, wb=SINE, fm=1, rb=3.5, lb=0.15, fm_env=2.0, fdec=450, fund=1, oct=1, rel=1200,
-         fc_lo=4000, fc_hi=12000, q=0.7, gain=1.604, p2=('METAL', P_FM, 0.0, 0.0)),
+         fc_lo=4000, fc_hi=12000, q=0.7, gain=1.033, p2=('METAL', P_FM, 0.0, 0.0)),
     dict(name='BRASS', wa=SAW, fund=1, sus=70, att=35, rel=150, fc_lo=250, fc_hi=2500, fenv=1.6, fdec=260, q=1.4,
-         gain=2.038, p2=('OPEN', P_FENV, 0.0, 0.0)),
+         gain=1.304, p2=('OPEN', P_FENV, 0.0, 0.0)),
     dict(name='SUB BASS', wa=TRI, wb=SINE, rb=0.5, lb=0.8, fund=1, oct=-1, sus=60, rel=90, fc_lo=200, fc_hi=1200,
-         q=0.8, gain=1.408, p2=('SUB', P_LB, 0.0, 0.0)),
+         q=0.8, gain=0.919, p2=('SUB', P_LB, 0.0, 0.0)),
     dict(name='SWEEP', wa=SAW, fund=1, sus=90, rel=300, fc_lo=200, fc_hi=1600, lfo=0.35, lfo_oct=1.6, q=5.0,
-         gain=1.309, p2=('SPEED', P_LFO, 0.0, 3.0)),
-    dict(name='WAH', wa=SAW, fmode=BP, fund=1, sus=50, fc_lo=300, fc_hi=3600, fenv=1.0, fdec=150, q=4.0, gain=22.16,
+         gain=0.842, p2=('SPEED', P_LFO, 0.0, 3.0)),
+    dict(name='WAH', wa=SAW, fmode=BP, fund=1, sus=50, fc_lo=300, fc_hi=3600, fenv=1.0, fdec=150, q=4.0, gain=15.654,
          p2=('RESO', P_Q, 0.0, 1.5)),
     dict(name='SEQ', wa=SAW, wb=TRI, rb=0.5, lb=0.7, fund=1, sus=100, rel=80, fc_lo=400, fc_hi=5000, q=2.5,
-         seq=(1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0), gain=1.843, p2=('RATE', P_SEQ, 0.0, 0.0)),
+         seq=(1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0), gain=1.185, p2=('RATE', P_SEQ, 0.0, 0.0)),
     dict(name='OCT LEAD', wa=SAW, wb=PULSE, rb=1.0, lb=0.5, pw=0.0, fund=1, oct=1, sus=60, att=3, rel=150,
-         fc_lo=600, fc_hi=7000, q=1.5, gain=3.919, p2=('RESO', P_Q, 0.0, 2.0)),
+         fc_lo=600, fc_hi=7000, q=1.5, gain=2.519, p2=('RESO', P_Q, 0.0, 2.0)),
 ]
 OFF_PAD = 15                             # pad 16: the synth off (test 5: CTRL 1's lowest zone)
 TONE_FIELDS_U = ('wa', 'wb', 'fm', 'fmode', 'seq', 'p2kind', 'seqdiv', 'fund')
 TONE_FIELDS_F = ('pw', 'rb', 'lb', 'fm_env', 'att', 'rel', 'fc_lo', 'oct', 'xmax', 'r2', 'fenv', 'fdec', 'lfo_inc',
-                 'vib', 'trem', 'lfo_oct', 'noise', 'gain', 'p2base', 'p2span', 'bright', 'octm', 'roct', 'sus')
+                 'vib', 'trem', 'lfo_oct', 'noise', 'gain', 'p2base', 'p2span', 'bright', 'octm', 'roct', 'sus',
+                 'dyn')
 
 
 def sus_design(s):
@@ -165,13 +190,14 @@ def tone_params(t):
              fenv=t.get('fenv', 0.0), fdec=_dec(t.get('fdec', 0)), lfo_inc=2 * t.get('lfo', 0.0) * BLOCK_S,
              vib=2 ** (t.get('vib', 0.0) / 1200) - 1, trem=t.get('trem', 0.0), lfo_oct=t.get('lfo_oct', 0.0),
              noise=t.get('noise', 0.0), gain=t['gain'], p2base=t['p2'][2], p2span=t['p2'][3], bright=0.0,
-             octm=2.0 ** o, roct=2.0 ** -o, sus=sus_design(t.get('sus', 0)))
+             octm=2.0 ** o, roct=2.0 ** -o, sus=sus_design(t.get('sus', 0)), dyn=t.get('dyn', 100) / 100)
     out = {k: int(v) for k, v in u.items()}
     out.update({k: F32(v) for k, v in f.items()})
     out['name'] = t['name']
     out['p2name'] = t['p2'][0]
     out['oct_design'] = o
     out['sus_design'] = t.get('sus', 0)
+    out['dyn_design'] = t.get('dyn', 100)
     return out
 
 
@@ -221,7 +247,8 @@ def tables():
              TL_MIN=TL_MIN, IN_SCALE=1 / 32768, C1=EXP2_C[0], C2=EXP2_C[1], C3=EXP2_C[2], T3=1 / 3, T5=2 / 15,
              FADE=1 / (FADE_BLOCKS * FRAMES), AMP_EPS=AMP_EPS, P_MIN=P_MIN, P_RATIO=P_RATIO, GATE_K=GATE_K,
              X_MIN=X_MIN, BEAT=BLOCK_S / 6000, BLOCK_MS=BLOCK_MS, INV1200=1 / 1200, HARM_TOL=HARM_TOL,
-             SUS_MS0=SUS_MS0, SUS_STEP=SUS_STEP)
+             SUS_MS0=SUS_MS0, SUS_STEP=SUS_STEP, GATE2=GATE * GATE, DYN_L2=math.log2(DYN_LEV), L1=LOG2_C[0],
+             L2=LOG2_C[1], L3=LOG2_C[2], HOLD_E=HOLD_E, FUND_REL=FUND_REL)
     g = {n: F32(v) for n, v in g.items()}
     tones = [tone_params(t) for t in TONES]
     return band, dec, g, tones
@@ -241,6 +268,20 @@ def exp2(x):
 OCT_MUL = [F32(2.0 ** o) for o in OCTAVES]    # test 5: OCTAVE's multipliers (SY_OCTM; 1 / one is the mirror one)
 
 
+def log2(x):
+    """Test 6: log2 of a positive normal x: the exponent bits, and a cubic for the mantissa's (error under 0.0013)."""
+    u = int(np.asarray(x, F32).view(np.uint32))
+    ex = (u >> 23) - 127
+    m = np.asarray(np.uint32((u & 0x7FFFFF) | 0x3F800000)).view(F32)
+    f = F32(m) - F32(1)
+    return fma_s(f, fma_s(f, fma_s(f, G['L3'], G['L2']), G['L1']), F32(ex))
+
+
+def dyn_level(lev, d):
+    """Test 6: DYNAMICS d (0..1) on a band level: 2^(d (log2 lev - log2 DYN_LEV) + log2 DYN_LEV)."""
+    return exp2(fma_s(d, log2(lev) - G['DYN_L2'], G['DYN_L2']))
+
+
 def knob_sus(s):
     """Test 5: SUSTAIN s (0..100) from the knob as sy_fp.c's sy_sus: 0 none; else x - x^2 / 2, x = one block over
     40 ms x 2^(0.08 s) (the cubic exp2)."""
@@ -251,10 +292,13 @@ def knob_sus(s):
     return fma_s(F32(-0.5) * x, x, x)
 
 
-def knob_tone(T, kd, octave=0, sustain=0):
+def knob_tone(T, kd, octave=0, sustain=0, dynamics=0):
     """Test 3: the tone with its three knobs (deltas from 64: kd) applied, as sy_fp.c's sy_knobs. Test 5: octave (0
-    as designed, 1..5: OCTAVES[octave - 1]) and sustain (0 as designed, 1..101: 0..100)."""
+    as designed, 1..5: OCTAVES[octave - 1]) and sustain (0 as designed, 1..101: 0..100). Test 6: dynamics (0 as
+    designed, 1..101: 0..100)."""
     t = dict(T)
+    if 1 <= dynamics <= 101:
+        t['dyn'] = F32(dynamics - 1) * F32(0.01)
     if 1 <= octave <= len(OCTAVES):
         t['octm'] = OCT_MUL[octave - 1]
         t['roct'] = OCT_MUL[len(OCTAVES) - octave]
@@ -302,11 +346,12 @@ def c_header():
     """sy_tables.h: the tables as C initialisers (every value as its exact single-precision hex float)."""
     def hx(v):
         return float(F32(v)).hex() + 'f'
-    lines = ['/* SY synth tests 1 to 5: generated by the builder from tunetest/sy_ref.py (tables()); do not edit. */',
+    lines = ['/* SY synth tests 1 to 6: generated by the builder from tunetest/sy_ref.py (tables()); do not edit. */',
              '#ifndef SY_TABLES_H', '#define SY_TABLES_H', f'#define SY_NB {NB}', f'#define SY_TONES {len(TONE)}',
              f'#define SY_OFF_PAD {OFF_PAD}u', f'#define SY_P_FROM {P_FROM}u', f'#define SY_P_TO {P_TO}u',
              f'#define SY_REFRACTORY {REFRACTORY}u', f'#define SY_AGE_MIN {AGE_MIN}u',
-             f'#define SY_HARM_MAX {HARM_MAX}', f'#define SY_OCTAVES {len(OCTAVES)}u', f'#define SY_SKIP {SKIP}u']
+             f'#define SY_HARM_MAX {HARM_MAX}', f'#define SY_OCTAVES {len(OCTAVES)}u', f'#define SY_SKIP {SKIP}u',
+             f'#define SY_HOLD {HOLD}u']
     for n, v in G.items():
         lines.append(f'#define SY_{n} {hx(v)}')
     lines.append('static const float SY_OCTM[SY_OCTAVES] = {' + ', '.join(hx(v) for v in OCT_MUL) + '};')
@@ -334,7 +379,7 @@ def c_header():
 def c_names():
     """sy_names.h (the integer side's): what the guitar synth screen shows (test 5): each tone's name, its own
     setting's name (P2), its designed OCTAVE and SUSTAIN."""
-    lines = ['/* SY synth test 5: generated by the builder from tunetest/sy_ref.py (c_names); do not edit. */',
+    lines = ['/* SY synth tests 5 and 6: generated by the builder from tunetest/sy_ref.py (c_names); do not edit. */',
              '#ifndef SY_NAMES_H', '#define SY_NAMES_H', f'#define SY_OFF_PAD {OFF_PAD}u',
              f'#define SY_OCT_ZERO {OCTAVES.index(0) + 1}u', f'#define SY_OCTAVES {len(OCTAVES)}u',
              f'static const char *const SY_NAME[{len(TONE)}] = {{' + ', '.join(f'"{t["name"]}"' for t in TONE) + '};',
@@ -343,7 +388,9 @@ def c_names():
              f'static const signed char SY_OCT_DESIGN[{len(TONE)}] = {{' +
              ', '.join(str(t['oct_design']) for t in TONE) + '};',
              f'static const unsigned char SY_SUS_DESIGN[{len(TONE)}] = {{' +
-             ', '.join(str(t['sus_design']) for t in TONE) + '};', '#endif']
+             ', '.join(str(t['sus_design']) for t in TONE) + '};',
+             f'static const unsigned char SY_DYN_DESIGN[{len(TONE)}] = {{' +
+             ', '.join(str(t['dyn_design']) for t in TONE) + '};', '#endif']
     return '\n'.join(lines) + '\n'
 
 
@@ -405,6 +452,9 @@ class Engine:
         self.knobs = np.zeros((len(TONE), 3), np.int64)  # test 3: each tone's knobs, deltas from 64
         self.octs = np.zeros(len(TONE), np.int64)        # test 5: OCTAVE (0 as designed, 1..5)
         self.suss = np.zeros(len(TONE), np.int64)        # test 5: SUSTAIN (0 as designed, 1..101)
+        self.dyns = np.zeros(len(TONE), np.int64)        # test 6: DYNAMICS (0 as designed, 1..101)
+        self.hold = np.zeros(NB, np.int64)               # test 6: blocks a band sounds on after it stopped owning
+        self.ehold = np.zeros(NB, F32)
         self.fund_cut = 0                                # test 5: band-blocks FUND silenced
         self.blocks = self.crossings = 0
         self.sounding = 0                               # bands sounding in the last block
@@ -416,7 +466,7 @@ class Engine:
         if tone_req is None:
             tone_req = self.tone
         T = knob_tone(TONE[self.tone], [int(v) for v in self.knobs[self.tone]], int(self.octs[self.tone]),
-                      int(self.suss[self.tone]))
+                      int(self.suss[self.tone]), int(self.dyns[self.tone]))
         x48 = np.asarray(ins16, np.int64).astype(F32) * G['IN_SCALE']
         z = self.dz
         x12 = np.zeros(SUB, F32)
@@ -515,6 +565,22 @@ class Engine:
         el = np.concatenate([[F32(0)], e[:-1]]).astype(F32)
         er = np.concatenate([e[1:], [F32(0)]]).astype(F32)
         own = ~quiet & (nper >= 2) & (e >= el) & (e >= er) & (per > B['olo']) & (per < B['ohi'])
+        # test 6: the gate (under GATE x the loudest owned band's level: silent), then the hold (HOLD blocks more)
+        emax = F32(0)
+        for k in np.nonzero(own)[0]:
+            if e[k] > emax:
+                emax = e[k]
+        gate = emax * G['GATE2']
+        own = own & ~(e < gate)
+        self.hold[own] = HOLD
+        self.ehold[own] = e[own]
+        held = ~own & (self.hold > 0)
+        fall = held & (e < G['HOLD_E'] * self.ehold)   # falling away: no hold
+        self.hold[fall] = 0
+        held = held & ~fall
+        self.hold[held] -= 1
+        own = own | held
+        lmax = np.zeros(NB, F32)                        # test 6: the loudest partial FUND silenced, per fundamental
         if T['fund']:                                   # test 5: a whole multiple of a lower sounding band is silent
             idx = np.nonzero(own)[0]
             keep = own.copy()
@@ -524,8 +590,11 @@ class Engine:
                         break
                     r = per[j] / per[k]
                     h = int(F32(r + F32(0.5)))
-                    if 2 <= h <= HARM_MAX and abs(r - F32(h)) < G['HARM_TOL'] * F32(h):
+                    if 2 <= h <= HARM_MAX and abs(r - F32(h)) < G['HARM_TOL'] * F32(h) and \
+                            not (e[j] < G['FUND_REL'] * e[k]):
                         keep[k] = False
+                        if e[k] > lmax[j]:
+                            lmax[j] = e[k]
                         self.fund_cut += 1
                         break
             own = keep
@@ -540,7 +609,11 @@ class Engine:
                     self.amp[nb] = F32(0)
                     break
         self.age[own] = np.minimum(self.age[own] + 1, 255)
-        lev = np.sqrt(e + e)
+        en = np.where(lmax > e, lmax, e).astype(F32)   # test 6: a note at its loudest partial's level
+        lev = np.sqrt(en + en).astype(F32)
+        if T['dyn'] < F32(1):                           # test 6: DYNAMICS
+            for k in np.nonzero(own)[0]:
+                lev[k] = dyn_level(lev[k], T['dyn'])
         tg = np.where(own, (lev - G['FLOOR']) * G['GAIN'], F32(0)).astype(F32)
         tg = np.where(tg > 0, tg, F32(0)).astype(F32)
         fmi = fma_s(T['fm_env'], self.fe, T['lb'])

@@ -153,6 +153,7 @@ typedef struct {
     u32 fund;                               /* test 5: 1: a note sounds from its lowest band only */
     float octm, roct;                       /* test 5: OCTAVE: the oscillators x octm (a power of two), rinc x 1/octm */
     float sus;                              /* test 5: SUSTAIN: a falling level's rate while the band sounds (0: none) */
+    float dyn;                              /* test 6: DYNAMICS: how far a note's level follows the band's (1: all) */
 } sy_tone_t;
 
 /* sy.state, written by the audio task only */
@@ -182,7 +183,8 @@ typedef struct {
     u8 pad3[1];
     volatile s8 oct[15];                    /* test 5: each tone's OCTAVE: 0 as designed, 1..5 = -2..+2 */
     volatile u8 susk[15];                   /* test 5: each tone's SUSTAIN: 0 as designed, 1..101 = 0..100 */
-    u8 pad5[2];
+    volatile u8 dynk[15];                   /* test 6: each tone's DYNAMICS: 0 as designed, 1..101 = 0..100 */
+    u8 pad5[3];
     u32 loads, saves, save_errors, bad_files;   /* test 3: the file */
     /* written by the audio task */
     volatile u32 state;
@@ -206,6 +208,12 @@ typedef struct {
                                                while it was; EXT SOURCE's release to come (input on again after) */
     u32 enters, leaves, pads_ate, turns, vsteps;  /* the screen opened, closed; pads, knobs, VALUE steps it took */
     u32 foot, foot_vt;                      /* the footer widget last drawn on the screen, its vtable word */
+    /* test 6: REMAIN on the Sound Generator page: its press taken (its held bit set as stock's would be, so REMAIN +
+       an FX button freezes the FX screen); let go with no FX button pressed, the stock press and release follow (the
+       preview bus) */
+    u8 rem_down, rem_fx, pad6[2];
+    u32 rem_taps, rem_holds, fx_passes;     /* REMAIN taps handed on, REMAIN + FX freezes; events an FX screen got */
+    u32 sg_page;                            /* the Sound Generator page's object (its views), from its update; 0 off it */
     /* test 4, audio task: the synth's newest block as TX added it, for the recorder on ROUTING ExtIn */
     volatile u32 rec_fresh;                 /* rec holds a block the recorder has not had */
     s16 rec[FRAMES];
@@ -228,6 +236,8 @@ typedef struct __attribute__((aligned(32))) {
     u8 nper[SY_BANDS];                      /* periods counted since it woke (to 255) */
     u8 owned[SY_BANDS];                     /* sounding in the last block */
     u8 age[SY_BANDS];                       /* test 2: blocks it has sounded (to 255; kept while it releases) */
+    u8 hold[SY_BANDS];                      /* test 6: blocks it sounds on after it stops owning */
+    float ehold[SY_BANDS];                  /* test 6: its energy when it last owned */
     float env, s1, s2, mg;                  /* the input's peak follower, the output filter, the fade */
     float fe, lfo_ph, seq_ph, gate;         /* test 2: the pick envelope, the LFO's ramp, the steps' beats, the gate */
     s32 last_pick;                          /* test 2: the block of the last pick */

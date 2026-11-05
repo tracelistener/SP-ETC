@@ -98,7 +98,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test5'
+REVISION = 'sy-synth-test6'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -245,6 +245,26 @@ GUARDS = [
     (0x0001BB64, 6, ['ldrb.w r0, [r0, #0x258]', 'bx lr'], 'the feed\'s pair: the byte at 0x82e0e71c + 0x258'),
     (FEED + 0x46, 0x0C, ['add.w r1, r4, r2, lsl #1', 'ldrh.w r4, [ip]', 'movs r2, #0', 'b #0x1caf2'],
      'recorder feed: reads the packet (r0 on entry, in r4) at that word'),
+    # SY test 6: REMAIN on the Sound Generator page, the FX screens, the bar's PRM part
+    (0x8003ABD0, 0x0A, ['movw ip, #0x221f', 'movt ip, #0x83fe', 'bx ip'],
+     "the UI dispatcher's key press: FX deep edit's bridge first (sy_stock_key hands a REMAIN tap and an EXIT here)"),
+    (0x8003ABEE, 0x1E, ['movw r6, #0x2438', 'lsrs r0, r5, #3', 'movt r6, #0x8059', 'and r1, r5, #7', 'movs r2, #1',
+                        'uxtab r0, r6, r0', 'lsl.w r1, r2, r1', 'ldrb r3, [r0, #0x10]', 'orrs r1, r3',
+                        'strb r1, [r0, #0x10]'],
+     "a key press sets the key's held bit at 0x80592448 (sy_key_bit does as it does for a REMAIN it takes)"),
+    (0x8003ADA0, 0x0A, ['movw ip, #0x2249', 'movt ip, #0x83fe', 'bx ip'],
+     "the UI dispatcher's key release: FX deep edit's bridge first (sy_stock_key)"),
+    (0x80146F64, 0x18, ['movs r0, #0x24', 'bl #0x800d9f20', 'strb.w r0, [r6, #0x2a]', 'cbz r0, #0x80146f7c',
+                        'movw r0, #0x2320', 'movs r1, #1', 'movt r0, #0x8059', 'strb r1, [r0]'],
+     "the FX screen's show: REMAIN (0x24) held freezes it and sets 0x80592320 (FX_FROZEN)"),
+    (0x8005BA98, 0x0C, ['movw r0, #0x2320', 'movt r0, #0x8059', 'ldrb r0, [r0]', 'bx lr'],
+     "the FX screen's frozen flag, the byte at 0x80592320"),
+    (0x8015C590, 2, ['lsls r4, r2, #4'], "the SG page's key table: REMAIN (0x24) to 0x8015c790"),
+    (0x8015C790, 0x0C, ['movw r1, #0x9800', 'movt r1, #0x8024', 'ldr r0, [r1, #0xc]', 'cmp r0, #0'],
+     "the SG page's REMAIN: the preview bus at 0x8024980c (a tap is handed on to it)"),
+    (0x80123AF8, 0x10, ['ldr r0, [sp, #0x74]', 'str r0, [sp, #0x24]', 'ldr r5, [sp, #0x6c]', 'str r5, [sp, #0x1c]',
+                        'movs r1, #0x49', 'str r1, [sp, #0x18]', 'movs r1, #0x5f', 'str r1, [sp, #0x20]'],
+     "the bar's item box: x 73..95, y0 at sp + 0x1c, y1 at sp + 0x24 (sy_bar_text paints x 57..127 over)"),
     # SY test 5, the guitar synth screen: the stock code its draws and bridges use or go on into
     (0x800BBCC2, 4, ['add sp, #0x68', 'pop {r4, r5, r7, pc}'], "the bar's item name function ends (sy_bar_name)"),
     (0x80123C5A, 12, ['ldr.w r0, [sb, #0x14]', 'cmp r0, #1', 'bne #0x80123c7a', 'ldr.w r0, [r4, #0x84]'],
@@ -857,7 +877,9 @@ def check_module(code, text, base, integer, sytext=None):
             m = ins.mnemonic
             if m.startswith('v'):
                 fpu.append(ins.address)
-            if m.startswith(('b', 'cb')) and m not in ('bx', 'blx', 'bkpt', 'bic', 'bics', 'bfc', 'bfi') and '#' in ins.op_str:
+            base_m = m.split('.')[0]                    # SY test 6: 'bic.w ... asr #31' is no branch
+            if m.startswith(('b', 'cb')) and base_m not in ('bx', 'blx', 'bkpt', 'bic', 'bics', 'bfc', 'bfi') and \
+                    '#' in ins.op_str:
                 target = int(ins.op_str.split('#')[-1], 16)
                 if not inside(target):
                     raise ValueError(f'module branch at {ins.address:#x} to {target:#x}')
@@ -987,7 +1009,19 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 5: the guitar synth screen: EXT SOURCE held + RECORD SETTING (main screen or '
+        description='SY synth test 6 (test 5 on the unit): on the screen VALUE and the pads pick the sound, CTRL 1 is '
+                    'the tone\'s own setting, CTRL 2 TONE (-50..+50), CTRL 3 LEVEL (0..100, 50 as designed), SHIFT '
+                    'OCTAVE / SUSTAIN / DYNAMICS (new: a note\'s level L x (L / 0.1)^(d - 1)); the bar\'s PRM part '
+                    'blank; with an FX screen up (found on the SG page\'s own object: 0x80cfd350 is 0 there) the knobs, '
+                    'VALUE and SHIFT go to it, the pads too while MFX is held; REMAIN on the SG page (screen, plain, '
+                    'kits): its press taken with its held bit set, so REMAIN + an FX button freezes the FX screen, a '
+                    'tap alone handed to the stock key handlers (the preview bus), REMAIN with a frozen FX screen up '
+                    'closes it (an EXIT). Engine: a band 20 dB under the loudest owned one silent, a band that stops '
+                    'owning sounds on 4 blocks while it keeps 0.8 of its energy, FUND to the 16th harmonic and only '
+                    'from a band at 0.01 of the multiple\'s energy or more, a note at its loudest partial\'s level; tones '
+                    're-levelled on single notes to test 5\'s. File v3 (DYNAMICS; a v2 file read). Drum mode: every '
+                    'guitar note strikes a pad (open low E pad 1, a pad a fret, higher notes an octave down at a time). '
+                    'SY synth test 5: the guitar synth screen: EXT SOURCE held + RECORD SETTING (main screen or '
                     'SG page) opens the Sound Generator page in SY mode (the input on): the knob columns show SOUND '
                     '(OFF, 1-15) / TONE / LEVEL, SHIFT (tap: page; held) OCTAVE / the tone\'s own setting / SUSTAIN; '
                     'the bar PRM: SOUND; the footer the sound\'s name; CTRL 1-3 set them, VALUE steps SOUND, a pad '

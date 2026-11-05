@@ -49,6 +49,12 @@
  * synth screen's settings (0: as designed). And a band's first 4 periods after it wakes are counted, not tracked (they
  * span the band-pass's start and read long: FUND left the note's start audibly flat).
  *
+ * Test 6 (single notes sounded rough: a band's ownership flickers while a note starts, and FUND hangs a note on one
+ * band): a band 20 dB under the loudest owned band is silent, one that stops owning sounds on for SY_HOLD blocks while
+ * its energy keeps SY_HOLD_E of its owned one, FUND goes to the 16th harmonic and needs the lower band at SY_FUND_REL of
+ * the multiple's energy, a note sounds at its loudest partial's level, and DYNAMICS (sy.dynk) pulls the levels toward
+ * one (sy_dyn).
+ *
  * Single precision throughout, no contraction (the pragma below): every fused multiply-add is an explicit fmaf, so
  * tunetest/sy_ref.py computes the same numbers; test_tune_test.py runs both on the same input.
  */
@@ -207,6 +213,22 @@ static float sy_exp2(float x) {
     return p * q.f;
 }
 
+/* Test 6: log2 of a positive normal x: the exponent bits, a cubic for the mantissa's (error under 0.0013). */
+static float sy_log2(float x) {
+    union {
+        u32 u;
+        float f;
+    } q;
+    q.f = x;
+    s32 ex = (s32)(q.u >> 23) - 127;
+    q.u = (q.u & 0x7FFFFFu) | 0x3F800000u;
+    float f = q.f - 1.0f;
+    return FMA(f, FMA(f, FMA(f, SY_L3, SY_L2), SY_L1), (float)ex);
+}
+
+/* Test 6: DYNAMICS d (0..1) on a band's level: 2^(d (log2 lev - log2 DYN_LEV) + log2 DYN_LEV); d 1 leaves it. */
+static float sy_dyn(float lev, float d) { return sy_exp2(FMA(d, sy_log2(lev) - SY_DYN_L2, SY_DYN_L2)); }
+
 /* Test 5: SUSTAIN s (0..100) as a per-block rate: 0 none; else x - x^2 / 2 for x = one block over 40 ms x 2^(0.08 s). */
 static float sy_sus(u32 s) {
     if (!s) return 0.0f;
@@ -217,10 +239,12 @@ static float sy_sus(u32 s) {
 
 /* Test 3: the tone with its knobs (kd: CTRL 1-3 as knob position - 64). CTRL 2 is left alone at 64, so the tone's
  * value stays exactly as designed (the exp2 above is a close approximation, not the table's). Test 5: OCTAVE (0 as
- * designed, 1..5: x 2^-2..2^2) and SUSTAIN (0 as designed, 1..101: 0..100). */
+ * designed, 1..5: x 2^-2..2^2) and SUSTAIN (0 as designed, 1..101: 0..100). Test 6: DYNAMICS (0 as designed,
+ * 1..101: 0..100). */
 static void sy_knobs(sy_tone_t *t, const sy_t *s, u32 tone) {
     const volatile s8 *kd = s->knob[tone];
-    u32 o = (u32)s->oct[tone], su = s->susk[tone];
+    u32 o = (u32)s->oct[tone], su = s->susk[tone], dk = s->dynk[tone];
+    if (dk - 1u <= 100u) t->dyn = (float)(dk - 1u) * 0.01f;
     if (o - 1u < SY_OCTAVES) {
         t->octm = SY_OCTM[o - 1u];
         t->roct = SY_OCTM[SY_OCTAVES - o];
@@ -377,11 +401,33 @@ static void sy_osc(sy_block_t *b, u32 k, const sy_tone_t *t, float a0, float a1,
  * band's oscillators added into acc. Returns the bands sounding; *namp the bands' summed amplitude. */
 static u32 sy_voices(sy_block_t *b, const sy_tone_t *t, float vibr, float *acc, float *namp) {
     u8 own[SY_BANDS];
+    float lmax[SY_BANDS];                           /* test 6: the loudest partial FUND silenced, per fundamental */
+    float emax = 0.0f;
     for (u32 k = 0; k < SY_BANDS; k++) {
         float e = b->e[k], p = b->per[k];
         float el = k ? b->e[k - 1] : 0.0f, er = k + 1u < SY_BANDS ? b->e[k + 1] : 0.0f;
         own[k] = (u8)(e >= SY_E_FLOOR && b->nper[k] >= 2u && e >= el && e >= er && p > SY_BAND[k].olo &&
                       p < SY_BAND[k].ohi);
+        if (own[k] && e > emax) emax = e;
+        lmax[k] = 0.0f;
+    }
+    /* test 6: a band 20 dB under the loudest owned band is silent (a pick's ring in an empty band, a weak partial);
+     * one that stops owning sounds on for SY_HOLD blocks (the rule flickers while a note starts), while its energy keeps
+     * SY_HOLD_E of what it had owning (a pick's ring, a string stopped: no hold) */
+    float gate = emax * SY_GATE2;
+    for (u32 k = 0; k < SY_BANDS; k++) {
+        if (own[k] && b->e[k] < gate) own[k] = 0;
+        if (own[k]) {
+            b->hold[k] = (u8)SY_HOLD;
+            b->ehold[k] = b->e[k];
+        } else if (b->hold[k]) {
+            if (b->e[k] < SY_HOLD_E * b->ehold[k]) {
+                b->hold[k] = 0;
+            } else {
+                b->hold[k]--;
+                own[k] = 1;
+            }
+        }
     }
     if (t->fund) {                                  /* test 5: a whole multiple of a lower sounding band is silent */
         u8 keep[SY_BANDS];
@@ -392,8 +438,10 @@ static u32 sy_voices(sy_block_t *b, const sy_tone_t *t, float vibr, float *acc, 
                 if (!own[j]) continue;
                 float r = b->per[j] / b->per[k];
                 s32 h = (s32)(r + 0.5f);
-                if (h >= 2 && h <= SY_HARM_MAX && __builtin_fabsf(r - (float)h) < SY_HARM_TOL * (float)h) {
+                if (h >= 2 && h <= SY_HARM_MAX && __builtin_fabsf(r - (float)h) < SY_HARM_TOL * (float)h &&
+                    !(b->e[j] < SY_FUND_REL * b->e[k])) {   /* test 6: not a pick's ring under a note */
                     keep[k] = 0;
+                    if (b->e[k] > lmax[j]) lmax[j] = b->e[k];
                     b->fund_cut++;
                     break;
                 }
@@ -426,7 +474,10 @@ static u32 sy_voices(sy_block_t *b, const sy_tone_t *t, float vibr, float *acc, 
     for (u32 k = 0; k < SY_BANDS; k++) {
         float tg = 0.0f;
         if (own[k]) {
-            float lev = __builtin_sqrtf(b->e[k] + b->e[k]);
+            float e = b->e[k];
+            if (lmax[k] > e) e = lmax[k];               /* test 6: a note at its loudest partial's level */
+            float lev = __builtin_sqrtf(e + e);
+            if (t->dyn < 1.0f) lev = sy_dyn(lev, t->dyn);   /* test 6: DYNAMICS */
             tg = (lev - SY_FLOOR) * SY_GAIN;
             if (!(tg > 0.0f)) tg = 0.0f;
         }

@@ -1,4 +1,4 @@
-# SY synth tests 1 to 5: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 6: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -456,6 +456,98 @@ up), BRASS, SUB BASS (down), SWEEP, WAH, SEQ and OCT LEAD (up).
 - **The builder:** note repeat's bridge calls `sy_event`; the six pointers and jumps go to the screen's; FX deep
   edit's bridges call their own handlers.
 
+## SY synth test 6 (sy-synth-test6): the screen's controls, FX screens, REMAIN, smoother notes
+
+On the unit (2026-11-05), test 5: "good work. some issues". The bar's PRM: SOUND is redundant; VALUE picks the sound,
+so CTRL 1 should do something else (the user chose the sound's own setting); TONE should read -50..+50 and LEVEL
+0..100 (the synth's level, after a talk about a real synth/dry mix). An FX picked on the screen "does not stay on long
+enough to adjust its parameters", and REMAIN + an FX button doesn't keep it up (the plain Sound Generator and the kits
+too): REMAIN changes the preview bus instead (stock, manual p. 46; "we need another way to preview": a REMAIN tap). The
+synth is barely heard on the high E; single notes sound "pretty bad (tracking good)", chords a bit better. The kits:
+every guitar note should hit a pad.
+
+**FX screens.** DM-404 on test 5: with Filter+Drive up on the screen, CTRL 1 changed the synth's sound (to BRASS) and
+the FX screen closed 3 s later. The screen took the knobs, VALUE and the pads, so the effect never saw a control (its
+screen closes a few seconds after the last one, manual p. 33), and MFX + VALUE, CTRL 3 or a pad (picking an effect,
+p. 32) were taken too. Now, with an FX screen up, the knobs, VALUE (turned and pushed) and SHIFT go on to it, and the
+pads too while MFX is held. Test 3's `sy_fx_screen` read the main page's object (`0x80cfd350`, its view list). DM-404
+showed it 0 on the Sound Generator page: stock destroys the main page's object there (`0x8005ee26`). The SG page keeps
+its views on its own object, in the same list (+0x38: the count at +0x44, the views at +0x3d4). `sy_sg_poll`, the
+page's update, records the object (DM-404: `0x835aac28`, the FX view its seventh), and `sy_ui` forgets it off the page.
+
+**REMAIN on the Sound Generator page** (the screen, the plain page, the kits). Stock: the page's key method steps the
+preview bus on REMAIN's press (the case at `0x8015c790`, the bus at `0x8024980c`, a popup), with an FX screen up too.
+DM-404 on test 5: REMAIN held + DELAY did freeze the FX screen (its show reads REMAIN held, `0x80146f64`, and sets
+`0x80592320`), but the press stepped the bus. Now:
+- REMAIN's press is taken, and its held bit set as the key press handler would (`0x8003abee`), so an FX button pressed
+  meanwhile opens a frozen FX screen. Its release is taken and the bit cleared.
+- Let go with no FX button, the stock key handlers get a press and a release (`0x8003abd0` / `0x8003ada0`, through FX
+  deep edit's bridges): the preview bus steps, as a tap did.
+- With a frozen FX screen up, REMAIN closes it with an EXIT (as REMAIN does on the other pages) and clears the flag.
+- With an FX screen up that is not frozen, and on every other page, REMAIN goes on as stock.
+
+**The screen.** VALUE and the pads pick the sound. CTRL 1 is the tone's own setting, CTRL 2 TONE, CTRL 3 LEVEL; SHIFT:
+OCTAVE, SUSTAIN, DYNAMICS. TONE and the tone's own setting read -50..+50 (the knob's offset scaled), LEVEL 0..100 (50
+as designed, 100 twice). The bar's PRM part (x 57..127: "PRM:", the item's box, the value) is painted over in
+`sy_bar_text`, with an empty name and value; "SHIFT:OTHERS" stays. The file is version 3 (104 bytes: DYNAMICS per
+tone); a version 2 file (test 5's) is read, DYNAMICS as designed.
+
+**Single notes.** The twin on single open strings (SAW LEAD): a band's ownership switched on and off nearly every block
+in a note's first 150 ms (1,460 switches over seven notes), and on the low E and the B string all through the note
+(559). The causes: the neighbour rule while the band-passes settle, the pick ringing empty bands, partials above the
+8th. FUND made it audible: a note sounds from one band, which dropped for a block or let its harmonics back. Now:
+- **the gate:** a band 20 dB under the loudest owned band is silent;
+- **the hold:** a band that stops owning sounds on 4 blocks while its energy keeps 0.8 of what it had owning;
+- **FUND** to the 16th harmonic, and only from a band at -20 dB of the multiple's energy or more (a pick's ring an
+  octave under a note muted the note);
+- **the level:** a note at its loudest partial's, FUND's fundamental taking the level of the strongest band it silenced
+  (a pickup's fundamental can be under its harmonics).
+
+Switching: 241 in the attack, 0 after. The hold was the cost (`scratchpad sy6/variants.py`): 8 blocks without the
+energy rule kept the pick's rings sounding, 91% of the sound on the open strings' partials against test 5's 97%; now
+96.8 / 97.8 / 98.3% (test 5: 97.0 / 98.6 / 99.1).
+
+**The high E.** In the twin every string comes out within 2 dB at the same input level, so on the unit it is the guitar:
+a weaker string, or its fundamental under its harmonics, which the loudest-partial level now covers. DYNAMICS (SHIFT +
+CTRL 3, 0..100, 100 as designed) pulls the levels toward one: L x (L / 0.1)^(d - 1), in single precision through a cubic
+log2 (error under 0.0013) and test 3's exp2.
+
+**Levels.** The loudest partial lifts chords more than single notes (an octave string lifts the note under it), so the
+tones are levelled on single notes (E2, G3, E4) to test 5's: chords 0.7..3.1 dB over test 5, peaks at most 0.71
+(`sy6/level6.py`). The release has `demos\sy6-NN-name.wav`.
+
+**Kits.** Drum mode plays notes 36..51 only (pads 1..16, `kits/kit_midi.inc`), and guitar synth test 6 sent the
+guitar's own note: E2..D#3 struck pads 5..16, nothing higher, and pad 1 (the kick, C2) never. `syn_ui` now sends 36
++ the note's offset from E2, folded into 0..15 an octave at a time: the open low E on pad 1, G3 on pad 16, G#3 on 5.
+
+**Notes from the bands (asked, not built).** The Sound Generator has four voices and plays MIDI chords, but guitar
+synth test 6 sends one note at a time. A prototype took notes from the SY engine's bands: on test 6's chord cases 116
+right and 666 wrong (test 6's tracker: 164, 8), 3 of 12 single-string cases (11). The bands make good sound but bad
+notes: the pick rings empty bands, partials own bands of their own, and a pickup's fundamental is weaker than its
+harmonics and settles last (E3 holds its band at 32 ms, its 3rd harmonic B4 at 11). Chords would need a real
+multi-pitch step.
+
+**DM-404** (the real 5.52 firmware in the full emulator, snapshot disks, the release's APP1):
+- The columns read RESO -23 / TONE +22 / LEVEL 77 after the knobs, OCTAVE / SUSTAIN / DYNAMICS on the SHIFT page
+  ("DYNAMICS" fits), the bar blank beside "SHIFT:OTHERS".
+- Filter+Drive up: CTRL 1 moved its CUTOFF, the synth's settings unchanged; the screen closed a few seconds after.
+- A REMAIN tap stepped the bus (BUS 1 to BUS 2, the popup). REMAIN held + DELAY: Sync Delay frozen over 4 s, the bus
+  left; CTRL 2 moved its FEEDBACK; REMAIN closed it, still on the page.
+- MFX held + pad 5 picked Zan-Zou on the MFX screen, the synth's sound unchanged.
+- The plain Sound Generator page: a REMAIN tap stepped the bus, REMAIN + DELAY froze the FX screen and left the bus.
+- The release's `screens\` has them.
+
+**Emulator checks:** 319 (163 distinct) pass on `release/sy-synth-test6`, 157 (47 distinct) of them in the SY section. Test 6's:
+- **FX screens:** the knobs, VALUE and SHIFT going on with one up, the synth's settings untouched; the pads the
+  screen's, silent, unless MFX is held.
+- **REMAIN:** taken with its held bit set and cleared; a tap handed to the stock key handlers as a press and a release;
+  held + DELAY with no tap; a frozen FX screen closed with an EXIT, the flag cleared; not frozen, or another page: stock.
+- **The screen:** CTRL 1 the tone's own setting, the sound left; the columns' labels and values (-50..+50, 0..100); the
+  bar blank (no name, the rectangle painted, no value, the displaced draw skipped).
+- **The file:** version 3 (104 bytes) written and read back with DYNAMICS = the twin; a version 2 file read.
+- **The engine:** every tone with OCTAVE, SUSTAIN and DYNAMICS turned value for value; the bands on the partials at 96%
+  or more; drum mode's pads (E2 pad 1, the riff E2 E2 G2 A2 E2 on pads 1, 1, 4, 6, 1).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -463,8 +555,9 @@ up), BRASS, SUB BASS (down), SWEEP, WAH, SEQ and OCT LEAD (up).
   about 1.4-1.6 times the saw lead's instructions.
 - Test 4: whether a RESAMPLE or looper take with the synth on is as loud as one with it off (pair 1 x 2 is from
   the readout's rounded peaks).
-- Test 5: how the new tones sound on a real guitar; whether FUND loses notes a chord needs; whether the screen's
-  chord feels right with GATE on.
+- Test 5: whether FUND loses notes a chord needs; whether the screen's chord feels right with GATE on.
+- Test 6: whether single notes sound smooth now; whether the high E is still quiet (DYNAMICS); whether the stock FX
+  screens and REMAIN behave on the unit as in DM-404; how the kit pads feel across the neck.
 - Whether the chip takes a ROUTING DT1 while sampling is armed without a click in the recording.
 - How the low notes' 20-30 ms feel in longer playing (nothing was reported against them).
 - Test 3: whether the file saves and comes back on the unit (FX deep edit's way of saving works there), and whether

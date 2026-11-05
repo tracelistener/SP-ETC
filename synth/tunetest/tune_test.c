@@ -1,4 +1,4 @@
-/* SY synth test 5, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
+/* SY synth test 6, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
  * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
  * BOSS's SY pedals work: 49 semitone bands, each with its own oscillators, from RX pair 0, added to the DRY pair of
  * TX line 3 one block later, on every page while EXT SOURCE is on (the Sound Generator's only in the guitar synth
@@ -20,6 +20,14 @@
  * Generator. The screen is drawn through the page's own widgets (the builder re-points the knob column's and the
  * footer's draw, the page's update and the bar's three arp bridges to sy_*; outside the screen they hand on). The
  * picker of test 4 is gone: VALUE + EXT SOURCE opens FX deep edit's input FX screens again.
+ * Test 6 (test 5 on the unit): VALUE picks the sound, so CTRL 1 is the tone's own setting, CTRL 2 TONE (-50..+50),
+ * CTRL 3 LEVEL (0..100, 50 as designed); SHIFT: OCTAVE / SUSTAIN / DYNAMICS. The bar's PRM part is blank. While an FX
+ * screen is up the knobs, VALUE and SHIFT are its (the effect never saw them, so its screen closed), and the pads too
+ * while MFX is held (picking an effect). REMAIN on the Sound Generator page (the screen, the plain page, the kits):
+ * held + an FX button freezes the FX screen as on the other pages (its press is taken, so the page's own REMAIN, the
+ * preview bus, waits); let go with no FX button, the stock press and release follow (the preview bus); with a frozen FX
+ * screen up it closes it. Drum mode: every guitar note strikes a pad (the open low E pad 1, a pad a fret to pad 16,
+ * higher notes an octave lower at a time).
  * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
@@ -99,6 +107,15 @@
 #define KEY_EXIT 0x22
 #define KEY_SHIFT 0x2A
 #define KEY_VALUE 0x31             /* the VALUE knob's push */
+#define KEY_REMAIN 0x24            /* test 6 */
+#define KEY_FX1 0x2B               /* the effect buttons FX1..FX6 (FILTER+DRIVE .. MFX) */
+#define KEY_MFX 0x30
+#define KEYS_RW ((volatile u8 *)0x80592448u)                     /* test 6: REMAIN's held bit, set and cleared */
+#define FX_FROZEN (*(volatile u8 *)0x80592320u)                  /* an FX screen frozen (REMAIN held at its show) */
+#define KEY_DOWN_FN ((void (*)(const s16 *))0x8003ABD1u)         /* the UI dispatcher's key press and release */
+#define KEY_UP_FN ((void (*)(const s16 *))0x8003ADA1u)
+#define SY_BAR_X0 57                                             /* the bar's PRM part (the item box x 73..95) */
+#define SY_BAR_X1 127
 #define PADS 16u                   /* key IDs 0..15 are the pads */
 #define KEY_BYTES 11
 #define MAIN_PAGE 1
@@ -188,7 +205,8 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
     OFFSET(sy_block_t, ph), OFFSET(sy_block_t, amp), OFFSET(sy_block_t, owned), OFFSET(sy_block_t, env),
     OFFSET(sy_block_t, started), OFFSET(sy_block_t, tone), OFFSET(sy_block_t, nper), OFFSET(sy_t, tone_req),
     OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads), OFFSET(sy_t, mode),
-    OFFSET(sy_t, rec), OFFSET(sy_t, oct), OFFSET(sy_t, susk), OFFSET(sy_block_t, fund_cut)};
+    OFFSET(sy_t, rec), OFFSET(sy_t, oct), OFFSET(sy_t, susk), OFFSET(sy_block_t, fund_cut), OFFSET(sy_t, dynk),
+    OFFSET(sy_t, rem_down), OFFSET(sy_block_t, hold)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
@@ -219,10 +237,13 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define FILE_WRITE ((s32 (*)(s32, const void *, s32))0x800DD9B9u)
 #define FILE_CLOSE ((s32 (*)(s32))0x800DEBD9u)
 #define SY_FILE_MAGIC 0x4E545953u                              /* "SYTN" */
-#define SY_FILE_VERSION 2u                                     /* test 5 (new tones: a version 1 file is left alone) */
-/* magic, version, tone, muted, 15; 45 knob positions, 15 OCTAVE, 15 SUSTAIN, 1 zero; FNV-1a of the first 84 */
-#define SY_FILE_BYTES 88
-#define SY_FILE_SUM 84
+#define SY_FILE_VERSION 3u                                     /* test 6: DYNAMICS (a version 2 file is read too) */
+/* magic, version, tone, muted, 15; 45 knob positions, 15 OCTAVE, 15 SUSTAIN, 15 DYNAMICS, 2 zero; FNV-1a of the first
+ * 100. Version 2 (test 5): 88 bytes, no DYNAMICS, one zero, the sum of the first 84 at 84. */
+#define SY_FILE_BYTES 104
+#define SY_FILE_SUM 100
+#define SY_FILE2_BYTES 88
+#define SY_FILE2_SUM 84
 #define FNV 2166136261u
 /* Test 3: an FX screen up (as FX deep edit finds it: the view on TOP's list whose vtable is the FX screen's). */
 #define TOP_OBJECT (*(u8 *const volatile *)0x80CFD350u)
@@ -1098,6 +1119,7 @@ UI_SMALL SCREEN static void sy_mode_tick(sy_t *s, u32 now);
 EXPORT UI_SMALL void sy_ui(void) {
     sy_t *s = &sy;
     u32 now = DWT_CYCCNT;
+    if (PAGE != SG_PAGE) s->sg_page = 0;                /* SY test 6: its object goes with the page */
     sy_mode_tick(s, now);
     if (now - s->tempo_checked >= CHECK_CYCLES) {
         s->tempo_checked = now;
@@ -1143,9 +1165,11 @@ UI_SMALL static void sy_ready(void) {
     s32 fd = FILE_OPEN(sy_path, 0);
     if (fd < 0) return;
     s32 n = FILE_READ(fd, sy_file, SY_FILE_BYTES);
+    u32 v2 = n == SY_FILE2_BYTES && sy_file[4] == 2u;   /* test 6: test 5's file (no DYNAMICS) */
+    u32 sum = v2 ? SY_FILE2_SUM : SY_FILE_SUM;
     FILE_CLOSE(fd);
-    if (n != SY_FILE_BYTES || get32(sy_file) != SY_FILE_MAGIC || sy_file[4] != SY_FILE_VERSION ||
-        sy_file[7] != SY_TONE_COUNT || get32(sy_file + SY_FILE_SUM) != sy_fnv(sy_file, SY_FILE_SUM)) {
+    if ((n != SY_FILE_BYTES && !v2) || get32(sy_file) != SY_FILE_MAGIC || (sy_file[4] != SY_FILE_VERSION && !v2) ||
+        sy_file[7] != SY_TONE_COUNT || get32(sy_file + sum) != sy_fnv(sy_file, sum)) {
         s->bad_files++;
         return;
     }
@@ -1154,9 +1178,10 @@ UI_SMALL static void sy_ready(void) {
         s->knob[i / 3u][i % 3u] = (s8)((v > 127u ? 127u : v) - 64u);
     }
     for (u32 i = 0; i < SY_TONE_COUNT; i++) {
-        u32 o = sy_file[53 + i], su = sy_file[68 + i];
+        u32 o = sy_file[53 + i], su = sy_file[68 + i], dk = v2 ? 0u : sy_file[83 + i];
         s->oct[i] = (s8)(o <= SY_OCTAVES ? o : 0u);
         s->susk[i] = (u8)(su <= 101u ? su : 0u);
+        s->dynk[i] = (u8)(dk <= 101u ? dk : 0u);
     }
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
     s->muted = sy_file[6] & 1u;
@@ -1164,9 +1189,11 @@ UI_SMALL static void sy_ready(void) {
 }
 
 /* Test 3: an FX screen on TOP's list (writing the file with one up sent the display to the main screen: FX deep edit's
- * test 12 on the unit). */
-UI_SMALL static u32 sy_fx_screen(void) {
+ * test 12 on the unit). SY test 6: TOP (the main page's object) is gone on the Sound Generator page (DM-404: 0 there),
+ * whose own object holds its views the same way: the page sy_sg_poll last had, while the page is up. */
+UI_SMALL SCREEN static u32 sy_fx_screen(void) {
     u8 *top = TOP_OBJECT;
+    if (!top && PAGE == SG_PAGE) top = (u8 *)sy.sg_page;
     if (!top) return 0;
     for (s32 i = 0; i < VIEWS; i++) {
         u8 *w = VIEW_AT(top + 0x38, i);
@@ -1188,8 +1215,10 @@ UI_SMALL static void sy_save(void) {
     for (u32 i = 0; i < SY_TONE_COUNT; i++) {
         sy_file[53 + i] = (u8)s->oct[i];
         sy_file[68 + i] = s->susk[i];
+        sy_file[83 + i] = s->dynk[i];
     }
-    sy_file[83] = 0;
+    sy_file[98] = 0;
+    sy_file[99] = 0;
     put32(sy_file + SY_FILE_SUM, sy_fnv(sy_file, SY_FILE_SUM));
     s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
     if (fd >= 0) {
@@ -1297,26 +1326,22 @@ UI_SMALL SCREEN static void sy_sound_set(sy_t *s, u32 n) {
     sy_changed(s);
 }
 
-/* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): SOUND (16 zones of 8: OFF, then 1..15), TONE and LEVEL
- * (knob - 64, 0 as designed); on the SHIFT page (tapped, or SHIFT held): OCTAVE (5 zones, -2..+2), the tone's own
- * setting (knob - 64) and SUSTAIN (0..100). */
+/* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): test 6: the tone's own setting, TONE and LEVEL (knob -
+ * 64, 0 as designed; VALUE and the pads pick the sound); on the SHIFT page (tapped, or SHIFT held): OCTAVE (5 zones,
+ * -2..+2), SUSTAIN (0..100) and DYNAMICS (0..100). */
 UI_SMALL SCREEN static void sy_screen_knob(sy_t *s, u32 k, s32 pos) {
     pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
     u32 tone = sy_tone(s), shift = s->shift_page ^ s->shift_down;
     if (s->shift_down) s->shift_used = 1;
     s->turns++;
-    if (!shift && k == 0) {
-        sy_sound_set(s, (u32)pos >> 3);
-        return;
-    }
     if (!shift)
-        s->knob[tone][k == 1u ? 0 : 2] = (s8)(pos - 64);
+        s->knob[tone][k == 0 ? 1 : k == 1u ? 0 : 2] = (s8)(pos - 64);
     else if (k == 0)
         s->oct[tone] = (s8)(1 + ((pos * (s32)SY_OCTAVES) >> 7));
     else if (k == 1)
-        s->knob[tone][1] = (s8)(pos - 64);
-    else
         s->susk[tone] = (u8)(1 + ((pos * 101) >> 7));
+    else
+        s->dynk[tone] = (u8)(1 + ((pos * 101) >> 7));
     s->dirty = 1;
     s->rev++;
 }
@@ -1343,6 +1368,67 @@ UI_SMALL SCREEN static u32 sy_untake(sy_t *s, s32 type, s32 what) {
     if (!(*w & bit)) return 0;
     *w &= ~bit;
     return 1;
+}
+
+/* Test 6: an event an FX screen up on the screen takes: the knobs, VALUE (turned, pushed), SHIFT; the pads while MFX
+ * is held (MFX + a pad picks an effect). */
+UI_SMALL SCREEN static u32 sy_fx_event(s32 type, s32 what) {
+    if (type == EV_KNOB || type == EV_ENCODER) return 1;
+    if (type == EV_KEY || type == EV_KEY_UP) {
+        if (what == KEY_VALUE || what == KEY_SHIFT) return 1;
+        if ((u32)what < PADS || what == KEY_SUB_PAD) return key_held(KEY_MFX);
+        return 0;
+    }
+    return (type == EV_PAD || type == EV_PAD_UP) && key_held(KEY_MFX);
+}
+
+/* Test 6: a REMAIN press on the Sound Generator page: taken, its held bit set as the stock press's would be (an FX
+ * screen opened while it is held reads it and freezes); with a frozen FX screen up, an EXIT closes it instead (the
+ * page's own REMAIN is the preview bus). 1 takes it. */
+UI_SMALL SCREEN static void sy_key_bit(u32 k, u32 on) {
+    volatile u8 *p = KEYS_RW + (k >> 3);
+    u8 m = (u8)(1u << (k & 7u));
+    *p = on ? (u8)(*p | m) : (u8)(*p & (u8)~m);
+}
+
+UI_SMALL SCREEN static void sy_stock_key(s32 key, s32 val) {
+    s16 e[3] = {EV_KEY, (s16)key, (s16)val};
+    KEY_DOWN_FN(e);
+    e[0] = EV_KEY_UP;
+    KEY_UP_FN(e);
+}
+
+UI_SMALL SCREEN static u32 sy_remain(sy_t *s, s32 type, s32 what, s32 val) {
+    if (what != KEY_REMAIN) {
+        if (type == EV_KEY && s->rem_down && (u32)(what - KEY_FX1) <= (u32)(KEY_MFX - KEY_FX1)) s->rem_fx = 1;
+        return 0;
+    }
+    if (type == EV_KEY && PAGE == SG_PAGE) {
+        if (sy_fx_screen()) {
+            if (!FX_FROZEN) return 0;
+            sy_take(s, KEY_REMAIN);                     /* its release taken too */
+            FX_FROZEN = 0;
+            sy_stock_key(KEY_EXIT, 0);
+            s->rem_holds++;
+            return 1;
+        }
+        s->rem_down = 1;
+        s->rem_fx = 0;
+        sy_key_bit(KEY_REMAIN, 1);
+        return 1;
+    }
+    if (type == EV_KEY_UP && s->rem_down) {
+        s->rem_down = 0;
+        sy_key_bit(KEY_REMAIN, 0);
+        if (s->rem_fx) {
+            s->rem_holds++;
+        } else if (PAGE == SG_PAGE) {
+            sy_stock_key(KEY_REMAIN, val);              /* a tap: the page's own REMAIN (the preview bus) */
+            s->rem_taps++;
+        }
+        return 1;
+    }
+    return 0;
 }
 
 /* An event on the screen; 1 takes it. A pad picks a sound (pad 16: OFF), silently: its press as a pad hit and as a key,
@@ -1409,6 +1495,7 @@ EXPORT SCREEN s32 sy_event(const s16 *ev) {
     s32 type = ev[0], what = ev[1];
     if ((u32)(type - EV_KEY) <= (u32)(EV_KNOB - EV_KEY) || type == EV_PAD || type == EV_PAD_UP) sy_ready();
     if ((type == EV_KEY_UP || type == EV_PAD_UP) && sy_untake(s, type, what)) return 1;
+    if ((type == EV_KEY || type == EV_KEY_UP) && sy_remain(s, type, what, ev[2])) return 1;
     if (type == EV_KEY_UP) sy_flush(s);
     if (type == EV_KEY && what == KEY_REC_SET && key_held(KEY_EXT_SOURCE) && !key_held(KEY_SHIFT) &&
         (PAGE == MAIN_PAGE || PAGE == SG_PAGE)) {
@@ -1416,7 +1503,13 @@ EXPORT SCREEN s32 sy_event(const s16 *ev) {
         sy_mode_on(s);
         return 1;
     }
-    if (sy_shown() && sy_screen_event(s, type, what, ev[2])) return 1;
+    if (sy_shown()) {
+        if (sy_fx_screen() && sy_fx_event(type, what)) {
+            s->fx_passes++;                             /* test 6: the FX screen's */
+            return NR_EVENT(ev);
+        }
+        if (sy_screen_event(s, type, what, ev[2])) return 1;
+    }
     return NR_EVENT(ev);
 }
 
@@ -1426,28 +1519,32 @@ UI_SMALL SCREEN static char *put_signed(char *p, s32 v) {
     return put_u(p, (u32)(v < 0 ? -v : v));
 }
 
-static const char *const SY_LABELS[6] = {"SOUND", "TONE", "LEVEL", "OCTAVE", 0, "SUSTAIN"};
+static const char *const SY_LABELS[6] = {0, "TONE", "LEVEL", "OCTAVE", "SUSTAIN", "DYNAMICS"};
 
-/* A knob column's name and value: SOUND (OFF, 1..15), TONE (-64..+63), LEVEL (0..198, 100 as designed); the SHIFT page:
- * OCTAVE (-2..+2), the tone's own setting (-64..+63), SUSTAIN (0..100). */
+/* Test 6: a knob's offset from 64 (-64..63) as -50..+50, and a position (0..127) as 0..100 with 64 at 50. */
+UI_SMALL SCREEN static s32 sy_pm50(s32 d) { return d >= 0 ? (d * 50 + 31) / 63 : -((-d * 50 + 32) / 64); }
+UI_SMALL SCREEN static u32 sy_pct(u32 pos) { return pos <= 64u ? (pos * 50u + 32u) / 64u : 50u + ((pos - 64u) * 50u + 31u) / 63u; }
+
+/* A knob column's name and value (test 6): the tone's own setting and TONE (-50..+50), LEVEL (0..100, 50 as
+ * designed); the SHIFT page: OCTAVE (-2..+2), SUSTAIN and DYNAMICS (0..100). */
 EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
     const sy_t *s = &sy;
     u32 tone = sy_tone(s), i = col + ((s->shift_page ^ s->shift_down) ? 3u : 0u);
-    *put_str(label, i == 4u ? SY_P2_NAMES[tone] : SY_LABELS[i]) = 0;
+    *put_str(label, i == 0u ? SY_P2_NAMES[tone] : SY_LABELS[i]) = 0;
     char *p = value;
     if (i == 0)
-        p = s->muted ? put_str(p, "OFF") : put_u(p, tone + 1u);
+        p = put_signed(p, sy_pm50(s->knob[tone][1]));
     else if (i == 1)
-        p = put_signed(p, s->knob[tone][0]);
+        p = put_signed(p, sy_pm50(s->knob[tone][0]));
     else if (i == 2)
-        p = put_u(p, (u32)(64 + s->knob[tone][2]) * 100u / 64u);
+        p = put_u(p, sy_pct((u32)(64 + s->knob[tone][2])));
     else if (i == 3)
         p = put_signed(p, (u32)s->oct[tone] - 1u < SY_OCTAVES ? (s32)s->oct[tone] - (s32)SY_OCT_ZERO
                                                                : (s32)SY_OCT_DESIGN[tone]);
     else if (i == 4)
-        p = put_signed(p, s->knob[tone][1]);
-    else
         p = put_u(p, s->susk[tone] ? s->susk[tone] - 1u : SY_SUS_DESIGN[tone]);
+    else
+        p = put_u(p, s->dynk[tone] ? s->dynk[tone] - 1u : SY_DYN_DESIGN[tone]);
     *p = 0;
 }
 
@@ -1512,6 +1609,7 @@ EXPORT SCREEN void sy_foot_draw(void *widget) {
 EXPORT SCREEN void sy_sg_poll(void *page) {
     SG_POLL(page);
     sy_t *s = &sy;
+    s->sg_page = (u32)page;                             /* SY test 6: its views (sy_fx_screen) */
     if (s->drawn_rev == s->rev) return;
     s->drawn_rev = s->rev;
     void *const *children = (void *const *)((u8 *)page + SG_CHILDREN);
@@ -1520,12 +1618,16 @@ EXPORT SCREEN void sy_sg_poll(void *page) {
     if (s->foot && PAGE == SG_PAGE && *(const volatile u32 *)s->foot == s->foot_vt) INVALIDATE((void *)s->foot);
 }
 
-/* The bar (PRM: item, value). Its item name and value text on the screen: SOUND and its value. */
-EXPORT UI_SMALL SCREEN void sy_bar_name_c(char *out) { *put_str(out, "SOUND") = 0; }
+/* The bar (PRM: item, value). Test 6: blank on the screen (VALUE picks the sound, the footer names it): no item name,
+ * no value, and its part of the bar (x 57 on, the item's box, "PRM:") painted over. */
+EXPORT UI_SMALL SCREEN void sy_bar_name_c(char *out) { *out = 0; }
 
-EXPORT UI_SMALL SCREEN void sy_bar_text_c(char *out) {
-    const sy_t *s = &sy;
-    *(s->muted ? put_str(out, "OFF") : put_u(out, sy_tone(s) + 1u)) = 0;
+EXPORT UI_SMALL SCREEN void sy_bar_text_c(char *out) { *out = 0; }
+
+EXPORT UI_SMALL SCREEN void sy_bar_blank_c(void *fb, s32 y0, s32 y1) {
+    const s32 r[4] = {SY_BAR_X0, y0, SY_BAR_X1, y1};
+    F_COLOR(fb, 0xFFFFFF, 0);
+    F_RECT(fb, r);
 }
 
 /* The bar's update: 1 when it should be drawn again (what it shows changed, or the screen came or went). */
@@ -1557,8 +1659,10 @@ __attribute__((naked, used)) SCREEN void sy_bar_name(void) {
         "bx r12\n");
 }
 
-/* From 0x80123be6 (likewise): r0-r3 the displaced draw call's arguments, r6 the item, the value text at sp + 0x28. On
- * the screen: the draw, our value text, on at 0x80123c5a (which draws it); else the arp's bridge (it draws first). */
+/* From 0x80123be6 (likewise): r0-r3 the displaced draw call's arguments, r4 the bar, r6 the item, the item box's y0
+ * and y1 at sp + 0x1c and sp + 0x24, the value text at sp + 0x28. On the screen (test 6): the displaced draw skipped,
+ * the PRM part painted over, an empty value text, on at 0x80123c5a (which draws it); else the arp's bridge (it draws
+ * first). */
 __attribute__((naked, used)) SCREEN void sy_bar_text(void) {
     __asm__ volatile(
         "push {r0, r1, r2, r3, r4, lr}\n"
@@ -1566,9 +1670,10 @@ __attribute__((naked, used)) SCREEN void sy_bar_text(void) {
         "cmp r0, #0\n"
         "pop {r0, r1, r2, r3, r4, lr}\n"
         "beq 1f\n"
-        "movw r12, #0x4fa1\n"
-        "movt r12, #0x800d\n"
-        "blx r12\n"
+        "ldr r0, [r4, #0x84]\n"
+        "ldr r1, [sp, #0x1c]\n"
+        "ldr r2, [sp, #0x24]\n"
+        "bl sy_bar_blank_c\n"
         "add r0, sp, #0x28\n"
         "bl sy_bar_text_c\n"
         "movw r12, #0x3c5b\n"
@@ -1610,7 +1715,17 @@ __attribute__((naked, used)) SCREEN void sy_bar_poll(void) {
  * strikes), played only within MIDI 12..127.
  * Test 5: silent unless EXT SOURCE is on and pair 0 is the input alone (the readout can run the tracker on the page on
  * Mix: its notes are not played). SY test 4: the hold (route_hold) makes pair 0 the input alone whatever ROUTING says,
- * so test 5's "SYNTH NEEDS ROUTING ExtIn" popup is gone. */
+ * so test 5's "SYNTH NEEDS ROUTING ExtIn" popup is gone.
+ * SY test 6: drum mode strikes a pad for every guitar note: the kits play notes 36..51 only (pads 1..16), and the
+ * guitar's E2..D#3 struck pads 5..16. Now the open low E is pad 1 (36), a pad a fret to G3 on pad 16, and the notes
+ * outside an octave nearer at a time. */
+UI_SMALL SCREEN static s32 syn_kit_note(s32 note) {
+    s32 v = note - 40;
+    while (v < 0) v += 12;
+    while (v > 15) v -= 12;
+    return 36 + v;
+}
+
 EXPORT UI_SMALL void syn_ui(void) {
     gsyn_t *s = &gsyn;
     u32 drum = KIT_MODE_ON;
@@ -1641,6 +1756,8 @@ EXPORT UI_SMALL void syn_ui(void) {
             s32 oct = SG_OCT, out = note;
             if (!drum)
                 out += 12 * (oct < -3 ? -3 : oct > 4 ? 4 : oct);
+            else
+                out = syn_kit_note(note);
             if (out >= 12 && out <= 127) {
                 SG_MIDI_EVENT(2u, out, vel ? vel : SYN_VELOCITY, 0);
                 s->ons++;

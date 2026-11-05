@@ -17,7 +17,9 @@ CTRL 1-3), saved. SY synth test 4 (sy-synth-test4) moves picking and editing to 
 lifts the ROUTING ExtIn rule for both synths: while one listens the chip is held on ExtIn, and the recorder is given
 what ROUTING asks for (test 5's popup is gone). SY synth test 5 (sy-synth-test5) replaces the picker with a guitar
 synth screen on the Sound Generator page (EXT SOURCE + RECORD SETTING); there synth test 6 is silent and the SY synth
-plays.
+plays. SY synth test 6 (sy-synth-test6) changes synth test 6's drum mode: the kits play notes 36..51 only (pads
+1..16), so the guitar's own notes struck pads 5..16 for E2..D#3 and nothing above; now `syn_ui` folds every note onto a
+pad (the open low E on pad 1, a pad a fret to G3 on pad 16, the rest an octave nearer at a time). See `SY_TEST.md`.
 
 ## Guitar synth test 1 (gtr-synth-test1)
 
