@@ -150,6 +150,9 @@ typedef struct {
     float noise, gain;                      /* breath noise (x the bands' summed amplitude); the output gain */
     u32 p2kind, seqdiv;                     /* test 3: what CTRL 2 sets (sy_ref P_*); the steps a beat (4) */
     float p2base, p2span, bright;           /* test 3: CTRL 2's base value and span; CTRL 1's octaves (0) */
+    u32 fund;                               /* test 5: 1: a note sounds from its lowest band only */
+    float octm, roct;                       /* test 5: OCTAVE: the oscillators x octm (a power of two), rinc x 1/octm */
+    float sus;                              /* test 5: SUSTAIN: a falling level's rate while the band sounds (0: none) */
 } sy_tone_t;
 
 /* sy.state, written by the audio task only */
@@ -168,14 +171,18 @@ typedef struct {
     volatile u32 req;                       /* 1: run; 0: fade out and stop */
     u32 starts, stops;
     u32 reset_req;
-    volatile u32 tone_req;                  /* test 2: the tone picked (VALUE + pad 1-15: 0..14) */
-    volatile u32 muted;                     /* test 2: VALUE + pad 16: the synth off */
-    u32 picks, taken;                       /* tones picked; the pads whose press the pick took (their releases too) */
+    volatile u32 tone_req;                  /* test 2: the tone picked (test 5: SOUND 1-15: 0..14) */
+    volatile u32 muted;                     /* test 2: the synth off (test 5: SOUND OFF) */
+    u32 picks, taken;                       /* SOUND changes; test 5: keys 0..31 whose press was taken (and release) */
     volatile u32 bpm100;                    /* the SP's tempo for the step gate (BPM x 100), every 0.1 s */
     u32 tempo_checked;
-    volatile s8 knob[15][3];                /* test 3: each tone's CTRL 1-3, as knob position - 64 (0: as designed) */
+    volatile s8 knob[15][3];                /* test 3: each tone's TONE, P2, LEVEL, as knob position - 64 (0: as
+                                               designed) */
     u8 dirty, loaded;                       /* test 3: picks or knobs not in the file yet; the file was read */
     u8 pad3[1];
+    volatile s8 oct[15];                    /* test 5: each tone's OCTAVE: 0 as designed, 1..5 = -2..+2 */
+    volatile u8 susk[15];                   /* test 5: each tone's SUSTAIN: 0 as designed, 1..101 = 0..100 */
+    u8 pad5[2];
     u32 loads, saves, save_errors, bad_files;   /* test 3: the file */
     /* written by the audio task */
     volatile u32 state;
@@ -188,12 +195,17 @@ typedef struct {
     volatile u32 seq;                       /* odd while pub is written */
     sy_window pub;
     u32 tot_max_ever, over, slow_cycles, hot, reset_ack;
-    /* test 4: the picker (VALUE + EXT SOURCE), UI task */
-    u32 picker;                             /* 1: open: the pads pick, CTRL 1-3 edit */
-    u32 picker_at;                          /* its last touch (cycle count): it closes 4 s after */
-    s32 picker_page;                        /* the page it opened on: another page closes it */
-    u32 opens, closes, handoffs;            /* VALUE presses handed to FX deep edit's input FX screens */
-    u8 ext_taken, exit_taken, value_taken, lit;   /* releases to take too; the pads show the picker */
+    /* test 5: the guitar synth screen (EXT SOURCE + RECORD SETTING: the Sound Generator page in SY mode), UI task */
+    u32 mode;                               /* 0 off; 1 the screen is up (the SG page); 2 the page was asked for */
+    u32 mode_at;                            /* when it was asked for (cycle count) */
+    u32 rev, drawn_rev;                     /* what the columns and the footer show changed; redrawn up to */
+    u32 bar_rev, bar_drawn;                 /* what the bar (PRM) shows changed; redrawn up to */
+    u32 taken_hi;                           /* keys 32..63 whose press was taken (and release) */
+    u32 pads_taken;                         /* pad events taken (pads 1-16, SUB PAD as bit 16): their releases too */
+    u8 shift_page, shift_down, shift_used, ext_fix;   /* SHIFT tapped (the second page); SHIFT held; a knob turned
+                                               while it was; EXT SOURCE's release to come (input on again after) */
+    u32 enters, leaves, pads_ate, turns, vsteps;  /* the screen opened, closed; pads, knobs, VALUE steps it took */
+    u32 foot, foot_vt;                      /* the footer widget last drawn on the screen, its vtable word */
     /* test 4, audio task: the synth's newest block as TX added it, for the recorder on ROUTING ExtIn */
     volatile u32 rec_fresh;                 /* rec holds a block the recorder has not had */
     s16 rec[FRAMES];
@@ -221,6 +233,7 @@ typedef struct __attribute__((aligned(32))) {
     s32 last_pick;                          /* test 2: the block of the last pick */
     u32 ns, tone;                           /* test 2: the noise's LCG; the tone playing */
     u32 started, blocks, crossings;
+    u32 fund_cut;                           /* test 5: band-blocks FUND silenced (whole multiples of a lower band) */
 } sy_block_t;
 
 extern sy_t sy;

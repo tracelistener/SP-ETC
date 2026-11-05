@@ -15,7 +15,9 @@ BOSS's SY pedals work, on every page but the Sound Generator's, with synth test 
 (sy-synth-test2) adds 15 tones picked with VALUE + pad; SY synth test 3 (sy-synth-test3) knob editing (VALUE +
 CTRL 1-3), saved. SY synth test 4 (sy-synth-test4) moves picking and editing to a picker (VALUE + EXT SOURCE) and
 lifts the ROUTING ExtIn rule for both synths: while one listens the chip is held on ExtIn, and the recorder is given
-what ROUTING asks for (test 5's popup is gone).
+what ROUTING asks for (test 5's popup is gone). SY synth test 5 (sy-synth-test5) replaces the picker with a guitar
+synth screen on the Sound Generator page (EXT SOURCE + RECORD SETTING); there synth test 6 is silent and the SY synth
+plays.
 
 ## Guitar synth test 1 (gtr-synth-test1)
 

@@ -410,6 +410,8 @@ def skip_spans(man):
     copied to ITCM/SDRAM, the module area, and the scratch stack below the caller."""
     spans = [(man['module_base'], man['module_limit']), (TEST, STACK), (0x60000000, 0x60400000)]
     spans += [(p['address'], p['address'] + p['size']) for p in man['patches']]
+    if man.get('sytext'):                                # SY synth test 5: the screen's code, a copy row of its own
+        spans.append((man['sytext']['address'], man['sytext']['address'] + man['sytext']['size']))
     return spans
 
 

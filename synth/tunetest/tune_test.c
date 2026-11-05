@@ -1,20 +1,25 @@
-/* SY synth test 4, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
+/* SY synth test 5, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
  * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
  * BOSS's SY pedals work: 49 semitone bands, each with its own oscillators, from RX pair 0, added to the DRY pair of
- * TX line 3 one block later, on every page but the Sound Generator's while EXT SOURCE is on.
- * Test 2: 15 tones and OFF; the UI reads the SP's tempo every 0.1 s for the SEQ tone's steps. Test 3: CTRL 1-3 set the
- * tone playing's BRIGHT, its own setting and LEVEL (sy.knob); picks and knobs are kept in B:/_sy_tones.bin beside FX
- * deep edit's file, read at the first key or knob event after the boot, never written while an FX screen is up.
- * Test 4: hold VALUE and press EXT SOURCE (any page but the Sound Generator's) to open the picker: the pads light (the
- * sound playing white, pad 16 red), a pad picks, pad 16 puts the synth off, CTRL 1-3 edit without VALUE held; EXIT, the
- * chord again, 4 s untouched, another page or any other key closes it; VALUE closes it and goes on to FX deep edit's
- * input FX screens (which the chord opened before). VALUE + pad and VALUE + CTRL are stock's again. The UI
- * dispatcher's key and knob handlers come here through FX deep edit's bridges (their calls to fde_key_down /
- * fde_key_up / fde_knob, re-pointed by the builder to sy_key_down / sy_key_up / sy_knob, which hand on to them).
- * Test 4 also lifts the ExtIn rule: while a synth listens (EXT SOURCE on), every ROUTING DT1 goes to the effects chip
- * as ExtIn (route_hold, sy_dt1), so pair 0 is the input alone whatever ROUTING says, and the recorder feed is given what
+ * TX line 3 one block later, on every page while EXT SOURCE is on (the Sound Generator's only in the guitar synth
+ * screen).
+ * Test 2: 15 tones and OFF; the UI reads the SP's tempo every 0.1 s for the SEQ tone's steps. Test 3: each tone's TONE
+ * (BRIGHT), its own setting (P2) and LEVEL (sy.knob); the settings are kept in B:/_sy_tones.bin beside FX deep edit's
+ * file, read at the first key, pad or knob event after the boot, written at a key release (never from the UI tick,
+ * never while an FX screen is up).
+ * Test 4 lifts the ExtIn rule: while a synth listens (EXT SOURCE on), every ROUTING DT1 goes to the effects chip as
+ * ExtIn (route_hold, sy_dt1), so pair 0 is the input alone whatever ROUTING says, and the recorder feed is given what
  * ROUTING asks for: on Mix the chip's pair 1 x 2 (the mix before BUS 3/4, the synth in it), on ExtIn the input with the
  * synth added (sy_feed, before the feed).
+ * Test 5: the guitar synth screen. Hold EXT SOURCE and press RECORD SETTING (main screen or Sound Generator page): the
+ * Sound Generator page opens in SY mode, the input on. Its three knob columns show SOUND / TONE / LEVEL (SHIFT tapped
+ * or held: OCTAVE / the tone's own setting / SUSTAIN), the bar PRM: SOUND, the footer the sound's name; CTRL 1-3 set
+ * them, VALUE steps SOUND, a pad picks a sound (16: OFF). The page's pads, knobs, VALUE, REC and SUB PAD never reach
+ * stock there (no sample, no Sound Generator note), through note repeat's bridge at the UI dispatcher's entry (its call
+ * to nr_event_c, re-pointed to sy_event). EXIT leaves; SHIFT + RECORD SETTING gives the page back to the Sound
+ * Generator. The screen is drawn through the page's own widgets (the builder re-points the knob column's and the
+ * footer's draw, the page's update and the bar's three arp bridges to sy_*; outside the screen they hand on). The
+ * picker of test 4 is gone: VALUE + EXT SOURCE opens FX deep edit's input FX screens again.
  * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
@@ -54,15 +59,20 @@
  *   bounce's rx bridge: its feed call -> sy_feed (test 4: the pairs, the recorder's pair 0, then the feed)
  *   0x800d8118  the DT1 builder's jump to FX deep edit's fde_dt1 -> sy_dt1 (test 4: ROUTING held on ExtIn)
  *   the meter's mixer exit (meter_mix_end): sy_tx adds the engine's newest block to TX line 3's DRY pair
+ *   note repeat's nr_event bridge (from the UI dispatcher 0x8003b530): its bl nr_event_c -> sy_event (test 5)
+ *   SG knob column draw 0x8022bbd4, footer draw 0x802256fc, page update 0x80229678 -> sy_col_draw, sy_foot_draw,
+ *   sy_sg_poll (test 5; each hands on to the kits' / kits save's)
+ *   0x800bbc98, 0x80123be6, 0x80123ce0  the arp's bar bridges (item name, value text, screen update) -> sy_bar_*
  *
  * The CPU meter, as T0 had it: the DWT cycle counter times every 64-frame block (800,000 cycles at 600 MHz); MIX
  * the whole mixer 0x1c2d0, entry to return; PAD and SG are still kept (the readout does not show them). This file is
  * the integer side: the builder checks that none of its functions has an FPU instruction.
  */
-#include "tune_test_links.h"   /* from the builder: SG_PRE_TARGET, BNC_UI, BNC_RX, SG_MIDI, KIT_MODE, FDE_DOWN, FDE_UP,
-                                  FDE_KNOB */
+#include "tune_test_links.h"   /* from the builder: SG_PRE_TARGET, BNC_UI, BNC_RX, SG_MIDI, KIT_MODE, FDE_DT1_LO/HI,
+                                  NR_EVENT_C, KIT_COL_DRAW, KIT_FOOT_DRAW, KS_SG_POLL, ARP_NAME/TEXT/POLL_LO/HI */
 #include "tune_test.h"
-#include "sy_names.h"          /* from the builder (sy_ref.py): SY_POPUP, SY_OFF_PAD, SY_KNOB_NAMES, SY_P2_NAMES */
+#include "sy_names.h"          /* from the builder (sy_ref.py): SY_NAME, SY_P2_NAMES, SY_OCT_DESIGN, SY_SUS_DESIGN,
+                                  SY_OFF_PAD, SY_OCT_ZERO, SY_OCTAVES */
 
 #define EXPORT __attribute__((used))
 #define S_(x) #x
@@ -177,8 +187,8 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
     OFFSET(sy_t, tot_max_ever), sizeof(sy_block_t), OFFSET(sy_block_t, e), OFFSET(sy_block_t, per),
     OFFSET(sy_block_t, ph), OFFSET(sy_block_t, amp), OFFSET(sy_block_t, owned), OFFSET(sy_block_t, env),
     OFFSET(sy_block_t, started), OFFSET(sy_block_t, tone), OFFSET(sy_block_t, nper), OFFSET(sy_t, tone_req),
-    OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads), OFFSET(sy_t, picker),
-    OFFSET(sy_t, rec)};
+    OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads), OFFSET(sy_t, mode),
+    OFFSET(sy_t, rec), OFFSET(sy_t, oct), OFFSET(sy_t, susk), OFFSET(sy_block_t, fund_cut)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
@@ -202,11 +212,6 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define PAD_TEMPO ((s32 (*)(s32))0x80047DD1u)
 #define CUR_BANK (*(volatile s32 *)0x82DFFF44u)
 #define BANKS 10
-/* FX deep edit's key handlers (the builder reads them from its bridges' calls): 1 takes the key. */
-#define FDE_KEY_DOWN ((u32 (*)(const s16 *))FDE_DOWN)
-#define FDE_KEY_UP ((u32 (*)(const s16 *))FDE_UP)
-#define FDE_KNOB_TURN ((u32 (*)(const s16 *))FDE_KNOB)
-#define SY_POPUP_MS 1500
 #define SY_TONE_COUNT 15u
 /* Test 3: the file, with the stock calls FX deep edit's file uses (the builder checks their code). */
 #define FILE_OPEN ((s32 (*)(const char *, s32))0x800DEC61u)    /* 0 read, 0x601 write (create, truncate); < 0 fails */
@@ -214,8 +219,10 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define FILE_WRITE ((s32 (*)(s32, const void *, s32))0x800DD9B9u)
 #define FILE_CLOSE ((s32 (*)(s32))0x800DEBD9u)
 #define SY_FILE_MAGIC 0x4E545953u                              /* "SYTN" */
-#define SY_FILE_VERSION 1u
-#define SY_FILE_BYTES 60                                       /* magic, version, tone, muted, 15; 45 knobs, 3 zero; FNV */
+#define SY_FILE_VERSION 2u                                     /* test 5 (new tones: a version 1 file is left alone) */
+/* magic, version, tone, muted, 15; 45 knob positions, 15 OCTAVE, 15 SUSTAIN, 1 zero; FNV-1a of the first 84 */
+#define SY_FILE_BYTES 88
+#define SY_FILE_SUM 84
 #define FNV 2166136261u
 /* Test 3: an FX screen up (as FX deep edit finds it: the view on TOP's list whose vtable is the FX screen's). */
 #define TOP_OBJECT (*(u8 *const volatile *)0x80CFD350u)
@@ -225,7 +232,7 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define DRY_MAX 0x7FFFF                                /* the packer clips every stem to 20 bits */
 #define DRY_MIN (-0x80000)
 
-/* ---- SY test 4: ROUTING Mix, the recorder, the picker ---- */
+/* ---- SY test 4: ROUTING Mix, the recorder ---- */
 /* The stock DT1 builder (context, ID, index, value): its entry jumps to sy_dt1, then FX deep edit's fde_dt1 and stock. */
 #define DT1_SEND ((u32 (*)(u32, s32, s32, s32))0x800D8119u)
 #define BMC 0x80592500u                                /* the effects chip's DT1 context, as the system setter passes */
@@ -236,14 +243,38 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define FEED_PAIR (*(volatile u8 *)0x82E0E974u)
 #define FEED_ENTRY ((u32 (*)(volatile s16 *, u32))0x0001CA81u)
 #define KEY_EXT_SOURCE 0x12
-#define PICKER_CYCLES 2400000000u                      /* 4 s: the picker closes this long after its last touch */
-#define PICKER_MS 4000
-#define F_LED ((void (*)(u32, u32, u32))0x800D4911u)   /* key light (key, 1 lit, a pad's colour): sends only changes */
-#define LED_REFRESH (*(volatile u16 *)0x802496F0u)     /* |= 2: stock paints the pads again */
-#define PAD_PLAYING 0xFFFFFFu                          /* the sound playing: white */
-#define PAD_SOUND 0x000080u                            /* the other sounds: blue */
-#define PAD_OFF 0x800000u                              /* pad 16: red, bright while the synth is off */
-#define PAD_OFF_NOW 0xFF0000u
+
+/* ---- SY test 5: the guitar synth screen (the Sound Generator page in SY mode) ---- */
+#define EV_KEY 5                                       /* UI events: (type, what, value) */
+#define EV_KEY_UP 6
+#define EV_ENCODER 7                                   /* VALUE turned: what 0, value the steps */
+#define EV_KNOB 9                                      /* CTRL 1-3: what 1..3, value the position 0..127 */
+#define EV_PAD 0x10                                    /* a pad hit (pads 0..15, SUB PAD 0x13) */
+#define EV_PAD_UP 0x11
+#define KEY_SUB_PAD 0x13
+#define KEY_REC_SET 0x16                               /* RECORD SETTING */
+#define KEY_REC 0x1B
+/* Note repeat's handler for every UI event (the builder reads it from its bridge's call, which now comes here). */
+#define NR_EVENT ((s32 (*)(const s16 *))NR_EVENT_C)
+#define PAGE_REQUEST ((void (*)(s32))0x800DA599u)     /* ask for a page: it comes at a later UI event */
+#define SET_SET ((void (*)(u32, s32, s32, s32))0x800DD0C1u)   /* settings set (object, ID, value, flag) */
+#define LIGHTS (*(volatile u16 *)0x802496F0u)         /* |= 0x10: stock paints the keys' lights again */
+#define MODE_WAIT 600000000u                           /* 1 s: the page asked for and not there: give up */
+/* The widgets' draws as the parent has them (the kits' column and footer draws, kits save's page update) and the stock
+ * drawing calls the kits use: colour (framebuffer, fore, back), clear a rectangle, font, centred text. */
+#define COL_DRAW ((void (*)(void *))KIT_COL_DRAW)
+#define FOOT_DRAW ((void (*)(void *))KIT_FOOT_DRAW)
+#define SG_POLL ((void (*)(void *))KS_SG_POLL)
+#define INVALIDATE ((void (*)(void *))0x800D0019u)
+#define F_COLOR ((void (*)(void *, u32, u32))0x800D8019u)
+#define F_RECT ((void (*)(void *, const s32 *))0x800CE581u)
+#define F_FONT ((void (*)(void *, s32))0x800D80D9u)
+#define F_TEXT ((void (*)(void *, s32, s32, const char *))0x800D4FA1u)
+#define FONT_SMALL 0x1D                                /* the stock knob column's: the name small at +3, */
+#define FONT_BIG 2                                     /* the value big at +15 (DM-404 renders them so) */
+#define COL_BASE 0x7B                                  /* the SG knob columns' parameter IDs (SHIFT: 0x7e..0x80) */
+#define SG_CHILDREN 0x1A6C                             /* the SG page's three knob columns */
+#define SY_SOUNDS 16u                                  /* SOUND: OFF, then the 15 tones */
 
 /* ---- the synth: the tracker's note on the Sound Generator ---- */
 #define SG_PAGE 0x1E                                   /* the Sound Generator page (the kits' and the arp's) */
@@ -695,6 +726,8 @@ __attribute__((naked, used)) void meter_sg_end(void) {
 /* ---- UI task ---- */
 
 #define UI_SMALL __attribute__((noinline, minsize))
+/* SY test 5: the guitar synth screen's code goes in the SY slot (the builder's .sytext copy row): the module is full */
+#define SCREEN __attribute__((section(".sytext")))
 
 UI_SMALL static char *put_str(char *p, const char *s) {
     while (*s) *p++ = *s++;
@@ -977,7 +1010,7 @@ static inline u32 syn_live(const tt_t *t) { return t->ext && t->hold && DWT_CYCC
  * firmware sends into ExtIn too (the RECORD SETTING and looper screens, its chip resets). The recorder meanwhile gets
  * the mix (pair 1 x 2) on ROUTING Mix, the input and the synth on ExtIn (sy_rec). */
 UI_SMALL static void route_hold(tt_t *t, u32 now) {
-    u32 want = t->ext && (PAGE == SG_PAGE || !sy.muted);
+    u32 want = t->ext && ((PAGE == SG_PAGE && !sy.mode) || !sy.muted);   /* test 5: the SG page's own synth */
     if (want && !t->hold) {
         t->hold = 1;
         t->hold_at = now;
@@ -1009,7 +1042,7 @@ EXPORT UI_SMALL void tune_ui(void) {
         t->routing = (u32)SYS_GET(SYSPRM, ROUTING, -1);
     }
     route_hold(t, now);
-    u32 want = meter.shown || (PAGE == SG_PAGE && syn_live(t));
+    u32 want = meter.shown || (PAGE == SG_PAGE && !sy.mode && syn_live(t));   /* test 5: not in the SY screen */
     if (!want) t->req = 0;
     if (want && !t->req && t->state == TT_OFF) tune_start(t);
 }
@@ -1052,19 +1085,20 @@ UI_SMALL static void sy_start(sy_t *s) {
     s->req = 1;
 }
 
-/* Where the synth can play: every page but the Sound Generator's (guitar synth test 6 plays there), with EXT SOURCE on
- * and the chip held on ExtIn (test 4; on Mix it hands back the mix as heard: the engine would hear its own sound). */
-static inline u32 sy_can_play(void) { return syn_live(&tt) && PAGE != SG_PAGE; }
+/* Where the synth can play: every page but the Sound Generator's (guitar synth test 6 plays there; test 5: but the SY
+ * screen's), with EXT SOURCE on and the chip held on ExtIn (test 4; on Mix it hands back the mix as heard: the engine
+ * would hear its own sound). */
+static inline u32 sy_can_play(void) { return syn_live(&tt) && (PAGE != SG_PAGE || sy.mode); }
 
-UI_SMALL static void sy_picker_tick(sy_t *s, u32 now);
+UI_SMALL SCREEN static void sy_mode_tick(sy_t *s, u32 now);
 
-/* Every UI tick: the SY engine where it can play, unless pad 16 put it off (test 2). Leaving that lets it fade out
- * over 8 blocks. Every 0.1 s: the SP's tempo (test 2: the SEQ tone's steps), as the arp reads it. Test 4: the picker's
- * pads and its time. */
+/* Every UI tick: the SY engine where it can play, unless SOUND is OFF (test 2: pad 16). Leaving that lets it fade out
+ * over 8 blocks. Every 0.1 s: the SP's tempo (test 2: the SEQ tone's steps), as the arp reads it. Test 5: the guitar
+ * synth screen's page and EXT SOURCE. */
 EXPORT UI_SMALL void sy_ui(void) {
     sy_t *s = &sy;
     u32 now = DWT_CYCCNT;
-    if (s->picker) sy_picker_tick(s, now);
+    sy_mode_tick(s, now);
     if (now - s->tempo_checked >= CHECK_CYCLES) {
         s->tempo_checked = now;
         s32 bank = CUR_BANK;
@@ -1099,8 +1133,9 @@ UI_SMALL static void put32(u8 *p, u32 v) {
     for (u32 i = 0; i < 4u; i++) p[i] = (u8)(v >> (8u * i));
 }
 
-/* Test 3: the file into RAM, once (the first key or knob event after the boot): a missing, short, long or bad file
- * (magic, version, tones, sum) leaves the tones as designed. */
+/* Test 3: the file into RAM, once (the first key, pad or knob event after the boot): a missing, short, long or bad file
+ * (magic, version, tones, sum) leaves the tones as designed. Test 5: version 2 (the tones changed: a version 1 file is
+ * left alone), with each tone's OCTAVE (0..5) and SUSTAIN (0..101) after the knobs. */
 UI_SMALL static void sy_ready(void) {
     sy_t *s = &sy;
     if (s->loaded) return;
@@ -1110,13 +1145,18 @@ UI_SMALL static void sy_ready(void) {
     s32 n = FILE_READ(fd, sy_file, SY_FILE_BYTES);
     FILE_CLOSE(fd);
     if (n != SY_FILE_BYTES || get32(sy_file) != SY_FILE_MAGIC || sy_file[4] != SY_FILE_VERSION ||
-        sy_file[7] != SY_TONE_COUNT || get32(sy_file + 56) != sy_fnv(sy_file, 56)) {
+        sy_file[7] != SY_TONE_COUNT || get32(sy_file + SY_FILE_SUM) != sy_fnv(sy_file, SY_FILE_SUM)) {
         s->bad_files++;
         return;
     }
     for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) {
         u32 v = sy_file[8 + i];
         s->knob[i / 3u][i % 3u] = (s8)((v > 127u ? 127u : v) - 64u);
+    }
+    for (u32 i = 0; i < SY_TONE_COUNT; i++) {
+        u32 o = sy_file[53 + i], su = sy_file[68 + i];
+        s->oct[i] = (s8)(o <= SY_OCTAVES ? o : 0u);
+        s->susk[i] = (u8)(su <= 101u ? su : 0u);
     }
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
     s->muted = sy_file[6] & 1u;
@@ -1145,8 +1185,12 @@ UI_SMALL static void sy_save(void) {
     sy_file[6] = (u8)s->muted;
     sy_file[7] = SY_TONE_COUNT;
     for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) sy_file[8 + i] = (u8)(s->knob[i / 3u][i % 3u] + 64);
-    sy_file[53] = sy_file[54] = sy_file[55] = 0;
-    put32(sy_file + 56, sy_fnv(sy_file, 56));
+    for (u32 i = 0; i < SY_TONE_COUNT; i++) {
+        sy_file[53 + i] = (u8)s->oct[i];
+        sy_file[68 + i] = s->susk[i];
+    }
+    sy_file[83] = 0;
+    put32(sy_file + SY_FILE_SUM, sy_fnv(sy_file, SY_FILE_SUM));
     s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
     if (fd >= 0) {
         n = FILE_WRITE(fd, sy_file, SY_FILE_BYTES);
@@ -1160,201 +1204,400 @@ UI_SMALL static void sy_save(void) {
     }
 }
 
-/* Popups: one text buffer, so the picker can tell its own popup on the screen (and close it when it closes). */
-static char sy_text[40];
-
-UI_SMALL static void sy_say(const char *a, const char *b, int ms) {
-    char *p = put_str(sy_text, a);
-    if (b) {
-        *p++ = '\n';
-        p = put_str(p, b);
-    }
-    *p = 0;
-    POPUP_POST(sy_text, ms);
-}
-
-UI_SMALL static u32 sy_popup_ours(void) {
-    volatile const char *a = POPUP_TEXT;
-    if (!POPUP_SHOWN || !sy_text[0]) return 0;
-    for (u32 i = 0; i < sizeof sy_text; i++) {
-        if (a[i] != sy_text[i]) return 0;
-        if (!sy_text[i]) return 1;
-    }
-    return 0;
-}
-
-/* Test 2 (test 4: in the picker): pad n picks tone n, pad 16 puts the synth off, with a popup naming it. */
-UI_SMALL static void sy_pick(u32 pad) {
-    sy_t *s = &sy;
-    s->picks++;
-    s->dirty = 1;
-    if (pad == SY_OFF_PAD) {
-        s->muted = 1;
-        sy_say(SY_POPUP[pad], 0, SY_POPUP_MS);
-    } else {
-        s->tone_req = pad;
-        s->muted = 0;
-        sy_say(SY_POPUP[pad], 0, PICKER_MS);
-    }
-}
-
 static inline u32 key_held(u32 k) { return (KEYS[k >> 3] >> (k & 7u)) & 1u; }
 
-/* Test 4: the pads while the picker is open: the sound playing white, the others blue, pad 16 red (bright while the
- * synth is off). Every UI tick, over whatever stock paints (the key light sends only changes). */
-UI_SMALL static void sy_picker_paint(sy_t *s) {
-    u32 cur = s->muted ? SY_OFF_PAD : s->tone_req < SY_TONE_COUNT ? s->tone_req : 0u;
-    for (u32 p = 0; p < PADS; p++) {
-        u32 c = p == SY_OFF_PAD ? (cur == p ? PAD_OFF_NOW : PAD_OFF) : cur == p ? PAD_PLAYING : PAD_SOUND;
-        F_LED(p, 1, c);
-    }
-    s->lit = 1;
+/* Test 3: the file is written at a key release, never with an FX screen up (writing with one up sent the display to the
+ * main screen: FX deep edit's test 12 on the unit). */
+UI_SMALL static void sy_flush(sy_t *s) {
+    if (s->dirty && !sy_fx_screen()) sy_save();
 }
 
-/* Test 4, VALUE + EXT SOURCE: the picker opens, and the synth comes on with the sound it had if pad 16 had put it off. */
-UI_SMALL static void sy_picker_open(sy_t *s) {
-    s->picker = 1;
-    s->opens++;
-    s->picker_at = DWT_CYCCNT;
-    s->picker_page = PAGE;
+/* ---- SY test 5: the guitar synth screen ---- */
+
+/* The screen is up: SY mode, on the Sound Generator page (the draws and the bar's bridges ask). */
+EXPORT SCREEN u32 sy_shown(void) { return sy.mode && PAGE == SG_PAGE; }
+
+UI_SMALL SCREEN static void sy_changed(sy_t *s) {
+    s->rev++;
+    s->bar_rev++;
+}
+
+static inline u32 sy_tone(const sy_t *s) { return s->tone_req < SY_TONE_COUNT ? s->tone_req : 0u; }
+
+/* EXT SOURCE on through the stock setter (as bounce switches it: the setter sends the input's level to the chip), and
+ * its light. */
+UI_SMALL SCREEN static void sy_ext_on(void) {
+    SET_SET(SETTINGS, EXT_SOURCE, 1, 0);
+    LIGHTS |= 0x10;
+}
+
+UI_SMALL SCREEN static void sy_mode_off(sy_t *s) {
+    if (!s->mode) return;
+    s->mode = 0;
+    s->leaves++;
+    sy_changed(s);                                      /* the page's own draws come back if it stays up */
+}
+
+/* EXT SOURCE + RECORD SETTING: the screen on the Sound Generator page (asked for from the main screen), the synth on with
+ * the sound it had. The EXT SOURCE press went to stock: the input off now (the press toggled it off) is put on again,
+ * and its release is watched (with GATE on stock switches the input off there). */
+UI_SMALL SCREEN static void sy_mode_on(sy_t *s) {
+    s->enters++;
     if (s->muted) {
         s->muted = 0;
         s->dirty = 1;
     }
-    sy_say(SY_POPUP[s->tone_req < SY_TONE_COUNT ? s->tone_req : 0u], "TAP A PAD", PICKER_MS);
-    sy_picker_paint(s);
-}
-
-/* The picker closes: stock paints the pads again; its popup goes. The file is written at the key that closed it, or at
- * the next key release (sy_key_up), never from the UI tick. */
-UI_SMALL static void sy_picker_close(sy_t *s) {
-    if (!s->picker) return;
-    s->picker = 0;
-    s->closes++;
-    if (s->lit) {
-        LED_REFRESH |= 2;
-        s->lit = 0;
+    if (!SET_GET(SETTINGS, EXT_SOURCE, 0)) sy_ext_on();
+    s->ext_fix = 1;
+    s->shift_down = 0;
+    s->foot = 0;
+    sy_changed(s);
+    if (PAGE == SG_PAGE) {
+        s->mode = 1;
+    } else {
+        s->mode = 2;
+        s->mode_at = DWT_CYCCNT;
+        PAGE_REQUEST(SG_PAGE);
     }
-    if (sy_popup_ours()) POPUP_CLOSE();
 }
 
-UI_SMALL static void sy_picker_tick(sy_t *s, u32 now) {
-    if (PAGE != s->picker_page || PAGE == SG_PAGE || now - s->picker_at >= PICKER_CYCLES)
-        sy_picker_close(s);
+/* Every UI tick: the page asked for has come (or 1 s passed: given up); another page closes the screen; EXT SOURCE let
+ * go after the chord: the input on again if stock put it off (GATE). */
+UI_SMALL SCREEN static void sy_mode_tick(sy_t *s, u32 now) {
+    if (s->mode == 2) {
+        if (PAGE == SG_PAGE) {
+            s->mode = 1;
+            sy_changed(s);
+        } else if (now - s->mode_at >= MODE_WAIT) {
+            sy_mode_off(s);
+        }
+    } else if (s->mode == 1 && PAGE != SG_PAGE) {
+        sy_mode_off(s);
+    }
+    if (PAGE != SG_PAGE) s->foot = 0;
+    if (s->ext_fix && !key_held(KEY_EXT_SOURCE)) {
+        s->ext_fix = 0;
+        if (!SET_GET(SETTINGS, EXT_SOURCE, 0)) sy_ext_on();
+    }
+}
+
+/* SOUND: 0 OFF, 1..15 the tones. */
+UI_SMALL SCREEN static u32 sy_sound(const sy_t *s) { return s->muted ? 0u : sy_tone(s) + 1u; }
+
+UI_SMALL SCREEN static void sy_sound_set(sy_t *s, u32 n) {
+    if (n == sy_sound(s)) return;
+    if (n) {
+        s->tone_req = n - 1u;
+        s->muted = 0;
+    } else {
+        s->muted = 1;
+    }
+    s->picks++;
+    s->dirty = 1;
+    sy_changed(s);
+}
+
+/* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): SOUND (16 zones of 8: OFF, then 1..15), TONE and LEVEL
+ * (knob - 64, 0 as designed); on the SHIFT page (tapped, or SHIFT held): OCTAVE (5 zones, -2..+2), the tone's own
+ * setting (knob - 64) and SUSTAIN (0..100). */
+UI_SMALL SCREEN static void sy_screen_knob(sy_t *s, u32 k, s32 pos) {
+    pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
+    u32 tone = sy_tone(s), shift = s->shift_page ^ s->shift_down;
+    if (s->shift_down) s->shift_used = 1;
+    s->turns++;
+    if (!shift && k == 0) {
+        sy_sound_set(s, (u32)pos >> 3);
+        return;
+    }
+    if (!shift)
+        s->knob[tone][k == 1u ? 0 : 2] = (s8)(pos - 64);
+    else if (k == 0)
+        s->oct[tone] = (s8)(1 + ((pos * (s32)SY_OCTAVES) >> 7));
+    else if (k == 1)
+        s->knob[tone][1] = (s8)(pos - 64);
     else
-        sy_picker_paint(s);
+        s->susk[tone] = (u8)(1 + ((pos * 101) >> 7));
+    s->dirty = 1;
+    s->rev++;
 }
 
-UI_SMALL static void sy_flush(sy_t *s) {
-    if (s->dirty && !s->picker && !sy_fx_screen()) sy_save();
+/* Presses the screen took have their releases taken too (keys by ID; pad events by pad, SUB PAD as bit 16). */
+UI_SMALL SCREEN static void sy_take(sy_t *s, s32 key) {
+    if (key < 32)
+        s->taken |= 1u << key;
+    else
+        s->taken_hi |= 1u << (key - 32);
 }
 
-/* Test 4: VALUE pressed in the picker: on to FX deep edit's input FX screens, as its own VALUE + EXT SOURCE opened them
- * before. Its handler sees VALUE's press (it notes VALUE held), then an EXT SOURCE press and release (its chord: the
- * screens if the input FX has extra settings). */
-UI_SMALL static void sy_handoff(sy_t *s, const s16 *ev) {
-    static const s16 ext_down[4] = {5, KEY_EXT_SOURCE, 0, 0}, ext_up[4] = {6, KEY_EXT_SOURCE, 0, 0};
-    s->handoffs++;
-    FDE_KEY_DOWN(ev);
-    if (FDE_KEY_DOWN(ext_down)) FDE_KEY_UP(ext_up);
+UI_SMALL SCREEN static u32 sy_untake(sy_t *s, s32 type, s32 what) {
+    volatile u32 *w;
+    u32 bit;
+    if (type == EV_PAD_UP) {
+        w = &s->pads_taken;
+        bit = (u32)what < PADS ? 1u << what : what == KEY_SUB_PAD ? 1u << 16 : 0u;
+    } else {
+        if ((u32)what >= 64u) return 0;
+        w = what < 32 ? &s->taken : &s->taken_hi;
+        bit = 1u << (what & 31);
+    }
+    if (!(*w & bit)) return 0;
+    *w &= ~bit;
+    return 1;
 }
 
-/* Every key press, on any page, before the dispatcher's own handling (FX deep edit's bridge calls this in place of
- * fde_key_down); 1 takes it (its bit in the held-key bitmap stays clear, so no sample plays).
- * Test 4: VALUE held + EXT SOURCE, on any page but the Sound Generator's, opens the picker: with EXT SOURCE on its press
- * is taken (the input stays on); off, it goes on and switches the input on. In the picker a pad picks (pad 16: off, and
- * the picker closes), EXIT or the chord again closes it, VALUE closes it and goes on to the input FX's extra screens;
- * any other key closes it and goes on. Everything else is FX deep edit's (VALUE + pad and VALUE + CTRL are stock's
- * again). */
-EXPORT u32 sy_key_down(const s16 *ev) {
-    sy_t *s = &sy;
-    sy_ready();
-    s32 key = ev[1];
-    if (s->picker) {
-        if ((u32)key < PADS) {
-            if ((u32)key == SY_OFF_PAD) sy_picker_close(s);   /* first: closing drops the picker's own popup */
-            sy_pick((u32)key);
-            s->taken |= 1u << key;
-            s->picker_at = DWT_CYCCNT;
-            sy_flush(s);
+/* An event on the screen; 1 takes it. A pad picks a sound (pad 16: OFF), silently: its press as a pad hit and as a key,
+ * and SUB PAD's, never reach stock (no sample, no Sound Generator note). CTRL 1-3 edit, VALUE steps SOUND; VALUE's
+ * push and REC are taken (no edit mode, no export). SHIFT goes on (its held bit) and is noted for the page; SHIFT +
+ * RECORD SETTING closes the screen and goes on (the stock Sound Generator); EXIT and the rest go on. */
+UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val) {
+    if (type == EV_PAD) {
+        if ((u32)what < PADS) {
+            s->pads_taken |= 1u << what;
+            s->pads_ate++;
+            sy_sound_set(s, (u32)what == SY_OFF_PAD ? 0u : (u32)what + 1u);
             return 1;
         }
-        if (key == KEY_EXIT || (key == KEY_EXT_SOURCE && key_held(KEY_VALUE)) || key == KEY_VALUE) {
-            sy_picker_close(s);
-            sy_flush(s);
-            if (key == KEY_EXIT) s->exit_taken = 1;
-            if (key == KEY_EXT_SOURCE) s->ext_taken = 1;
-            if (key == KEY_VALUE) {
-                sy_handoff(s, ev);
-                s->value_taken = 1;
-            }
+        if (what != KEY_SUB_PAD) return 0;
+        s->pads_taken |= 1u << 16;
+        return 1;
+    }
+    if (type == EV_KNOB) {
+        if ((u32)(what - 1) >= 3u) return 0;
+        sy_screen_knob(s, (u32)(what - 1), val);
+        return 1;
+    }
+    if (type == EV_ENCODER) {
+        if (what || !val) return 0;
+        s32 n = (s32)sy_sound(s) + (val > 0 ? 1 : -1);
+        sy_sound_set(s, (u32)(n < 0 ? 0 : n > (s32)SY_SOUNDS - 1 ? (s32)SY_SOUNDS - 1 : n));
+        s->vsteps++;
+        return 1;
+    }
+    if (type == EV_KEY) {
+        if ((u32)what < PADS) {
+            sy_take(s, what);
+            sy_sound_set(s, (u32)what == SY_OFF_PAD ? 0u : (u32)what + 1u);
             return 1;
         }
-        sy_picker_close(s);
-    } else if (key == KEY_EXT_SOURCE && key_held(KEY_VALUE) && PAGE != SG_PAGE) {
-        sy_picker_open(s);
-        if (SET_GET(SETTINGS, EXT_SOURCE, 0) == 0) return 0;
-        s->ext_taken = 1;
-        return 1;
+        if (what == KEY_SUB_PAD || what == KEY_REC || what == KEY_VALUE) {
+            sy_take(s, what);
+            return 1;
+        }
+        if (what == KEY_SHIFT) {
+            s->shift_down = 1;
+            s->shift_used = 0;
+            s->rev++;
+        } else if (what == KEY_REC_SET && key_held(KEY_SHIFT)) {
+            sy_mode_off(s);
+        }
+        return 0;
     }
-    return FDE_KEY_DOWN(ev);
+    if (type == EV_KEY_UP && what == KEY_SHIFT && s->shift_down) {
+        if (!s->shift_used) s->shift_page ^= 1u;
+        s->shift_down = 0;
+        s->rev++;
+    }
+    return 0;
 }
 
-/* Every key release (in place of fde_key_up): the releases of presses the picker took are taken too (VALUE's after FX
- * deep edit has seen it); any other goes to FX deep edit's. Picks and knobs not in the file yet are written at a release
- * once the picker is closed (no FX screen up). */
-EXPORT u32 sy_key_up(const s16 *ev) {
+/* Every UI event, at the UI dispatcher's entry (note repeat's bridge calls this in place of nr_event_c); 1 takes it.
+ * The file is read at the first key, pad or knob event after the boot and written at a key release. EXT SOURCE held +
+ * RECORD SETTING, on the main screen or the Sound Generator page, opens the guitar synth screen (its press and release
+ * taken). The screen's own events (sy_screen_event); everything else on to note repeat's handler. */
+EXPORT SCREEN s32 sy_event(const s16 *ev) {
     sy_t *s = &sy;
-    s32 key = ev[1];
-    sy_ready();
-    sy_flush(s);
-    if ((u32)key < PADS && ((s->taken >> key) & 1u)) {
-        s->taken &= ~(1u << key);
+    s32 type = ev[0], what = ev[1];
+    if ((u32)(type - EV_KEY) <= (u32)(EV_KNOB - EV_KEY) || type == EV_PAD || type == EV_PAD_UP) sy_ready();
+    if ((type == EV_KEY_UP || type == EV_PAD_UP) && sy_untake(s, type, what)) return 1;
+    if (type == EV_KEY_UP) sy_flush(s);
+    if (type == EV_KEY && what == KEY_REC_SET && key_held(KEY_EXT_SOURCE) && !key_held(KEY_SHIFT) &&
+        (PAGE == MAIN_PAGE || PAGE == SG_PAGE)) {
+        sy_take(s, what);
+        sy_mode_on(s);
         return 1;
     }
-    if (key == KEY_EXT_SOURCE && s->ext_taken) {
-        s->ext_taken = 0;
-        return 1;
-    }
-    if (key == KEY_EXIT && s->exit_taken) {
-        s->exit_taken = 0;
-        return 1;
-    }
-    if (key == KEY_VALUE && s->value_taken) {
-        s->value_taken = 0;
-        FDE_KEY_UP(ev);
-        return 1;
-    }
-    return FDE_KEY_UP(ev);
+    if (sy_shown() && sy_screen_event(s, type, what, ev[2])) return 1;
+    return NR_EVENT(ev);
 }
 
-/* Test 3: a knob's popup: the tone, then the setting and the knob's position ("SY 4 SUPERSAW", "DETUNE 75"). */
-UI_SMALL static void sy_knob_popup(u32 tone, u32 k, u32 pos) {
-    char line[24];
-    char *p = put_str(line, k == 1u ? SY_P2_NAMES[tone] : SY_KNOB_NAMES[k]);
-    *p++ = ' ';
-    p = put_u(p, pos);
+/* "+5", "0", "-12". */
+UI_SMALL SCREEN static char *put_signed(char *p, s32 v) {
+    if (v) *p++ = v < 0 ? '-' : '+';
+    return put_u(p, (u32)(v < 0 ? -v : v));
+}
+
+static const char *const SY_LABELS[6] = {"SOUND", "TONE", "LEVEL", "OCTAVE", 0, "SUSTAIN"};
+
+/* A knob column's name and value: SOUND (OFF, 1..15), TONE (-64..+63), LEVEL (0..198, 100 as designed); the SHIFT page:
+ * OCTAVE (-2..+2), the tone's own setting (-64..+63), SUSTAIN (0..100). */
+EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
+    const sy_t *s = &sy;
+    u32 tone = sy_tone(s), i = col + ((s->shift_page ^ s->shift_down) ? 3u : 0u);
+    *put_str(label, i == 4u ? SY_P2_NAMES[tone] : SY_LABELS[i]) = 0;
+    char *p = value;
+    if (i == 0)
+        p = s->muted ? put_str(p, "OFF") : put_u(p, tone + 1u);
+    else if (i == 1)
+        p = put_signed(p, s->knob[tone][0]);
+    else if (i == 2)
+        p = put_u(p, (u32)(64 + s->knob[tone][2]) * 100u / 64u);
+    else if (i == 3)
+        p = put_signed(p, (u32)s->oct[tone] - 1u < SY_OCTAVES ? (s32)s->oct[tone] - (s32)SY_OCT_ZERO
+                                                               : (s32)SY_OCT_DESIGN[tone]);
+    else if (i == 4)
+        p = put_signed(p, s->knob[tone][1]);
+    else
+        p = put_u(p, s->susk[tone] ? s->susk[tone] - 1u : SY_SUS_DESIGN[tone]);
     *p = 0;
-    sy_say(SY_POPUP[tone], line, PICKER_MS);
 }
 
-/* Every knob turn, on any page (FX deep edit's knob bridge calls this in place of fde_knob). Test 4: in the picker,
- * CTRL 1-3 set the picked tone's BRIGHT, its own setting and LEVEL to the knob's position (0..127; 64 is the tone as
- * designed), and the bus effect never sees the turn; otherwise FX deep edit's (its input FX screens), then stock. */
-EXPORT u32 sy_knob(const s16 *ev) {
-    sy_t *s = &sy;
-    sy_ready();
-    s32 k = ev[1] - 1, pos = ev[2];
-    if (s->picker && (u32)k < 3u) {
-        u32 tone = s->tone_req < SY_TONE_COUNT ? s->tone_req : 0u;
-        pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
-        s->knob[tone][k] = (s8)(pos - 64);
-        s->dirty = 1;
-        s->picker_at = DWT_CYCCNT;
-        sy_knob_popup(tone, (u32)k, (u32)pos);
-        return 1;
+/* The footer: the sound's name ("SUPERSAW"), "SYNTH OFF". The footer's box is 64 px wide (DM-404: "SY 1 SAW LEAD" lost
+ * its last letter), its number is in the column and the bar. */
+EXPORT UI_SMALL SCREEN void sy_foot_text(char *out) {
+    const sy_t *s = &sy;
+    *put_str(out, s->muted ? "SYNTH OFF" : SY_NAME[sy_tone(s)]) = 0;
+}
+
+/* A widget's frame (framebuffer at +0x84, rectangle x0 y0 x1 y1 at +4), cleared as the stock draws do. */
+UI_SMALL SCREEN static void *sy_clear(s32 *w) {
+    void *fb = *(void **)((u8 *)w + 0x84);
+    F_COLOR(fb, 0xFFFFFF, 0);
+    F_RECT(fb, w + 1);
+    return fb;
+}
+
+/* The SG page's knob column draw (all knob widgets of its class come here, in place of the kits' kit_ui_draw). On the
+ * screen, for the three columns (descriptor type 0, parameter 0x7b..0x80): the name small at the top and the value big,
+ * where the stock column draws its own (0x80170994: font 0x1d at +3; 0x801709fa: font 2 at +15); anything else to the
+ * kits' draw. */
+EXPORT SCREEN void sy_col_draw(void *widget) {
+    s32 *w = (s32 *)widget;
+    s32 col = w[0x310 / 4] - COL_BASE;
+    if (col >= 3 && col <= 5) col -= 3;
+    if (!sy_shown() || w[0x308 / 4] || (u32)col > 2u) {
+        COL_DRAW(widget);
+        return;
     }
-    return FDE_KNOB_TURN(ev);
+    char label[12], value[8];
+    sy_col_text((u32)col, label, value);
+    void *fb = sy_clear(w);
+    s32 x = (w[1] + w[3]) / 2, y = w[2];
+    F_FONT(fb, FONT_SMALL);
+    F_TEXT(fb, x, y + 3, label);
+    F_FONT(fb, FONT_BIG);
+    F_TEXT(fb, x, y + 15, value);                       /* the big font left current, as the stock draw leaves it */
+}
+
+/* The footer widgets' draw (in place of the kits' kit_ui_footer_draw). On the screen: the sound's name, in the small
+ * font; the widget is kept to be drawn again when the sound changes (sy_sg_poll, only while the page stays up and the
+ * widget's first word is still its vtable). */
+EXPORT SCREEN void sy_foot_draw(void *widget) {
+    if (!sy_shown()) {
+        FOOT_DRAW(widget);
+        return;
+    }
+    sy_t *s = &sy;
+    s32 *w = (s32 *)widget;
+    s->foot = (u32)widget;
+    s->foot_vt = (u32)w[0];
+    char text[24];
+    sy_foot_text(text);
+    void *fb = sy_clear(w);
+    F_FONT(fb, FONT_SMALL);
+    F_TEXT(fb, (w[1] + w[3]) / 2, w[2] + 1, text);
+}
+
+/* The SG page's update (in place of kits save's ks_sg_poll, which it calls first): when what the screen shows changed,
+ * the page's three knob columns are drawn again (the page's current children, never kept), and the footer. */
+EXPORT SCREEN void sy_sg_poll(void *page) {
+    SG_POLL(page);
+    sy_t *s = &sy;
+    if (s->drawn_rev == s->rev) return;
+    s->drawn_rev = s->rev;
+    void *const *children = (void *const *)((u8 *)page + SG_CHILDREN);
+    for (u32 i = 0; i < 3u; i++)
+        if (children[i]) INVALIDATE(children[i]);
+    if (s->foot && PAGE == SG_PAGE && *(const volatile u32 *)s->foot == s->foot_vt) INVALIDATE((void *)s->foot);
+}
+
+/* The bar (PRM: item, value). Its item name and value text on the screen: SOUND and its value. */
+EXPORT UI_SMALL SCREEN void sy_bar_name_c(char *out) { *put_str(out, "SOUND") = 0; }
+
+EXPORT UI_SMALL SCREEN void sy_bar_text_c(char *out) {
+    const sy_t *s = &sy;
+    *(s->muted ? put_str(out, "OFF") : put_u(out, sy_tone(s) + 1u)) = 0;
+}
+
+/* The bar's update: 1 when it should be drawn again (what it shows changed, or the screen came or went). */
+EXPORT SCREEN u32 sy_bar_poll_c(void) {
+    sy_t *s = &sy;
+    if (s->bar_drawn == s->bar_rev) return 0;
+    s->bar_drawn = s->bar_rev;
+    return 1;
+}
+
+/* From 0x800bbc98 (the arp re-pointed it to its bridge; the builder re-points it here): r4 the text, r5 the item, mid
+ * function. On the screen the item name is ours and the function ends (0x800bbcc2: add sp, #0x68; pop {r4, r5, r7,
+ * pc}); else on to the arp's bridge with every register as it came. */
+__attribute__((naked, used)) SCREEN void sy_bar_name(void) {
+    __asm__ volatile(
+        "push {r0, r1, r2, r3, r4, lr}\n"
+        "bl sy_shown\n"
+        "cmp r0, #0\n"
+        "pop {r0, r1, r2, r3, r4, lr}\n"
+        "beq 1f\n"
+        "mov r0, r4\n"
+        "bl sy_bar_name_c\n"
+        "movw r12, #0xbcc3\n"
+        "movt r12, #0x800b\n"
+        "bx r12\n"
+        "1:\n"
+        "movw r12, #" XS(ARP_NAME_LO) "\n"
+        "movt r12, #" XS(ARP_NAME_HI) "\n"
+        "bx r12\n");
+}
+
+/* From 0x80123be6 (likewise): r0-r3 the displaced draw call's arguments, r6 the item, the value text at sp + 0x28. On
+ * the screen: the draw, our value text, on at 0x80123c5a (which draws it); else the arp's bridge (it draws first). */
+__attribute__((naked, used)) SCREEN void sy_bar_text(void) {
+    __asm__ volatile(
+        "push {r0, r1, r2, r3, r4, lr}\n"
+        "bl sy_shown\n"
+        "cmp r0, #0\n"
+        "pop {r0, r1, r2, r3, r4, lr}\n"
+        "beq 1f\n"
+        "movw r12, #0x4fa1\n"
+        "movt r12, #0x800d\n"
+        "blx r12\n"
+        "add r0, sp, #0x28\n"
+        "bl sy_bar_text_c\n"
+        "movw r12, #0x3c5b\n"
+        "movt r12, #0x8012\n"
+        "bx r12\n"
+        "1:\n"
+        "movw r12, #" XS(ARP_TEXT_LO) "\n"
+        "movt r12, #" XS(ARP_TEXT_HI) "\n"
+        "bx r12\n");
+}
+
+/* From 0x80123ce0, the bar's update (likewise, at the function's entry: r0 the bar, lr the caller): drawn again when
+ * sy_bar_poll_c says so, then the arp's bridge with r0-r3 and lr as they came. */
+__attribute__((naked, used)) SCREEN void sy_bar_poll(void) {
+    __asm__ volatile(
+        "push {r0, r1, r2, r3, r4, lr}\n"
+        "mov r4, r0\n"
+        "bl sy_bar_poll_c\n"
+        "cmp r0, #0\n"
+        "beq 1f\n"
+        "mov r0, r4\n"
+        "movw r12, #0x0019\n"
+        "movt r12, #0x800d\n"
+        "blx r12\n"
+        "1:\n"
+        "pop {r0, r1, r2, r3, r4, lr}\n"
+        "movw r12, #" XS(ARP_POLL_LO) "\n"
+        "movt r12, #" XS(ARP_POLL_HI) "\n"
+        "bx r12\n");
 }
 
 /* Every UI tick, on the Sound Generator page: the tracker's note there, through the entry MIDI IN on the page's
@@ -1374,7 +1617,11 @@ EXPORT UI_SMALL void syn_ui(void) {
     tt.drum = drum;                                     /* the tracker plays only plucks in drum mode */
     u32 w = tt.syn, seq = w >> 16;
     s32 note = (s32)(w & 0xFFu) - 1, vel = (s32)((w >> 8) & 0x7Fu);
-    if (PAGE != SG_PAGE) {
+    if (PAGE != SG_PAGE || sy.mode) {                  /* SY test 5: the SY screen plays the SY synth instead */
+        if (PAGE == SG_PAGE && s->sounding >= 0) {     /* the screen opened on the page: let our note go */
+            SG_MIDI_EVENT(2u, s->sounding, 0, 1);
+            s->offs++;
+        }
         s->sounding = -1;
         s->done = seq;
         return;

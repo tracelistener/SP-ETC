@@ -42,6 +42,13 @@
  * VALUE + CTRL 1-3; sy_knobs): BRIGHT adds -2..+2 octaves to the cutoff, LEVEL scales the output 0..2 x, and CTRL 2
  * sets the tone's own P2 (sy_ref.TONES p2). A knob at 64 leaves the tone's value as designed.
  *
+ * Test 5 (the tones stood out too little from the guitar: each partial had its own oscillator at its own level), per
+ * tone: FUND (a band whose pitch is a whole multiple 2..8, within 3%, of a lower band sounding in the same block stays
+ * silent: a note sounds from its lowest band only), SUSTAIN (while a band still sounds, a falling level is followed at
+ * the tone's rate instead of the release's) and OCTAVE (the oscillators x 2^-2..2^2). sy.oct / sy.susk hold the guitar
+ * synth screen's settings (0: as designed). And a band's first 4 periods after it wakes are counted, not tracked (they
+ * span the band-pass's start and read long: FUND left the note's start audibly flat).
+ *
  * Single precision throughout, no contraction (the pragma below): every fused multiply-add is an explicit fmaf, so
  * tunetest/sy_ref.py computes the same numbers; test_tune_test.py runs both on the same input.
  */
@@ -116,24 +123,25 @@ static float sy_input(sy_block_t *b, float *x12, float *dx) {
     return pk;
 }
 
-/* A crossing's period into the band's tracker (or, outside 300 cents, the band measures again). */
+/* A crossing's period into the band's tracker (or, outside 300 cents, the band measures again). Test 5: the first
+ * SY_SKIP (4) periods after a wake span the band-pass's start and read long (-138, -51, -22, -12 cents on every string:
+ * the tracker began up to 36 cents flat and took 100 ms to come up on the low E, which FUND left audible), so they are
+ * counted, not tracked: the tracker sits at the band's centre (set at the wake) and takes the fifth. */
 static void sy_period(sy_block_t *b, u32 k, const sy_band_t *c, float p) {
     if (!(p > c->plo && p < c->phi)) {
         b->nper[k] = 0;
         return;
     }
     u32 np = b->nper[k];
-    float base, tr;
-    if (np == 0) {
-        base = c->pc;
-        tr = 0.0f;
-    } else {
-        base = b->per[k] + b->trend[k];
-        tr = b->trend[k];
+    if (np >= SY_SKIP) {
+        float base = b->per[k] + b->trend[k], tr = b->trend[k];
+        float r = p - base;
+        b->per[k] = FMA(SY_ALPHA, r, base);
+        b->trend[k] = FMA(SY_BETA, r, tr);
+    } else if (np == 0) {
+        b->per[k] = c->pc;
+        b->trend[k] = 0.0f;
     }
-    float r = p - base;
-    b->per[k] = FMA(SY_ALPHA, r, base);
-    b->trend[k] = FMA(SY_BETA, r, tr);
     b->nper[k] = (u8)(np < 255u ? np + 1u : 255u);
 }
 
@@ -199,9 +207,25 @@ static float sy_exp2(float x) {
     return p * q.f;
 }
 
+/* Test 5: SUSTAIN s (0..100) as a per-block rate: 0 none; else x - x^2 / 2 for x = one block over 40 ms x 2^(0.08 s). */
+static float sy_sus(u32 s) {
+    if (!s) return 0.0f;
+    float tau = SY_SUS_MS0 * sy_exp2((float)s * SY_SUS_STEP);
+    float x = SY_BLOCK_MS / tau;
+    return FMA(-0.5f * x, x, x);
+}
+
 /* Test 3: the tone with its knobs (kd: CTRL 1-3 as knob position - 64). CTRL 2 is left alone at 64, so the tone's
- * value stays exactly as designed (the exp2 above is a close approximation, not the table's). */
-static void sy_knobs(sy_tone_t *t, const volatile s8 *kd) {
+ * value stays exactly as designed (the exp2 above is a close approximation, not the table's). Test 5: OCTAVE (0 as
+ * designed, 1..5: x 2^-2..2^2) and SUSTAIN (0 as designed, 1..101: 0..100). */
+static void sy_knobs(sy_tone_t *t, const sy_t *s, u32 tone) {
+    const volatile s8 *kd = s->knob[tone];
+    u32 o = (u32)s->oct[tone], su = s->susk[tone];
+    if (o - 1u < SY_OCTAVES) {
+        t->octm = SY_OCTM[o - 1u];
+        t->roct = SY_OCTM[SY_OCTAVES - o];
+    }
+    if (su - 1u <= 100u) t->sus = sy_sus(su - 1u);
     s32 k1 = kd[0], k2 = kd[1], k3 = kd[2];
     t->bright = ((float)k1 * 0.015625f) * 2.0f;
     t->gain = t->gain * ((float)(64 + k3) * 0.015625f);
@@ -335,7 +359,7 @@ static __attribute__((noinline)) void sy_pass_fm(float *acc, float *php, float *
  * lb x the amplitude (or, for FM, B phase-modulating A with the index fmi), the amplitude ramped from a0 to a1. */
 static void sy_osc(sy_block_t *b, u32 k, const sy_tone_t *t, float a0, float a1, float vibr, float fmi, float *acc) {
     float per = b->per[k];
-    float inc = (0.5f / per) * vibr, rinc = (per + per) / vibr;
+    float inc = ((0.5f / per) * vibr) * t->octm, rinc = ((per + per) / vibr) * t->roct;   /* test 5: OCTAVE */
     float da = (a1 - a0) * (1.0f / 64.0f);
     float ph = b->ph[k], phb = b->phb[k];
     if (t->fm) {
@@ -358,6 +382,25 @@ static u32 sy_voices(sy_block_t *b, const sy_tone_t *t, float vibr, float *acc, 
         float el = k ? b->e[k - 1] : 0.0f, er = k + 1u < SY_BANDS ? b->e[k + 1] : 0.0f;
         own[k] = (u8)(e >= SY_E_FLOOR && b->nper[k] >= 2u && e >= el && e >= er && p > SY_BAND[k].olo &&
                       p < SY_BAND[k].ohi);
+    }
+    if (t->fund) {                                  /* test 5: a whole multiple of a lower sounding band is silent */
+        u8 keep[SY_BANDS];
+        for (u32 k = 0; k < SY_BANDS; k++) {
+            keep[k] = own[k];
+            if (!own[k]) continue;
+            for (u32 j = 0; j < k; j++) {
+                if (!own[j]) continue;
+                float r = b->per[j] / b->per[k];
+                s32 h = (s32)(r + 0.5f);
+                if (h >= 2 && h <= SY_HARM_MAX && __builtin_fabsf(r - (float)h) < SY_HARM_TOL * (float)h) {
+                    keep[k] = 0;
+                    b->fund_cut++;
+                    break;
+                }
+            }
+        }
+        for (u32 k = 0; k < SY_BANDS; k++)
+            own[k] = keep[k];
     }
     for (u32 k = 0; k < SY_BANDS; k++) {
         if (!own[k] || b->owned[k]) continue;
@@ -388,8 +431,9 @@ static u32 sy_voices(sy_block_t *b, const sy_tone_t *t, float vibr, float *acc, 
             if (!(tg > 0.0f)) tg = 0.0f;
         }
         float a0 = b->amp[k];
-        /* a band that sounded under 32 ms (a neighbour's flicker, not a note) stops at once, never releasing */
-        float coef = tg > a0 ? t->att : b->age[k] >= SY_AGE_MIN ? t->rel : 1.0f;
+        /* a band that sounded under 32 ms (a neighbour's flicker, not a note) stops at once, never releasing; test 5:
+         * while it still sounds, SUSTAIN's rate for a falling level */
+        float coef = tg > a0 ? t->att : (own[k] && t->sus > 0.0f) ? t->sus : b->age[k] >= SY_AGE_MIN ? t->rel : 1.0f;
         float a1 = coef >= 1.0f ? tg : FMA(tg - a0, coef, a0);
         if (!(tg > 0.0f) && a1 < SY_AMP_EPS) a1 = 0.0f;
         if (!(a0 > 0.0f || a1 > 0.0f)) continue;
@@ -484,8 +528,8 @@ u32 sy_fp_step(sy_t *s) {
     if (!b->started) sy_init(b, s);
     u32 req = s->tone_req;
     if (req >= SY_TONES) req = b->tone;
-    sy_tone_t tone = SY_TONE[b->tone];                  /* test 3: with its knobs */
-    sy_knobs(&tone, s->knob[b->tone]);
+    sy_tone_t tone = SY_TONE[b->tone];                  /* test 3: with its knobs (test 5: OCTAVE, SUSTAIN) */
+    sy_knobs(&tone, s, b->tone);
     const sy_tone_t *t = &tone;
     float pk = sy_input(b, x12, dx);
     float ev = b->env * SY_ENV_K;

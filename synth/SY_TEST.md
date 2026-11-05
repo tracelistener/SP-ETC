@@ -1,4 +1,4 @@
-# SY synth tests 1 to 4: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 5: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -355,13 +355,116 @@ change what is heard. So:
   - The 30 ms grace, then stock again.
 - **Tracker:** `sy_feed` reads the pairs from its r0 packet, then calls the feed with the same r0 and r1.
 
+## SY synth test 5 (sy-synth-test5): the guitar synth screen, and new tones
+
+On the unit (2026-11-05): picking a sound in test 4's picker also played the sample on that pad, and the tones "do not
+stand out much from guitar sound". The user asked for a guitar synth mode whose menu stays up, entered maybe with
+EXT SOURCE + RECORD SETTING, "like our sound generator or kits gui displays", with a CTRL knob switching the presets.
+
+**Why the pads played.** A pad sends two UI events. One is a key press (type 5, key 0-15), which FX deep edit's
+bridge handed to the picker. The other is a pad hit (type 0x10, with its velocity), which goes from the UI dispatcher
+to the page's pad handler (`0x800c7db8`) and the stock pad note. The picker took only the first.
+
+**Every UI event first.** v9.52's note repeat already bridges the UI dispatcher's entry: `0x8003b530` jumps to its
+`nr_event`, which calls `nr_event_c` with one `bl`. The builder re-points that `bl` to `sy_event`, which hands everything
+it doesn't take on to `nr_event_c`. FX deep edit's bridges call their own handlers again.
+
+**The screen** (`tune_test.c`: `sy_event`, `sy_screen_event`, `sy_col_draw`, `sy_foot_draw`, `sy_sg_poll`, `sy_bar_*`):
+- Hold EXT SOURCE and press RECORD SETTING, on the main screen or the Sound Generator page. (SHIFT + RECORD SETTING
+  opens the Sound Generator itself.)
+  - RECORD SETTING's press and release are taken. The Sound Generator page is asked for (`0x800da598`, as the kits ask
+    for it), and the screen comes up when it arrives, or gives up after 1 s.
+  - The input goes on. If it was on, the EXT SOURCE press toggled it off, so the chord puts it on again through the
+    settings setter (`0x800dd0c0`, ID 0x25, as bounce does). Once EXT SOURCE is let go, it does so again if stock put
+    the input off (GATE).
+  - SOUND OFF comes back on with the sound it had.
+- It is the Sound Generator page, with its own widgets drawing ours, the way the kits draw theirs:
+  - **The knob columns:** the class's draw pointer (`0x8022bbd4`, the kits' `kit_ui_draw`). The name is small and the
+    value big, where and in the fonts the stock column uses: font 0x1d at +3, font 2 at +15. DM-404 showed that font 2
+    is the big one.
+  - **The footer** (`0x802256fc`, `kit_ui_footer_draw`): the sound's name. Its box is 64 px wide, so "SY 1 SAW LEAD"
+    lost its last letter.
+  - **The bar:** the arp's item name, value text and update bridges (its jumps at `0x800bbc98`, `0x80123be6`,
+    `0x80123ce0`) go to `sy_bar_name` / `sy_bar_text` / `sy_bar_poll` first. They show PRM: SOUND and its number.
+  - **The page's update** (`0x80229678`, kits save's `ks_sg_poll`, which it calls first) draws the columns and the
+    footer again when something changed. The columns are the page's children at +0x1a6c, read every time. The footer
+    is kept from its last draw only while the page is up and its first word is still its vtable.
+  - Outside the screen, each of these hands on with every register as it came.
+- On the screen:
+  - CTRL 1 is SOUND: 16 zones of 8 positions, OFF and then 1-15.
+  - CTRL 2 is TONE (test 3's BRIGHT, knob - 64), CTRL 3 LEVEL (0-198%).
+  - SHIFT tapped, or held, gives OCTAVE (5 zones, -2..+2), the tone's own setting (test 3's P2) and SUSTAIN (0-100). A
+    turn while SHIFT is held edits that page, and the release keeps the page.
+  - VALUE steps SOUND by one per turn event. A pad picks a sound, pad 16 OFF.
+  - Taken: the pads' hits and key presses, SUB PAD, VALUE's push (no edit mode), REC (no export), and the release of
+    every press taken. Everything else goes on: EXIT leaves (the page changes, so the screen closes), and SHIFT + RECORD
+    SETTING gives the page back to the Sound Generator.
+  - The SY synth plays on the Sound Generator page in the screen. Guitar synth test 6 doesn't: its note is let go when
+    the screen opens there.
+- **The file** (`B:/_sy_tones.bin`, version 2, 88 bytes): test 3's, plus each tone's OCTAVE and SUSTAIN (0 = as
+  designed). A version 1 file is ignored, since the tones changed. It is still written at a key release, never with an
+  FX screen up.
+- **Memory:** the module filled its 45,056-byte slot. The screen's code went into the SY slot (`.sytext`, a boot copy
+  row of its own at `0x83fe6c00`, 2,236 bytes), and sy_block keeps `0x83fe6000`-`0x83fe6c00`. The module is 44,248 bytes.
+
+**The tones** (`sy_ref.py`, `sy_fp.c`). Every partial of a note had an oscillator of its own at the partial's level, so
+the synth kept the guitar's spectrum and its decay. Three settings per tone:
+- **FUND:** a band whose pitch is a whole multiple 2-8 (within 3%) of a lower band sounding in the same block stays
+  silent. A note then sounds from its lowest band, and the tone's own wave makes all its harmonics. An octave or a
+  twelfth on another string goes too: in an open E chord, E2, B2 and G#3 stay. Every tone has it but PAD and STRINGS.
+- **SUSTAIN** 0-100: while a band still sounds, a falling level follows with a time constant of 40 ms x 2^(0.08 s)
+  (s 100: 10 s) instead of the release's. A note holds until its string dies (under -60 dBFS) or its band loses to a
+  neighbour.
+- **OCTAVE** -2..+2: the oscillators' increments x 2^OCTAVE (exact: a power of two).
+- **The pitch at a note's start** (`sy_period`). With FUND a note's fundamental band plays alone, and it came in flat.
+  The first periods a band reads after it wakes span the band-pass's start: -138, -51, -22, -12 cents on every string,
+  and the tracker took them in. The low E began 36 cents flat and took 100 ms to come up; the overtones had covered
+  it. Now a band's first 4 periods are counted, not tracked: it still sounds after 2, at its centre, and tracks from
+  the fifth. Every open string is within 5 cents from its first sounding block (the twin), and the low E still sounds
+  36 ms after the pick.
+
+The 15 tones are SAW LEAD, SQR LEAD, SYN BASS (an octave down), SUPERSAW, PAD, STRINGS, ORGAN, FLUTE, BELL (an octave
+up), BRASS, SUB BASS (down), SWEEP, WAH, SEQ and OCT LEAD (up).
+- The ceiling is 3 dB higher (OUT_SCALE 23170, -3 dBFS at the clip).
+- The gains put each tone's RMS on a strummed G chord 3 dB above test 4's SAW LEAD (the twin, two passes for the soft
+  clip). WAH needed 22x: its band-pass hears the fundamentals only now.
+- The release has `demos\sy5-NN-name.wav`: each tone on the model guitar (single notes, a strum, a picked chord, a
+  bend). Peaks 0.36-0.71.
+
+**DM-404** (the real 5.52 firmware in the full emulator, snapshot disks):
+- The chord opened the screen: page 0x1e, the screen up, the engine running.
+- CTRL 1-3, VALUE, SHIFT and the pads changed what they should, and pad 16 stopped the synth. EXIT went back to the
+  main screen.
+- A pad hit on the main screen before the chord made A-5 the current pad. The pads hit on the screen didn't change it:
+  they never reached stock.
+- The release's `screens\` has the screen as it drew.
+
+**Emulator checks:** 308 (160 distinct) pass on `release/sy-synth-test5`, 145 (45 distinct) of them in the SY section. Test 5's:
+- **The screen:** the chord (taken, the page asked for, up once it is there; RECORD SETTING alone goes on); pads, SUB
+  PAD, VALUE's push and REC taken with their releases, and nothing reaches note repeat; SOUND's 16 zones, VALUE's
+  steps and their ends; the SHIFT page, tapped and held; the columns', footer's and bar's text and drawing calls; the
+  page's update drawing them once; another descriptor type, another page, and the arp's bridges with every register as
+  it came; SHIFT + RECORD SETTING; the input put on, and again after GATE; giving up after 1 s; the SY synth on the
+  Sound Generator page in the screen, test 6 silent.
+- **The file:** version 2 written at a key release (none with an FX screen up), read back with the engine = the twin,
+  a version 1 file and a bad sum ignored.
+- **The engine:** every tone value for value; OCTAVE and SUSTAIN turned on four tones value for value; a tone change
+  from the screen value for value. The engine's own checks (the bands on the partials, silence after the strings)
+  now run on WAH, the one tone with no release: the saw lead releases over 150 ms and sustains. The bands on the
+  partials: 97.0% on four open strings, 98.6% on the G strum, 99.1% on the picked C (FUND leaves only the
+  fundamentals, so their start weighs more: 95.2% on the open strings before the start was fixed).
+- **The builder:** note repeat's bridge calls `sy_event`; the six pointers and jumps go to the screen's; FX deep
+  edit's bridges call their own handlers.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
 - The heavier tones' cycles at SDRAM speed (the readout's SY line): the FM bell, supersaw, pad, organ and bass take
   about 1.4-1.6 times the saw lead's instructions.
-- Test 4: whether the picker's pad colours read well on the unit, and whether a RESAMPLE or looper take with the
-  synth on is as loud as one with it off (pair 1 x 2 is from the readout's rounded peaks).
+- Test 4: whether a RESAMPLE or looper take with the synth on is as loud as one with it off (pair 1 x 2 is from
+  the readout's rounded peaks).
+- Test 5: how the new tones sound on a real guitar; whether FUND loses notes a chord needs; whether the screen's
+  chord feels right with GATE on.
 - Whether the chip takes a ROUTING DT1 while sampling is armed without a click in the recording.
 - How the low notes' 20-30 ms feel in longer playing (nothing was reported against them).
 - Test 3: whether the file saves and comes back on the unit (FX deep edit's way of saving works there), and whether

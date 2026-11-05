@@ -1,4 +1,4 @@
-"""Checks for SY synth test 4 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
+"""Checks for SY synth test 5 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
 tracker (note tracker test 2's, with test 4's click and clean readings), the SY engine (12. below), and the synth: the tracker's note on the Sound Generator,
 the cases synth test 3 got wrong on the unit (picks at the ringing string's level, strings ringing together) and
 test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT; test 5's ROUTING gate (silent on Mix,
@@ -53,7 +53,15 @@ image. On top of them:
      on as stock; the file at the closing key or the next release (never from the tick, never with an FX screen up);
      the chip held on ExtIn while a synth listens (a ROUTING DT1 out as ExtIn, others untouched on the caller's stack),
      ROUTING Mix playing, the user's value back after; sy_feed: the pairs before the feed, then pair 1 x 2 on Mix /
-     the synth added on ExtIn / nothing when the feed takes another pair, 30 ms grace.
+     the synth added on ExtIn / nothing when the feed takes another pair, 30 ms grace;
+   - test 5 (the picker above is gone): EXT SOURCE held + RECORD SETTING opens the guitar synth screen (taken, the SG
+     page asked for, the input put on); there pads (hits and key presses), SUB PAD, VALUE's push and REC are taken and
+     never reach note repeat's handler (no sample), a pad or CTRL 1 picks SOUND (zones), VALUE steps it, CTRL 2/3 and
+     the SHIFT page (tap; held) edit TONE, LEVEL, OCTAVE, the tone's own setting, SUSTAIN; the columns, footer and bar
+     drawn through the stubbed stock drawing calls, the page's update drawing them again once; outside the screen every
+     draw and bridge hands on (the arp's with every register as it came); SHIFT + RECORD SETTING and another page close
+     it; the file version 2 (OCTAVE, SUSTAIN) at a key release, read back, a version 1 file ignored; every tone with
+     OCTAVE and SUSTAIN turned value for value; the engine's FUND, SUSTAIN and OCTAVE in the twin.
 
 Not a hardware test: no timing (instructions are counted as a proxy), no screen, synthetic strings.
 """
@@ -70,8 +78,8 @@ from unicorn import UC_HOOK_CODE
 from unicorn import arm_const as ar
 
 import test_nam_test as base
-from test_nam_test import (Machine, check, sha, scatter, FLASH, COPY, STACK, SCRATCH, TXBUF, CAPTURE, SYSPRM, SYS_GET,
-                           SETTINGS_OBJ, SET_GET, CUR_TASK, TCB, M_SHOWN, skip_spans)
+from test_nam_test import (Machine, check, sha, scatter, FLASH, COPY, STACK, RET, SCRATCH, TXBUF, CAPTURE, SYSPRM,
+                           SYS_GET, SETTINGS_OBJ, SET_GET, CUR_TASK, TCB, M_SHOWN, skip_spans)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'tunetest'))
 import tune_ref as ref  # noqa: E402
@@ -128,10 +136,15 @@ def static_checks(out, man, parent_img, img):
     check(sha((out / 'SP404MKII_APP0.bin').read_bytes()) == man['app0_sha256'], 'APP0 is stock 5.52')
     rows_p, rows = scatter(parent_img), scatter(img)
     new_row = [FLASH + man['module_file_offset'], man['module_base'], man['module_size'], COPY]
+    st = man['sytext']
+    text_row = [FLASH + st['file_offset'], st['address'], st['size'], COPY]
     zero_rows = [[0, r['address'], r['size'], base.ZERO] for r in man['rows_added'] if r['kind'] == 'zero']
-    check(rows == rows_p + [new_row] + zero_rows and len(zero_rows) == 1 and
-          zero_rows[0][1] == man['symbols']['sy_block'],
-          'scatter table = parent rows + the module row + sy_block\'s zero row (SY test 3: out of the module)')
+    check(rows == rows_p + [new_row, text_row] + zero_rows and len(zero_rows) == 1 and
+          zero_rows[0][1] == man['symbols']['sy_block'] and st['address'] == 0x83FE6C00 and
+          st['address'] + st['size'] <= 0x83FE8000 and zero_rows[0][1] + zero_rows[0][2] <= st['address'] and
+          sha(img[st['file_offset']:st['file_offset'] + st['size']]) == st['sha256'],
+          'scatter table = parent rows + the module row + the screen code\'s row (SY test 5, .sytext in the SY slot) + '
+          'sy_block\'s zero row (SY test 3), the slot shared without overlap')
     module = img[man['module_file_offset']:man['module_file_offset'] + man['module_size']]
     check(sha(module) == man['module_sha256'] and man['module_base'] + man['module_size'] <= man['module_limit'],
           f"module bytes match the manifest and end below {man['module_limit']:#x}")
@@ -1004,20 +1017,28 @@ def synth_checks(img, man, kit_sym):
 
 
 # ---------------------------------------------------------------------------------------------
-# SY synth tests 1 to 3: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx, sy_key_down,
-# sy_key_up, sy_knob, the file) and its twin (sy_ref.py).
+# SY synth tests 1 to 5: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx, the file, test 5's
+# screen through sy_event and the SG page's widgets) and its twin (sy_ref.py).
 SY_OFF, SY_RUN, SY_SLOW = range(3)
+SY_PLAIN = 12                      # test 5: WAH, the one tone without a release (the engine's own checks run on it)
 SY_HEAD = 'req starts stops reset_req tone_req muted picks taken bpm100 tempo_checked'.split()
 SY_FILE = 'loads saves save_errors bad_files'.split()
 SY_RUNF = 'state rx steps tx fresh stopping sounding last_mix'.split()
-SY_KNOB_AT = 4 * len(SY_HEAD)                  # test 3: s8 knob[15][3], dirty, loaded, a pad byte
-SY_FILE_AT = SY_KNOB_AT + 48
+SY_KNOB_AT = 4 * len(SY_HEAD)                  # test 3: s8 knob[15][3], dirty, loaded, a pad byte; test 5: oct, susk
+SY_FILE_AT = SY_KNOB_AT + 80
 SY_RUN_AT = SY_FILE_AT + 4 * len(SY_FILE)
 SY_OUT_AT = SY_RUN_AT + 4 * len(SY_RUNF)
 SY_TAIL = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack'.split()
-SY_PICK = 'picker picker_at picker_page opens closes handoffs'.split()   # test 4, then 4 bytes, rec_fresh, rec[64]
+SY_SCREEN = 'mode mode_at rev drawn_rev bar_rev bar_drawn taken_hi pads_taken'.split()   # test 5, then 4 bytes,
+SY_COUNTS = 'enters leaves pads_ate turns vsteps foot foot_vt rec_fresh'.split()        # these, rec[64]
 KEY_EXT, KEY_EXIT, KEY_VALUE = 0x12, 0x22, 0x31
-PAD_PLAYING, PAD_SOUND, PAD_OFF, PAD_OFF_NOW = 0xFFFFFF, 0x000080, 0x800000, 0xFF0000
+KEY_SUB_PAD, KEY_REC_SET, KEY_REC, KEY_SHIFT = 0x13, 0x16, 0x1B, 0x2A
+EV_KEY, EV_KEY_UP, EV_ENC, EV_KNOB, EV_PAD, EV_PAD_UP = 5, 6, 7, 9, 0x10, 0x11
+PAGE_REQ, SET_SET = 0x800DA598, 0x800DD0C0
+F_COLOR, F_RECT, F_FONT, F_TEXT, INVALIDATE = 0x800D8018, 0x800CE580, 0x800D80D8, 0x800D4FA0, 0x800D0018
+BAR_END, BAR_DRAWN = 0x800BBCC2, 0x80123C5A
+WIDGET, FOOTER, FB, FOOTER_VT = SCRATCH + 0x800, SCRATCH + 0x900, 0x12345670, 0x80227000
+BAR_BUF, BAR_SCREEN, BAR_DRAW_ARGS = SCRATCH + 0xC00, SCRATCH + 0xD00, (0x111, 0x222, 0x333, 0x444)
 EV = SCRATCH + 0x200
 DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own screens)
 
@@ -1025,70 +1046,91 @@ DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own 
 class SyLayout:
     """sy_t and sy_block_t offsets, from the module's sy_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<23I', m.bytes(sym['sy_layout'], 92))
+        v = struct.unpack('<26I', m.bytes(sym['sy_layout'], 104))
         (self.sy_bytes, self.state, self.out, self.w_n, self.pub, self.tot_max_ever, self.block_bytes, self.e,
          self.per, self.ph, self.amp, self.owned, self.env, self.started, self.tone, self.nper, self.tone_req,
-         self.fe, self.knob, self.dirty, self.loads, self.picker, self.rec) = v
+         self.fe, self.knob, self.dirty, self.loads, self.mode, self.rec, self.oct, self.susk, self.fund_cut) = v
         check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
-              self.dirty == SY_KNOB_AT + 45 and self.loads == SY_FILE_AT and
+              self.dirty == SY_KNOB_AT + 45 and self.oct == SY_KNOB_AT + 48 and self.susk == self.oct + 15 and
+              self.loads == SY_FILE_AT and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
-              self.picker == self.tot_max_ever + 20 and self.rec == self.picker + 32 and
+              self.mode == self.tot_max_ever + 20 and self.rec == self.mode + 68 and
               self.sy_bytes == self.rec + 128 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
-              self.started + 12 <= self.block_bytes,
+              self.started + 12 <= self.block_bytes and self.fund_cut + 4 <= self.block_bytes,
               'sy_t and sy_block_t layout as the test reads it')
 
 
 class SyMachine(SynthMachine):
     """SynthMachine on the main screen, its RX block running tune_rx then sy_rx (as diag_rx_c), then the UI tick's
-    syn_ui and sy_ui."""
+    syn_ui and sy_ui. Test 5: UI events go in through sy_event (note repeat's handler, nr_event_c, stubbed: it records
+    what reaches it and returns 0); the page request and the settings setter recorded (EXT SOURCE follows the setter)."""
     def __init__(self, img, man, page=1, store=None, **kw):
         super().__init__(img, man, page=page, **kw)
         self.sl = SyLayout(self, self.sym)
         self.files = Files(self, store)                # test 3: the stock file calls, on files kept in Python
+        self.passed, self.requests, self.sets = [], [], []
+        nr = int(man['nr_hook']['nr_event_c'], 16)
+        self.uc.hook_add(UC_HOOK_CODE, self._nr, begin=nr, end=nr)
+        self.uc.hook_add(UC_HOOK_CODE, self._req, begin=PAGE_REQ, end=PAGE_REQ)
+        self.uc.hook_add(UC_HOOK_CODE, self._set, begin=SET_SET, end=SET_SET)
+
+    def _ret(self, uc, v=0):
+        uc.reg_write(ar.UC_ARM_REG_R0, v & 0xFFFFFFFF)
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def _nr(self, uc, a, s, _):
+        self.passed.append(struct.unpack('<3h', self.bytes(uc.reg_read(ar.UC_ARM_REG_R0), 6)))
+        self._ret(uc)
+
+    def _req(self, uc, a, s, _):
+        self.requests.append(uc.reg_read(ar.UC_ARM_REG_R0))
+        self._ret(uc)
+
+    def _set(self, uc, a, s, _):
+        args = tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(1, 4))
+        self.sets.append(args)
+        if args[0] == 0x25:
+            self.ext = args[1]
+        self._ret(uc)
 
     def sy(self):
         s = self.sym['sy']
         st = dict(zip(SY_HEAD, struct.unpack(f'<{len(SY_HEAD)}I', self.bytes(s, 4 * len(SY_HEAD)))))
-        kb = self.bytes(s + SY_KNOB_AT, 48)
+        kb = self.bytes(s + SY_KNOB_AT, 80)
         st['knob'] = [list(struct.unpack('<3b', kb[3 * t:3 * t + 3])) for t in range(15)]
         st['dirty'], st['loaded'] = kb[45], kb[46]
+        st['oct'] = list(struct.unpack('<15b', kb[48:63]))
+        st['susk'] = list(kb[63:78])
         st.update(zip(SY_FILE, struct.unpack(f'<{len(SY_FILE)}I', self.bytes(s + SY_FILE_AT, 4 * len(SY_FILE)))))
         st.update(zip(SY_RUNF, struct.unpack(f'<{len(SY_RUNF)}I', self.bytes(s + SY_RUN_AT, 4 * len(SY_RUNF)))))
         st['out'] = list(struct.unpack('<64i', self.bytes(s + self.sl.out, 256)))
         st.update(zip(SY_TAIL, struct.unpack(f'<{len(SY_TAIL)}I', self.bytes(s + self.sl.w_n, 4 * len(SY_TAIL)))))
-        st.update(zip(SY_PICK, struct.unpack('<IIi3I', self.bytes(s + self.sl.picker, 24))))
-        (st['ext_taken'], st['exit_taken'], st['value_taken'], st['lit'],
-         st['rec_fresh']) = struct.unpack('<4BI', self.bytes(s + self.sl.picker + 24, 8))
+        st.update(zip(SY_SCREEN, struct.unpack('<8I', self.bytes(s + self.sl.mode, 32))))
+        (st['shift_page'], st['shift_down'], st['shift_used'], st['ext_fix']) = self.bytes(s + self.sl.mode + 32, 4)
+        st.update(zip(SY_COUNTS, struct.unpack('<8I', self.bytes(s + self.sl.mode + 36, 32))))
         st['rec'] = list(struct.unpack('<64h', self.bytes(s + self.sl.rec, 128)))
         return st
 
-    def ev(self, fn, kind, k, pos=0):
-        """One UI event (kind 5 press, 6 release, 9 knob) through sy_key_down / sy_key_up / sy_knob: what it returned
-        and the stubbed calls it made, as (address, r0)."""
-        self.uc.mem_write(EV, struct.pack('<4h', kind, k, pos, 0))
-        self.log.clear()
-        r = self.call(self.sym[fn], EV)
-        return r, [(a, r0) for a, r0, *_ in self.log]
+    def ev(self, kind, what, val=0):
+        """One UI event through sy_event: (what it returned, whether it reached note repeat's handler)."""
+        self.uc.mem_write(EV, struct.pack('<4h', kind, what, val, 0))
+        before = len(self.passed)
+        r = self.call(self.sym['sy_event'], EV)
+        return r, len(self.passed) > before
 
-    def press(self, k):
-        return self.ev('sy_key_down', 5, k)
+    def hold(self, key, on):
+        b = self.get(base.KEYS + (key >> 3), '<B')
+        bit = 1 << (key & 7)
+        self.put(base.KEYS + (key >> 3), (b | bit) if on else (b & ~bit), '<B')
 
-    def release(self, k):
-        return self.ev('sy_key_up', 6, k)
-
-    def turn(self, k, pos):
-        return self.ev('sy_knob', 9, k, pos)
-
-    def value(self, held):
-        b = self.get(base.KEYS + 6, '<B')
-        self.put(base.KEYS + 6, (b | 2) if held else (b & ~2), '<B')
-
-    def chord(self):
-        """VALUE held, EXT SOURCE pressed and let go, VALUE let go: the press's and the release's results."""
-        self.value(True)
-        r = self.press(KEY_EXT), self.release(KEY_EXT)
-        self.value(False)
-        return r
+    def open_screen(self):
+        """EXT SOURCE + RECORD SETTING, the SG page there, a UI tick: the screen up."""
+        self.hold(KEY_EXT, True)
+        self.ev(EV_KEY, KEY_REC_SET)
+        self.hold(KEY_EXT, False)
+        self.ev(EV_KEY_UP, KEY_REC_SET)
+        self.page(SG_PAGE)
+        self.call(self.sym['sy_ui'])
 
     def packet(self, pair0, pair1):
         """A packet at PACKET: pair 0 L = R = pair0, pair 1 L = R = pair1 (lists of 64), the others 0."""
@@ -1119,6 +1161,111 @@ class SyMachine(SynthMachine):
         per = struct.unpack('<49f', self.bytes(b + self.sl.per, 196))
         amp = struct.unpack('<49f', self.bytes(b + self.sl.amp, 196))
         return [(k, 12000.0 / per[k], amp[k]) for k in range(49) if amp[k] > 0]
+
+
+class ScreenMachine(SyMachine):
+    """SyMachine with the stock drawing calls stubbed (each recorded: colour, rectangle, font, text), the stock
+    invalidate recorded, and the kits' column and footer draws and kits save's page update stubbed (recorded)."""
+    def __init__(self, img, man, **kw):
+        super().__init__(img, man, **kw)
+        self.draws, self.invalid, self.kits = [], [], []
+        for a, fn in ((F_COLOR, self._color), (F_RECT, self._rect), (F_FONT, self._font), (F_TEXT, self._text),
+                      (INVALIDATE, self._invalid)):
+            self.uc.hook_add(UC_HOOK_CODE, fn, begin=a, end=a)
+        for name in ('KIT_COL_DRAW', 'KIT_FOOT_DRAW', 'KS_SG_POLL'):
+            a = int(man['screen'][name]['target'], 16) & ~1
+            self.uc.hook_add(UC_HOOK_CODE, self._kit, begin=a, end=a)
+
+    def _reg(self, k):
+        return self.uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}'))
+
+    def _color(self, uc, a, s, _):
+        self.draws.append(('color', self._reg(1), self._reg(2)))
+        self._ret(uc)
+
+    def _rect(self, uc, a, s, _):
+        self.draws.append(('rect', *struct.unpack('<4i', self.bytes(self._reg(1), 16))))
+        self._ret(uc)
+
+    def _font(self, uc, a, s, _):
+        self.draws.append(('font', self._reg(1)))
+        self._ret(uc)
+
+    def _text(self, uc, a, s, _):
+        raw = tuple(self._reg(k) for k in range(4))
+        text = self.bytes(raw[3], 32).split(b'\0')[0].decode('latin-1')
+        self.draws.append(('text', struct.unpack('<i', struct.pack('<I', raw[1]))[0],
+                           struct.unpack('<i', struct.pack('<I', raw[2]))[0], text, raw))
+        self._ret(uc)
+
+    def _invalid(self, uc, a, s, _):
+        self.invalid.append(self._reg(0))
+        self._ret(uc)
+
+    def _kit(self, uc, a, s, _):
+        self.kits.append((a, self._reg(0)))
+        self._ret(uc)
+
+    def draw_column(self, col, param, kind=0):
+        """sy_col_draw on a knob column widget (rectangle at +4, framebuffer +0x84, type +0x308, parameter +0x310)."""
+        x0 = (0, 42, 84)[col]
+        self.uc.mem_write(WIDGET, bytes(0x320))
+        self.uc.mem_write(WIDGET + 4, struct.pack('<4i', x0, 0, x0 + 43, 39))
+        self.put(WIDGET + 0x84, FB, '<I')
+        self.put(WIDGET + 0x308, kind, '<I')
+        self.put(WIDGET + 0x310, param, '<I')
+        self.draws.clear()
+        self.call(self.sym['sy_col_draw'], WIDGET)
+        return list(self.draws)
+
+    def draw_footer(self):
+        self.uc.mem_write(FOOTER, bytes(0x100))
+        self.put(FOOTER, FOOTER_VT, '<I')
+        self.uc.mem_write(FOOTER + 4, struct.pack('<4i', 0, 54, 127, 63))
+        self.put(FOOTER + 0x84, FB, '<I')
+        self.draws.clear()
+        self.call(self.sym['sy_foot_draw'], FOOTER)
+        return list(self.draws)
+
+    def bridge(self, fn, regs, ends):
+        """A bridge entered mid-function with these registers, run until it reaches one of `ends` (address -> tag):
+        (tag, the registers there)."""
+        uc = self.uc
+        for r, v in regs.items():
+            uc.reg_write(getattr(ar, 'UC_ARM_REG_' + r), v)
+        hit, hooks = [], []
+        for a, tag in ends.items():
+            def h(uc_, addr, size, _, tag=tag):
+                hit.append((tag, {r: uc_.reg_read(getattr(ar, 'UC_ARM_REG_' + r)) for r in
+                                  ('R0', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'LR', 'SP')}))
+                uc_.reg_write(ar.UC_ARM_REG_PC, RET | 1)
+            hooks.append(uc.hook_add(UC_HOOK_CODE, h, begin=a, end=a))
+        uc.emu_start(fn | 1, RET, count=200000)
+        for k in hooks:
+            uc.hook_del(k)
+        return hit[0] if hit else (None, {})
+
+    def bar_name(self):
+        regs = dict(R0=0x10, R1=0x11, R2=0x12, R3=0x13, R4=BAR_BUF, R5=7, R6=0x66, LR=0x0BADC0DF, SP=STACK - 0x100)
+        self.uc.mem_write(BAR_BUF, bytes(16))
+        tag, r = self.bridge(self.sym['sy_bar_name'], regs, {BAR_END: 'end', 0x83FA2000: 'arp'})
+        return tag, self.bytes(BAR_BUF, 16).split(b'\0')[0].decode(), all(r[k] == regs[k] for k in regs)
+
+    def bar_text(self):
+        regs = dict(R0=BAR_DRAW_ARGS[0], R1=BAR_DRAW_ARGS[1], R2=BAR_DRAW_ARGS[2], R3=BAR_DRAW_ARGS[3], R4=0x44,
+                    R5=0x55, R6=7, LR=0x0BADC0DF, SP=STACK - 0x100)
+        self.uc.mem_write(STACK - 0x100 + 0x28, bytes(16))
+        self.draws.clear()
+        tag, r = self.bridge(self.sym['sy_bar_text'], regs, {BAR_DRAWN: 'drawn', 0x83FA2060: 'arp'})
+        args = next((d[4] for d in self.draws if d[0] == 'text'), None)
+        return (tag, self.bytes(STACK - 0x100 + 0x28, 16).split(b'\0')[0].decode(), args,
+                all(r[k] == regs[k] for k in regs))
+
+    def bar_poll(self):
+        regs = dict(R0=BAR_SCREEN, R1=0x11, R2=0x12, R3=0x13, R4=0x44, LR=0x0BADC0DF, SP=STACK - 0x100)
+        self.invalid.clear()
+        tag, r = self.bridge(self.sym['sy_bar_poll'], regs, {0x83FA2160: 'arp'})
+        return tag, list(self.invalid), all(r[k] == regs[k] for k in regs)
 
 
 def sy_strum(name, spread=0.03, secs=1.5, seed=0, gain=1.0):
@@ -1175,9 +1322,11 @@ def sy_checks(parent_img, img, man, kit_sym):
           m.get(sym['sy_block'] + lay.started, '<I') == 1 and st['out'] == [0] * 64,
           'RUN from the first block (silence in, silence out), its block ready for TX')
     sig = ref.to_blocks(sy_strum('G')[0])
+    loud = 0
     for b in range(200):
         st = m.step(sig[b])
-    loud = max(abs(v) for v in st['out'])
+        if b >= 180:
+            loud = max(loud, max(abs(v) for v in st['out']))
     m.page(SG_PAGE)
     fade = []
     for k in range(10):
@@ -1225,7 +1374,9 @@ def sy_checks(parent_img, img, man, kit_sym):
     check(states == [SY_RUN] * 12 and t['rec_mix'] == 1 and t['rec_ext'] == 0 and mm.routing_dt1() == [1],
           f'ROUTING turned to Mix while it plays: it plays on (the hold stays), the recorder now given the mix '
           f'({states})')
-    # 2. The module against sy_ref.py, value for value, on the same blocks.
+    # 2. The module against sy_ref.py, value for value, on the same blocks. Test 5: on WAH (tone 13), the one tone with
+    #    no release, so a band stopping stops at once as test 1's saw did (the saw lead now releases over 150 ms and
+    #    sustains: its tails and its releasing bands are what the tone asks for, checked value for value below).
     bend = np.concatenate([np.zeros(4800), ref.guitar(ref._hz(55), 0.9, bend=(0.2, 0.5, 200)), np.zeros(2400)])
     # (signal, the notes whose partials should sound: none for the bend, whose pitch moves, and the clipped strum,
     # whose distortion adds tones of its own); each ends in 0.4 s of hiss and hum
@@ -1243,8 +1394,9 @@ def sy_checks(parent_img, img, man, kit_sym):
     for label, x, notes in cases:
         x = np.concatenate([x, ref.hiss(np.zeros(19200), 11)])
         mc = SyMachine(img, man)
+        mc.put(sym['sy'] + mc.sl.tone_req, SY_PLAIN, '<I')
         mc.start()
-        eng = sy_ref.Engine()
+        eng = sy_ref.Engine(SY_PLAIN)
         right = total = 0.0
         sounding, peak, nz_end = [], 0, None
         blocks = ref.to_blocks(x)
@@ -1427,7 +1579,7 @@ def sy_tone_checks(img, man):
     mism, worst, peaks = [], {}, {}
     for tone in range(len(sy_ref.TONES)):
         mt = SyMachine(img, man)
-        mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
+        mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')                 # (test 5: the default OCTAVE, SUSTAIN)
         mt.start()
         eng = sy_ref.Engine(tone)
         top = pk = 0
@@ -1456,87 +1608,18 @@ def sy_tone_checks(img, man):
           f'block at one a cycle)')
     report['sy']['tones'] = dict(worst_step_instructions=worst, peaks=peaks,
                                  names=[t['name'] for t in sy_ref.TONES])
-    # 2. Test 4: the picker. VALUE held + EXT SOURCE (EXT SOURCE on) opens it: the press and its release taken, FX deep
-    #    edit's handlers (stubbed: they record the call and return 0) never see them; the pads lit; a pad picks (press
-    #    and release taken, FX deep edit not asked); pad 16 puts it off and closes the picker. VALUE + pad with the
-    #    picker closed goes on (FX deep edit, then stock's silent sample select).
-    down, up = int(fde['down']['handler'], 16), int(fde['up']['handler'], 16)
-    mk = SyMachine(img, man)
-    mk.stub(down, 0)
-    mk.stub(up, 0)
-    mk.stub(0x8001F730, 0)                                              # the popup close
-    mk.start()
-    width, line = base.font_widths(img)
-    mk.popups()
-    mk.value(True)
-    vpad = mk.press(3)
-    vpad_up = mk.release(3)
-    mk.leds.clear()
-    opened = mk.press(KEY_EXT)
-    text = mk.posted()
-    st = mk.sy()
-    leds = list(mk.leds)
-    opened_up = mk.release(KEY_EXT)
-    mk.value(False)
-    mk.popups()
-    took = mk.press(3)
-    ptext = mk.posted()
-    st2 = mk.sy()
-    released = mk.release(3)
-    lit = [(0, 1, PAD_PLAYING)] + [(p, 1, PAD_SOUND) for p in range(1, 15)] + [(15, 1, PAD_OFF)]
-    check(vpad == (0, [(down, EV)]) and vpad_up == (0, [(up, EV)]) and opened == (1, []) and opened_up == (1, []) and
-          text == f'{sy_ref.popup_name(0)}\nTAP A PAD' and st['picker'] == 1 and st['opens'] == 1 and leds == lit and
-          took == (1, []) and ptext == sy_ref.popup_name(3) and st2['tone_req'] == 3 and st2['taken'] == 8 and
-          st2['picks'] == 1 and released == (1, []) and mk.sy()['taken'] == 0,
-          f'VALUE + pad with the picker closed goes on (FX deep edit, then the page: stock\'s sample select); VALUE + '
-          f'EXT SOURCE opens the picker ({text!r}; the press and release taken, FX deep edit never sees them; the '
-          f'pads white / blue / red); pad 4 there picks tone 4 ({ptext!r}), its press and release taken')
-    mk.popups()
-    mk.uc.mem_write(LED_REFRESH, b'\0\0')
-    off = mk.press(15)
-    off_text = mk.posted()
-    key_off = mk.sy()
-    mk.release(15)
-    sig = ref.to_blocks(sy_strum('G')[0])
-    states = [mk.step(sig[k])['state'] for k in range(12)]
-    st = mk.sy()
-    mk.popups()
-    mk.chord()
-    st_on = mk.sy()
-    mk.press(6)
-    mk.release(6)
-    mk.step(sig[12])
-    st3 = mk.step(sig[13])
-    check(off == (1, []) and off_text == 'SY OFF' and key_off['picker'] == 0 and key_off['closes'] == 1 and
-          mk.get(LED_REFRESH, '<H') & 2 and st['muted'] == 1 and states[-1] == SY_OFF and SY_RUN in states and
-          st_on['picker'] == 1 and st_on['muted'] == 0 and st3['state'] == SY_RUN and st3['muted'] == 0 and
-          st3['tone_req'] == 6 and st3['starts'] == 2 and mk.get(sym['sy_block'] + mk.sl.tone, '<I') == 6,
-          f'pad 16 in the picker: SY OFF, the picker closes (stock paints the pads again), the synth fades out and '
-          f'stops ({states}); the chord again: the picker, the synth on again; pad 7: started afresh on tone 7')
-    quiet = []
-    for label, kw, page in (('Sound Generator page', dict(), SG_PAGE),):
-        q = SyMachine(img, man, page=page, **kw)
-        q.stub(down, 0)
-        q.start()
-        q.value(True)
-        quiet.append((label, q.press(KEY_EXT), q.sy()['picker']))
-    check(all(r == (0, [(down, EV)]) and p == 0 for _, r, p in quiet),
-          f'on the Sound Generator page VALUE + EXT SOURCE stays FX deep edit\'s (its input FX screens) ({quiet})')
-    texts = [sy_ref.popup_name(p) for p in range(16)]
-    widest = max(sum(width(c) for c in t) for t in texts)
-    check(widest - 1 + 18 <= 128, f'every pick\'s popup fits the screen: widest {widest} px ({max(texts, key=len)!r})')
-    # 3. A tone change while playing: out over 8 blocks, the new tone from rest, in over 8, value for value.
-    mc = SyMachine(img, man)
-    mc.stub(down, 0)
+    # 2. Test 5: a tone change while playing, from the screen (the Sound Generator page in SY mode): VALUE steps SOUND
+    #    1 -> 9; out over 8 blocks, the new tone from rest, in over 8, value for value.
+    mc = ScreenMachine(img, man, page=SG_PAGE)
+    mc.put(sym['sy'] + mc.sl.mode, 1, '<I')
     mc.start()
     eng = sy_ref.Engine(0)
     blocks = ref.to_blocks(sy_strum('Am')[0])
     mism, fade = [], []
     for b, values in enumerate(blocks[:420]):
         if b == 200:
-            mc.chord()
-            mc.press(8)
-            mc.release(8)
+            for _ in range(8):
+                mc.ev(EV_ENC, 0, 1)
         mc.feed(values)
         mc.call(sym['sy_rx'])
         got = list(struct.unpack('<64i', mc.bytes(sym['sy'] + mc.sl.out, 256)))
@@ -1547,18 +1630,26 @@ def sy_tone_checks(img, man):
             fade.append((b, mc.get(sym['sy_block'] + mc.sl.tone, '<I'), max(abs(v) for v in got)))
     switched = next(b for b, t, _ in fade if t == 8)
     check(not mism and switched == 207 and fade[2][2] > 0 and fade[9][2] < fade[2][2],
-          f'pad 9 in the picker while playing: the output fades out over 8 blocks, tone 9 from block {switched}, fades in; '
-          f'the module = sy_ref.py value for value across it (first differences {mism[:3]})')
-    # 4. The builder's three calls: FX deep edit's bridges now call sy_key_down / sy_key_up / sy_knob.
-    pairs = (('down', 'sy_key_down'), ('up', 'sy_key_up'), ('knob', 'sy_knob'))
-    calls = {name: (mk.bytes(int(fde[name]['call'], 16), 4).hex(), fn) for name, fn in pairs}
-    patched = [p for p in man['patches'] if "bridge: bl -> sy_" in p.get('what', '')]
-    check(len(patched) == 3 and all(p['target'] == sym[fn] & ~1 and p['original_target'] == int(fde[n]['handler'], 16)
-                                    for p, (n, fn) in zip(patched, pairs)) and
-          all(mk.bytes(p['address'], 4).hex() == p['replacement_hex'] for p in patched),
-          f'FX deep edit\'s bridges call sy_key_down, sy_key_up and sy_knob (bl), in place of its handlers {calls}')
+          f'SOUND 1 -> 9 on the screen while playing: the output fades out over 8 blocks, tone 9 from block {switched}, '
+          f'fades in; the module = sy_ref.py value for value across it (first differences {mism[:3]})')
+    # 3. The builder's calls: note repeat's bridge calls sy_event; the SG widgets' pointers and the arp's bar jumps go
+    #    to the screen's; FX deep edit's bridges call their own handlers again (test 4's picker is gone).
+    import capstone
+    md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
+    nr = man['nr_hook']
+    ours = sorted((p for p in man['patches'] if p.get('what', '').startswith(("note repeat's", 'SY test 5,'))),
+                  key=lambda p: not p['what'].startswith("note repeat's"))
+    fde_calls = {n: [f'{i.mnemonic} {i.op_str}' for i in md.disasm(mc.bytes(int(v['call'], 16), 4), int(v['call'], 16))]
+                 for n, v in fde.items()}
+    check(len(ours) == 7 and ours[0]['address'] == int(nr['call'], 16) and ours[0]['target'] == sym['sy_event'] & ~1
+          and ours[0]['original_target'] == int(nr['nr_event_c'], 16) and
+          {p['address'] for p in ours[1:]} == {0x8022BBD4, 0x802256FC, 0x80229678, 0x800BBC98, 0x80123BE6, 0x80123CE0}
+          and all(mc.bytes(p['address'], p['size']).hex() == p['replacement_hex'] for p in ours) and
+          all(fde_calls[n] == [f'bl #{int(v["handler"], 16):#x}'] for n, v in fde.items()),
+          f'note repeat\'s bridge calls sy_event (bl); the SG column, footer and page update pointers and the arp\'s '
+          f'three bar jumps go to the screen\'s; FX deep edit\'s bridges call their own handlers ({fde_calls})')
     sy_knob_checks(img, man)
-    sy_picker_checks(img, man)
+    sy_screen_checks(img, man)
     sy_route_checks(img, man)
 
 
@@ -1609,9 +1700,13 @@ class Files:
         self._ret(uc, 0)
 
 
-def sy_file_bytes(tone, muted, knobs):
-    """B:/_sy_tones.bin as sy_save writes it: "SYTN", version 1, tone, muted, 15, 45 knob positions, 3 zero, FNV-1a."""
-    body = b'SYTN' + bytes([1, tone, muted, 15]) + bytes(64 + d for row in knobs for d in row) + bytes(3)
+def sy_file_bytes(tone, muted, knobs, octs=None, suss=None):
+    """B:/_sy_tones.bin as sy_save writes it (test 5, version 2): "SYTN", 2, tone, muted, 15, 45 knob positions,
+    15 OCTAVE, 15 SUSTAIN, a zero, FNV-1a of the first 84."""
+    octs = octs or [0] * 15
+    suss = suss or [0] * 15
+    body = (b'SYTN' + bytes([2, tone, muted, 15]) + bytes(64 + d for row in knobs for d in row) +
+            bytes(o & 0xFF for o in octs) + bytes(suss) + bytes(1))
     h = 2166136261
     for c in body:
         h = ((h ^ c) * 16777619) & 0xFFFFFFFF
@@ -1619,35 +1714,34 @@ def sy_file_bytes(tone, muted, knobs):
 
 
 def sy_knob_checks(img, man):
-    """SY test 3's knobs and file, through test 4's picker."""
+    """SY test 3's knobs and file, set on test 5's screen (with OCTAVE and SUSTAIN: file version 2)."""
     import sy_ref
     sym = man['symbols']
-    fde = man['guards']['fde']
-    down, up, knob = (int(fde[n]['handler'], 16) for n in ('down', 'up', 'knob'))
 
     def machine(store=None, **kw):
-        x = SyMachine(img, man, store=store, **kw)
-        for a in (down, up, knob):
-            x.stub(a, 0)
+        x = ScreenMachine(img, man, store=store, **kw)
         x.start()
-        x.popups()
         return x, x.files
-    # 1. CTRL 1-3 in the picker on the picked tone (SUPERSAW): the knob's position, the popup, the turn taken (FX deep
-    #    edit's knob handler not asked); CTRL 4 goes on; with the picker closed CTRL 1-3 go on, VALUE held or not
-    #    (VALUE + CTRL is stock's sub-parameter edit again).
+    # 1. On the screen, SUPERSAW: CTRL 2/3 TONE and LEVEL to the knob's position - 64, SHIFT page: OCTAVE, DETUNE,
+    #    SUSTAIN; each turn taken; the file not yet written (never from a turn).
     m, files = machine()
-    m.chord()
-    m.press(3)
-    m.release(3)
-    m.popups()
-    turned = m.turn(2, 100)
-    text = m.posted()
+    m.open_screen()
+    m.ev(EV_KEY, 3)
+    m.ev(EV_KEY_UP, 3)
+    turns = [m.ev(EV_KNOB, 2, 100), m.ev(EV_KNOB, 3, 127)]
+    before = len(files.writes)
+    m.ev(EV_KEY, KEY_SHIFT)
+    m.ev(EV_KEY_UP, KEY_SHIFT)                                         # tapped: the SHIFT page; a key release
+    at_shift = len(files.writes)
+    turns += [m.ev(EV_KNOB, 1, 0), m.ev(EV_KNOB, 2, 20), m.ev(EV_KNOB, 3, 64)]
     st = m.sy()
-    m.popups()
-    bright = m.turn(1, 0)
-    level = m.turn(3, 127)
-    ctrl4 = m.turn(4, 30)
-    # 2. The file: written at the key that closes the picker, or at the next release, never with an FX screen up.
+    check(all(t == (1, False) for t in turns) and st['knob'][3] == [36, -44, 63] and st['oct'][3] == 1 and
+          st['susk'][3] == 1 + (64 * 101 >> 7) and st['dirty'] == 1 and before == 0 and at_shift == 1 and
+          len(files.writes) == 1 and st['shift_page'] == 1,
+          f'the screen on SUPERSAW: TONE and LEVEL, then (SHIFT tapped) OCTAVE -2, DETUNE and SUSTAIN to the knobs, '
+          f'each turn taken; the file written at the release of SHIFT, never at a turn ({st["knob"][3]}, oct '
+          f'{st["oct"][3]}, sus {st["susk"][3]})')
+    # 2. The file at a key release, never with an FX screen up.
     m.put(TOP_OBJECT, SCRATCH + 0x400, '<I')
     m.put(SCRATCH + 0x600, FX_VIEW_VTABLE, '<I')
     shown = [True]
@@ -1657,37 +1751,27 @@ def sy_knob_checks(img, man):
         uc.reg_write(ar.UC_ARM_REG_R0, SCRATCH + 0x600 if (shown[0] and i == 0) else 0)
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
     m.uc.hook_add(UC_HOOK_CODE, view_at, begin=VIEW_AT, end=VIEW_AT)
-    closed = m.press(KEY_EXIT)
-    closed_up = m.release(KEY_EXIT)
+    m.ev(EV_KEY, KEY_EXIT)
+    up1 = m.ev(EV_KEY_UP, KEY_EXIT)
     held_back = (len(files.writes), m.sy()['dirty'])
-    m.value(True)
-    plain_v = m.turn(2, 10)
-    m.value(False)
-    plain = m.turn(2, 11)
-    st2 = m.sy()
-    check(turned == (1, []) and text == 'SY 4 SUPERSAW\nDETUNE 100' and st['knob'][3] == [0, 36, 0] and
-          st['dirty'] == 1 and bright == (1, []) and level == (1, []) and st2['knob'][3] == [-64, 36, 63] and
-          ctrl4 == (0, [(knob, EV)]) and plain_v == (0, [(knob, EV)]) and plain == (0, [(knob, EV)]) and
-          st2['picker'] == 0,
-          f'CTRL 2 in the picker on SUPERSAW: DETUNE to the knob\'s 100 ({text!r}), the turn taken, FX deep edit not '
-          f'asked; CTRL 1 and 3 BRIGHT and LEVEL; CTRL 4 goes on; once EXIT closed it, CTRL 2 goes on (VALUE held or '
-          f'not)')
     shown[0] = False
-    rel2 = m.release(0)
+    up2 = m.ev(EV_KEY_UP, 0x20)
     st3 = m.sy()
-    want = sy_file_bytes(3, 0, st3['knob'])
-    check(closed == (1, []) and closed_up == (1, []) and held_back == (0, 1) and rel2 == (0, [(up, EV)]) and
-          files.writes == [(SY_PATH, want)] and st3['dirty'] == 0 and st3['saves'] == 1,
-          f'EXIT closing the picker with an FX screen up: no file yet (nor at its release); at the next release with '
-          f'none, {SY_PATH} written once ({len(want)} bytes: "SYTN", version 1, tone 4, the 45 knobs, FNV-1a), that '
-          f'release still FX deep edit\'s')
-    # 3. A fresh start with that file: read at the first key event; the tone and knobs back; the engine as the twin.
+    want = sy_file_bytes(3, 0, st3['knob'], st3['oct'], st3['susk'])
+    check(up1 == (0, True) and held_back == (1, 1) and up2 == (0, True) and len(files.writes) == 2 and
+          files.writes[-1] == (SY_PATH, want) and st3['dirty'] == 0 and st3['saves'] == 2 and len(want) == 88,
+          f'a key release with an FX screen up: no file yet; at the next release with none, {SY_PATH} written once '
+          f'({len(want)} bytes: "SYTN", version 2, tone 4, 45 knobs, 15 OCTAVE, 15 SUSTAIN, FNV-1a); both releases go '
+          f'on to note repeat')
+    # 3. A fresh start with that file: read at the first key event; the engine as the twin with the same settings.
     mf, f2 = machine({SY_PATH: want})
     before = mf.sy()['loaded']
-    mf.press(KEY_EXT)                                                   # EXT SOURCE: any key reads the file first
+    mf.ev(EV_KEY, KEY_EXT)                                             # any key event reads the file first
     st4 = mf.sy()
     eng = sy_ref.Engine(3)
     eng.knobs[3] = st4['knob'][3]
+    eng.octs[3] = st4['oct'][3]
+    eng.suss[3] = st4['susk'][3]
     mf.call(sym['sy_ui'])
     mism = []
     blocks = ref.to_blocks(sy_strum('G')[0])
@@ -1698,123 +1782,256 @@ def sy_knob_checks(img, man):
         if got != eng.step(values, bpm100=mf.sy()['bpm100'])[0]:
             mism.append(b)
     check(before == 0 and st4['loaded'] == 1 and st4['loads'] == 1 and st4['tone_req'] == 3 and
-          st4['knob'][3] == [-64, 36, 63] and not mism,
-          f'a fresh start with the file: read at the first key event (EXT SOURCE), tone 4 and its knobs back, the '
-          f'engine = sy_ref.py with them, value for value (300 blocks; first differences {mism[:3]})')
+          st4['knob'][3] == [36, -44, 63] and st4['oct'][3] == 1 and st4['susk'][3] == st3['susk'][3] and not mism,
+          f'a fresh start with the file: read at the first key event, tone 4 and its settings back, the engine = '
+          f'sy_ref.py with them, value for value (300 blocks; first differences {mism[:3]})')
     bad = bytearray(want)
     bad[20] ^= 1
     mb, f3 = machine({SY_PATH: bytes(bad)})
-    mb.press(KEY_EXT)
+    mb.ev(EV_KEY, KEY_EXT)
+    v1 = b'SYTN' + bytes([1, 3, 0, 15]) + bytes(64 for _ in range(45)) + bytes(3)
+    h = 2166136261
+    for c in v1:
+        h = ((h ^ c) * 16777619) & 0xFFFFFFFF
+    m1, _ = machine({SY_PATH: v1 + struct.pack('<I', h)})
+    m1.ev(EV_KEY, KEY_EXT)
     mn, f4 = machine()
-    mn.turn(2, 50)
-    sb, sn = mb.sy(), mn.sy()
+    mn.ev(EV_KNOB, 2, 50)
+    sb, s1, sn = mb.sy(), m1.sy(), mn.sy()
     check(sb['bad_files'] == 1 and sb['loads'] == 0 and sb['tone_req'] == 0 and all(r == [0, 0, 0] for r in sb['knob'])
-          and sn['loaded'] == 1 and sn['loads'] == 0 and sn['bad_files'] == 0 and not f4.writes,
-          'a file whose sum is wrong is ignored (the tones as designed); no file: nothing read, nothing written yet')
-    # 4. The popups fit the screen: the tone's line and the setting's at the knob's top; the picker's own.
-    width, line = base.font_widths(img)
-    texts = [f'{sy_ref.popup_name(t)}\n{n} 127' for t in range(len(sy_ref.TONES))
-             for n in ('BRIGHT', sy_ref.TONE[t]['p2name'], 'LEVEL')]
-    texts += [f'{sy_ref.popup_name(t)}\nTAP A PAD' for t in range(len(sy_ref.TONES))]
-    widest = max(sum(width(c) for c in ln) for t in texts for ln in t.split('\n'))
-    check(widest <= 111 and 2 * line - 1 + 8 <= 64,
-          f'every knob and picker popup fits the screen: widest line {widest} px (111 at most)')
-    report['sy']['knobs'] = dict(p2=[t['p2name'] for t in sy_ref.TONE], file=SY_PATH, file_bytes=len(want),
-                                 widest_popup_px=widest)
+          and s1['bad_files'] == 1 and s1['tone_req'] == 0 and sn['loaded'] == 1 and sn['loads'] == 0 and
+          sn['bad_files'] == 0 and not f4.writes,
+          'a file whose sum is wrong is ignored, and so is a test 3/4 file (version 1: the tones changed); no file: '
+          'nothing read, nothing written yet')
+    # 4. Every tone with OCTAVE and SUSTAIN turned, value for value (the knobs' cubic exp2 path).
+    blocks = ref.to_blocks(sy_signal())
+    mism = []
+    for tone, octave, sustain in ((0, 5, 101), (2, 1, 1), (8, 4, 51), (13, 2, 80)):
+        mt = SyMachine(img, man)
+        mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
+        mt.put(sym['sy'] + mt.sl.oct + tone, octave, '<B')
+        mt.put(sym['sy'] + mt.sl.susk + tone, sustain, '<B')
+        mt.start()
+        eng = sy_ref.Engine(tone)
+        eng.octs[tone], eng.suss[tone] = octave, sustain
+        for b, values in enumerate(blocks):
+            mt.feed(values)
+            mt.call(sym['sy_rx'])
+            got = list(struct.unpack('<64i', mt.bytes(sym['sy'] + mt.sl.out, 256)))
+            if got != eng.step(values, bpm100=mt.sy()['bpm100'])[0]:
+                mism.append((tone, b))
+    check(not mism, f'OCTAVE and SUSTAIN from the screen (+2 / 100, -2 / 0, +1 / 50, -1 / 79 on four tones): the '
+                    f'module = sy_ref.py value for value ({len(blocks)} blocks each; first differences {mism[:3]})')
+    report['sy']['knobs'] = dict(p2=[t['p2name'] for t in sy_ref.TONE], file=SY_PATH, file_bytes=len(want))
 
 
-def sy_picker_checks(img, man):
-    """SY test 4: the picker's other ways in and out, its pads, its time, and VALUE on to the input FX screens."""
+def sy_screen_checks(img, man):
+    """SY test 5: the guitar synth screen: the chord, its events, its draws, the bar, leaving."""
+    import sy_ref
     sym = man['symbols']
-    fde = man['guards']['fde']
-    down, up, knob = (int(fde[n]['handler'], 16) for n in ('down', 'up', 'knob'))
-    close_fn = 0x8001F730
-
-    def machine(down_ret=0, **kw):
-        x = SyMachine(img, man, **kw)
-        x.stub(down, down_ret)
-        x.stub(up, 0)
-        x.stub(knob, 0)
-        x.stub(close_fn, 0)
-        x.start()
-        x.popups()
-        return x
-    # 1. EXT SOURCE off: the chord's press goes on (stock switches the input on), the picker opens; its release too.
-    a = machine(ext=0)
-    a.value(True)
-    r_down, r_up = a.press(KEY_EXT), a.release(KEY_EXT)
-    a.value(False)
-    sa = a.sy()
-    check(r_down == (0, []) and r_up == (0, [(up, EV)]) and sa['picker'] == 1 and sa['ext_taken'] == 0,
-          'EXT SOURCE off: VALUE + EXT SOURCE opens the picker and its press goes on to stock (the input on), FX deep '
-          'edit not asked; the release goes on too')
-    # 2. EXIT closes it (taken, its release too): stock paints the pads again, the picker's popup closed if it is up.
-    b = machine()
-    b.chord()
-    b.put(base.POPUP_SHOWN, 0x1234, '<I')
-    b.uc.mem_write(LED_REFRESH, b'\0\0')
-    ex, ex_up = b.press(KEY_EXIT), b.release(KEY_EXIT)
-    sb = b.sy()
-    check(ex[0] == 1 and [x for x, _ in ex[1]] == [close_fn] and ex_up == (1, []) and sb['picker'] == 0 and
-          sb['lit'] == 0 and b.get(LED_REFRESH, '<H') & 2,
-          'EXIT closes the picker: taken with its release, its popup closed, stock asked to paint the pads again')
-    # 3. Untouched for 4 s: the UI tick closes it, the pads painted every tick until then; the pick is written at the
-    #    next key release (never from the tick).
-    c = machine()
-    c.chord()
-    c.press(5)
-    c.release(5)
-    c.leds.clear()
-    c.call(sym['sy_ui'])
-    painted = list(c.leds)
-    c.cyc += 2_400_000_000 - 1_000
-    c.call(sym['sy_ui'])
-    still = c.sy()['picker']
-    c.cyc += 2_000
-    c.call(sym['sy_ui'])
-    sc = c.sy()
-    w0 = len(c.files.writes)
-    c.release(9)
-    check(len(painted) == 16 and painted[5] == (5, 1, PAD_PLAYING) and painted[0] == (0, 1, PAD_SOUND) and
-          still == 1 and sc['picker'] == 0 and sc['dirty'] == 1 and w0 == 0 and len(c.files.writes) == 1 and
-          c.sy()['dirty'] == 0,
-          'untouched 4 s: the UI tick closes the picker (it repaints its 16 pads every tick before); the pick waits '
-          'for the next key release to be written')
-    # 4. Another page closes it; 5. another key closes it and goes on; 6. the chord again closes it.
-    d = machine()
-    d.chord()
-    d.page(5)
-    d.call(sym['sy_ui'])
-    e = machine()
-    e.chord()
-    roll = e.press(0x21)
-    e2 = machine()
-    e2.chord()
-    plain_ext = e2.press(KEY_EXT)
-    f = machine()
-    f.chord()
-    f.value(True)
-    again, again_up = f.press(KEY_EXT), f.release(KEY_EXT)
-    f.value(False)
-    check(d.sy()['picker'] == 0 and roll == (0, [(down, EV)]) and e.sy()['picker'] == 0 and again == (1, []) and
-          again_up == (1, []) and f.sy()['picker'] == 0 and plain_ext == (0, [(down, EV)]) and
-          e2.sy()['picker'] == 0 and e2.sy()['ext_taken'] == 0,
-          'another page closes the picker; another key (ROLL, or EXT SOURCE without VALUE: the input switched as '
-          'usual) closes it and goes on to FX deep edit; the chord again closes it (the press and release taken)')
-    # 7. VALUE in the picker: closed; FX deep edit's handler then sees VALUE's press, an EXT SOURCE press (its chord:
-    #    the input FX's extra screens) and that press's release; VALUE's release goes to it too, then is taken.
-    g = machine(down_ret=1)
-    g.chord()
-    hv = g.press(KEY_VALUE)
-    calls = [(x, struct.unpack('<2h', g.bytes(r0, 4))) for x, r0 in hv[1]]
-    hv_up = g.release(KEY_VALUE)
-    sg = g.sy()
-    check(hv[0] == 1 and calls == [(down, (5, KEY_VALUE)), (down, (5, KEY_EXT)), (up, (6, KEY_EXT))] and
-          sg['picker'] == 0 and sg['handoffs'] == 1 and hv_up == (1, [(up, EV)]) and sg['value_taken'] == 0,
-          f'VALUE in the picker: it closes, and FX deep edit\'s handler gets VALUE\'s press, then EXT SOURCE pressed '
-          f'and let go (its chord: the input FX\'s extra screens) ({calls}); VALUE\'s release reaches it, taken')
-    report['sy']['picker'] = dict(close_after_s=4, pads=dict(playing=hex(PAD_PLAYING), sound=hex(PAD_SOUND),
-                                                             off=hex(PAD_OFF), off_now=hex(PAD_OFF_NOW)))
+    scr = man['screen']
+    col_draw, foot_draw, sg_poll = (int(scr[n]['target'], 16) & ~1 for n in ('KIT_COL_DRAW', 'KIT_FOOT_DRAW',
+                                                                              'KS_SG_POLL'))
+    # 1. EXT SOURCE held + RECORD SETTING on the main screen (EXT SOURCE on): taken, note repeat never sees it, the SG
+    #    page asked for; its release taken; the SG page there at the next UI tick: the screen up.
+    m = ScreenMachine(img, man)
+    m.start()
+    plain = m.ev(EV_KEY, KEY_REC_SET)
+    m.ev(EV_KEY_UP, KEY_REC_SET)
+    m.hold(KEY_EXT, True)
+    chord = m.ev(EV_KEY, KEY_REC_SET)
+    st = m.sy()
+    m.hold(KEY_EXT, False)
+    chord_up = m.ev(EV_KEY_UP, KEY_REC_SET)
+    shown_before = m.call(sym['sy_shown'])
+    m.call(sym['sy_ui'])
+    st_wait = m.sy()
+    m.page(SG_PAGE)
+    m.call(sym['sy_ui'])
+    st2 = m.sy()
+    check(plain == (0, True) and chord == (1, False) and chord_up == (1, False) and m.requests == [SG_PAGE] and
+          st['mode'] == 2 and st['enters'] == 1 and not m.sets and shown_before == 0 and st_wait['mode'] == 2 and
+          st2['mode'] == 1 and m.call(sym['sy_shown']) == 1 and st2['taken'] == 0,
+          'RECORD SETTING alone goes on; EXT SOURCE held + RECORD SETTING on the main screen: taken (note repeat never '
+          'sees it, nor its release), the Sound Generator page asked for; the screen up once the page is there')
+    # 2. Pads on the screen: a pad hit (and its key press) picks the sound, silently: neither reaches note repeat or
+    #    stock (no sample, no Sound Generator note), nor their releases; pad 16: OFF; SUB PAD taken.
+    m.passed.clear()
+    rp = [m.ev(EV_PAD, 3, 100), m.ev(EV_KEY, 3)]
+    st3 = m.sy()
+    rp += [m.ev(EV_PAD_UP, 3), m.ev(EV_KEY_UP, 3)]
+    st4 = m.sy()
+    m.ev(EV_PAD, 15, 90)
+    off = m.sy()
+    m.ev(EV_PAD_UP, 15)
+    sub = [m.ev(EV_PAD, KEY_SUB_PAD, 90), m.ev(EV_KEY, KEY_SUB_PAD), m.ev(EV_PAD_UP, KEY_SUB_PAD),
+           m.ev(EV_KEY_UP, KEY_SUB_PAD)]
+    check(all(r == (1, False) for r in rp + sub) and st3['tone_req'] == 3 and st3['muted'] == 0 and
+          st3['pads_taken'] == 8 and st3['taken'] == 8 and st4['pads_taken'] == 0 and st4['taken'] == 0 and
+          off['muted'] == 1 and m.sy()['pads_taken'] == 0 and not m.passed,
+          'on the screen a pad picks a sound (pad 4: SUPERSAW), pad 16 OFF; the pad hit and its key press, SUB PAD and '
+          'every release taken: nothing reaches note repeat or stock (no sample plays)')
+    # 3. CTRL 1 SOUND by zone; VALUE steps it; VALUE's push and REC taken; CTRL 2/3; another knob goes on.
+    zones = []
+    for pos in (0, 7, 8, 15, 16, 37, 120, 127):
+        m.ev(EV_KNOB, 1, pos)
+        s_ = m.sy()
+        zones.append(0 if s_['muted'] else s_['tone_req'] + 1)
+    m.ev(EV_KNOB, 1, 37)
+    steps = []
+    for d in (1, 1, -3, 5):
+        steps.append(m.ev(EV_ENC, 0, d))
+    st5 = m.sy()
+    m.ev(EV_KNOB, 1, 127)
+    m.ev(EV_ENC, 0, 1)
+    top = m.sy()['tone_req']
+    m.ev(EV_KNOB, 1, 0)
+    m.ev(EV_ENC, 0, -1)
+    bottom = m.sy()['muted']
+    keys = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE), m.ev(EV_KEY, KEY_REC), m.ev(EV_KEY_UP, KEY_REC)]
+    m.ev(EV_KNOB, 1, 40)                                               # SOUND 5: BRASS? (zone 5 = tone 4)
+    other = m.ev(EV_KNOB, 4, 30)
+    other2 = m.ev(EV_ENC, 1, 1)
+    check(zones == [0, 0, 1, 1, 2, 4, 15, 15] and all(s == (1, False) for s in steps) and st5['tone_req'] == 5 and
+          top == 14 and bottom == 1 and all(k == (1, False) for k in keys) and other == (0, True) and
+          other2 == (0, True),
+          f'CTRL 1: SOUND in 16 zones of 8 (OFF, 1..15) ({zones}); VALUE steps it one a turn, OFF..15 and no further; '
+          f'VALUE\'s push and REC taken (no edit mode, no export); CTRL 4 and another encoder go on')
+    # 4. SHIFT: a tap turns the page; held, a turn edits the other page and the release keeps it; SHIFT goes on.
+    m.ev(EV_KNOB, 1, 40)
+    tone = m.sy()['tone_req']
+    sh = [m.ev(EV_KEY, KEY_SHIFT), m.ev(EV_KEY_UP, KEY_SHIFT)]
+    page1 = m.sy()['shift_page']
+    m.ev(EV_KNOB, 1, 127)
+    oct_ = m.sy()['oct'][tone]
+    m.ev(EV_KEY, KEY_SHIFT)
+    m.ev(EV_KNOB, 3, 0)
+    m.ev(EV_KEY_UP, KEY_SHIFT)
+    st6 = m.sy()
+    check(sh == [(0, True), (0, True)] and page1 == 1 and oct_ == 5 and st6['knob'][tone][2] == -64 and
+          st6['shift_page'] == 1 and st6['tone_req'] == tone,
+          'SHIFT goes on (its held bit); tapped: the second page (CTRL 1 OCTAVE: +2 at the top); held again, CTRL 3 '
+          'edits the first page\'s LEVEL and the release keeps the second page')
+    # 5. The draws: each knob column (descriptor type 0, parameter 0x7b..0x80) cleared, its name small, its value big;
+    #    the footer the sound's name; a column of another type, or outside the screen, to the kits' draws.
+    m.ev(EV_KEY, KEY_SHIFT)
+    m.ev(EV_KEY_UP, KEY_SHIFT)                                         # back to the first page
+    m.ev(EV_KNOB, 1, 37)                                               # SOUND 4 (SUPERSAW)
+    m.ev(EV_KNOB, 2, 64 + 12)
+    m.ev(EV_KNOB, 3, 96)
+    cols = []
+    for col, param in ((0, 0x7B), (1, 0x7C), (2, 0x80)):
+        cols.append(m.draw_column(col, param))
+    m.ev(EV_KEY, KEY_SHIFT)
+    m.ev(EV_KEY_UP, KEY_SHIFT)
+    cols2 = [m.draw_column(c, 0x7B + c) for c in range(3)]
+    foot = m.draw_footer()
+    texts = [[d[3] for d in c if d[0] == 'text'] for c in cols + cols2]
+    t3 = m.sy()
+    want_cols = [['SOUND', '4'], ['TONE', '+12'], ['LEVEL', str((64 + 32) * 100 // 64)],
+                 ['OCTAVE', str(t3['oct'][3] - 3) if t3['oct'][3] else str(sy_ref.TONE[3]['oct_design'])],
+                 ['DETUNE', '0'], ['SUSTAIN', str(sy_ref.TONE[3]['sus_design'])]]
+    shape = cols[0]
+    check(texts == want_cols and shape[:3] == [('color', 0xFFFFFF, 0), ('rect', 0, 0, 43, 39), ('font', 0x1D)] and
+          shape[3][1:3] == (21, 3) and shape[4] == ('font', 2) and shape[5][1:3] == (21, 15) and len(shape) == 6 and
+          [d[3] for d in foot if d[0] == 'text'] == ['SUPERSAW'] and ('font', 0x1D) in foot and not m.kits,
+          f'the columns: the name small at +3 (font 0x1d), the value big at +15 (font 2), where the stock column draws '
+          f'its own ({texts}); the footer shows the name of the sound, small ("SUPERSAW"); no kit draw asked')
+    other_type = m.draw_column(0, 0x7B, kind=1)
+    m.page(1)
+    m.call(sym['sy_ui'])
+    outside = m.draw_column(0, 0x7B)
+    outside_f = m.draw_footer()
+    check(not other_type and not outside and not outside_f and
+          [k[0] for k in m.kits] == [col_draw, col_draw, foot_draw] and m.sy()['mode'] == 0 and
+          m.sy()['leaves'] == 1,
+          'a column of another descriptor type, and every draw once another page closed the screen: the kits\' draws')
+    # 6. The page's update: kits save's first; when what the screen shows changed, the three columns and the footer
+    #    drawn again, once.
+    p = ScreenMachine(img, man, page=SG_PAGE)
+    p.start()
+    p.put(sym['sy'] + p.sl.mode, 1, '<I')
+    p.draw_footer()
+    page_obj = SCRATCH + 0x1000
+    kids = [SCRATCH + 0xA00 + 0x40 * k for k in range(3)]
+    p.uc.mem_write(page_obj + 0x1A6C, struct.pack('<3I', *kids))
+    p.ev(EV_KNOB, 2, 70)
+    p.invalid.clear()
+    p.call(sym['sy_sg_poll'], page_obj)
+    first = list(p.invalid)
+    p.call(sym['sy_sg_poll'], page_obj)
+    second = list(p.invalid)
+    check([k[0] for k in p.kits if k[0] == sg_poll] == [sg_poll, sg_poll] and first == kids + [FOOTER] and
+          second == first,
+          'the page\'s update: kits save\'s ks_sg_poll first, then (a knob turned) the three columns and the footer '
+          'drawn again, once')
+    # 7. The bar: on the screen PRM: SOUND and the sound's number, the stock function ends / goes on at 0x80123c5a,
+    #    redrawn when SOUND changed; outside it the arp's bridges with every register as it came.
+    b = ScreenMachine(img, man, page=SG_PAGE)
+    b.start()
+    b.put(sym['sy'] + b.sl.mode, 1, '<I')
+    b.ev(EV_KNOB, 1, 37)
+    name = b.bar_name()
+    text = b.bar_text()
+    poll = b.bar_poll()
+    poll2 = b.bar_poll()
+    b.put(sym['sy'] + b.sl.mode, 0, '<I')
+    name_o = b.bar_name()
+    text_o = b.bar_text()
+    check(name[:2] == ('end', 'SOUND') and text[:3] == ('drawn', '4', BAR_DRAW_ARGS) and
+          poll[0] == 'arp' and poll[1] == [BAR_SCREEN] and poll[2] and poll2[1] == [] and
+          name_o[0] == 'arp' and name_o[2] and text_o[0] == 'arp' and text_o[3],
+          f'the bar on the screen: PRM: SOUND, "4" (the displaced draw first, as stock set it up), redrawn once after '
+          f'SOUND changed; outside it the arp\'s bridges with r0-r5 and lr as they came ({name}, {text[:2]})')
+    # 8. Leaving and the input: SHIFT + RECORD SETTING gives the page back (and goes on); the chord with EXT SOURCE off
+    #    (the press toggled it off) puts it on; with GATE, its release putting it off: on again; a page asked for that
+    #    never comes: given up after 1 s.
+    q = ScreenMachine(img, man, page=SG_PAGE)
+    q.start()
+    q.hold(KEY_EXT, True)
+    q.ev(EV_KEY, KEY_REC_SET)
+    on_page = q.sy()['mode']
+    q.hold(KEY_EXT, False)
+    q.ev(EV_KEY_UP, KEY_REC_SET)
+    q.hold(KEY_SHIFT, True)
+    back = q.ev(EV_KEY, KEY_REC_SET)
+    q.hold(KEY_SHIFT, False)
+    st8 = q.sy()
+    e = ScreenMachine(img, man, ext=0)
+    e.start()
+    e.hold(KEY_EXT, True)
+    e.ev(EV_KEY, KEY_REC_SET)
+    sets1 = list(e.sets)
+    e.ext = 0                                                          # GATE: the release put it off
+    e.call(sym['sy_ui'])
+    held_sets = len(e.sets)
+    e.hold(KEY_EXT, False)
+    e.call(sym['sy_ui'])
+    sets2 = list(e.sets)
+    e.call(sym['sy_ui'])
+    w = ScreenMachine(img, man)
+    w.start()
+    w.hold(KEY_EXT, True)
+    w.ev(EV_KEY, KEY_REC_SET)
+    w.cyc += 600_000_001
+    w.call(sym['sy_ui'])
+    check(on_page == 1 and back == (0, True) and st8['mode'] == 0 and st8['leaves'] == 1 and
+          sets1 == [(0x25, 1, 0)] and held_sets == 1 and sets2 == [(0x25, 1, 0), (0x25, 1, 0)] and
+          len(e.sets) == 2 and w.sy()['mode'] == 0 and w.requests == [SG_PAGE],
+          'on the Sound Generator page the chord opens the screen at once; SHIFT + RECORD SETTING closes it and goes on '
+          '(the stock Sound Generator); with EXT SOURCE off the chord puts it on (the settings setter, 0x25 = 1), and '
+          'again once EXT SOURCE is let go if GATE put it off; a page that never comes: given up after 1 s')
+    # 9. The synth plays on the Sound Generator page in the screen (the tracker's synth, test 6, does not).
+    g = SyMachine(img, man, page=SG_PAGE)
+    g.put(sym['sy'] + g.sl.mode, 1, '<I')
+    g.start()
+    sig = ref.to_blocks(sy_strum('G')[0])
+    for k in range(120):
+        sg = g.step(sig[k])
+    t6 = g.tt()
+    check(sg['state'] == SY_RUN and any(sg['out']) and t6['req'] == 0 and g.gsyn()['ons'] == 0,
+          'in the screen the SY synth plays on the Sound Generator page; the tracker (guitar synth test 6) stays off')
+    report['sy']['screen'] = dict(columns=want_cols, footer='SUPERSAW', bar=['SOUND', '4'])
 
 
 def sy_route_checks(img, man):
@@ -1867,7 +2084,7 @@ def sy_route_checks(img, man):
           e.tt()['rec_mix'] == 0,
           'ROUTING ExtIn, held: the feed copies the input with the synth\'s newest block added (as sy_tx added it to '
           'TX), once per block')
-    # 4. The synth off (pad 16) on the main screen: the hold lets go, ROUTING (Mix) sent back, after 30 ms the packet
+    # 4. The synth off (SOUND OFF) on the main screen: the hold lets go, ROUTING (Mix) sent back, after 30 ms the packet
     #    is the feed's own.
     o = SyMachine(img, man, routing=0)
     o.start()
@@ -1879,7 +2096,7 @@ def sy_route_checks(img, man):
     o.call(sym['sy_feed'], o.packet(g, mx), 0x800)
     check(o.routing_dt1() == [1, 0] and during == 1 and o.tt()['hold'] == 0 and o.tt()['rec_mix'] == 0 and
           [x[0] for x in o.feeds[-1][2]] == g,
-          'the synth off (pad 16) on the main screen: the hold lets go and Mix goes back to the chip; the recorder '
+          'the synth off (SOUND OFF) on the main screen: the hold lets go and Mix goes back to the chip; the recorder '
           'keeps the mix 30 ms, then takes pair 0 as stock')
     # 5. A ROUTING DT1 the firmware sends while held goes out as ExtIn; other IDs untouched, on the caller's stack;
     #    with nothing listening, as sent.
