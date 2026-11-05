@@ -1,4 +1,4 @@
-# SY synth tests 1 to 8: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 9: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -605,6 +605,16 @@ asked for; EXIT: still armed; EXT SOURCE off: disarmed; on again: not armed. The
 **Emulator checks:** 333 (167 distinct) pass on `release/sy-synth-test8`. Test 8's: EXT SOURCE on with the screen never opened (no
 engine, no hold), the screen (armed, held on ExtIn, the engine on), EXIT (on), EXT SOURCE off (disarmed, the hold let
 go: the user's ROUTING sent back), on again (off until the screen).
+
+## SY synth test 9 (sy-synth-test9): test 8 on combined-test19
+
+The user found the Sound Generator "way too loud" at LEVEL 127, especially with four notes, and the kits too: they
+should be about as loud as a sample. That went to the combined build as combined-test19 (`COMBINED.md`,
+`SG_LEVEL.md`): the kit stage's output stage had doubled melodic notes as well as kit hits since v9.39. Now one note at
+127 peaks at -12.0 dBFS (was -1.2), four at -1.2 to -2.0 dBFS, kit pads alone at -6.4 dBFS at most (was -1.3); REC and
+BOUNC record as before. The SY code is test 8's; only the parent changed, and every guard holds on it.
+
+**Emulator checks:** 333 (167 distinct) pass on `release/sy-synth-test9`.
 
 ## Still not known
 

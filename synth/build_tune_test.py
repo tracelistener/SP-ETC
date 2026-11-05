@@ -98,7 +98,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test8'
+REVISION = 'sy-synth-test9'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1022,7 +1022,9 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 8: the synth plays from the guitar synth screen on (sy.armed): off at power-on '
+        description='SY synth test 9: test 8 on combined-test19 (v9.52 with LEVEL for MIDI notes and the Sound '
+                    'Generator and kits at about a sample\'s loudness). '
+                    'SY synth test 8: the synth plays from the guitar synth screen on (sy.armed): off at power-on '
                     'and whenever EXT SOURCE goes on, on once the screen opens, on after EXIT on every page but the '
                     'plain Sound Generator\'s until EXT SOURCE goes off (or SOUND OFF); the ROUTING hold follows it. '
                     'SY synth test 7: the synth\'s bus, DRY / BUS 1 / BUS 2 / BOTH (half each), on TX line 3\'s stems '
