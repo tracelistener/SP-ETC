@@ -1,4 +1,4 @@
-/* SY synth test 8, with guitar synth test 6 (note tracker 3): on v9.52 + LEVEL for MIDI notes (combined-test18; SY
+/* SY synth test 10, with guitar synth test 6 (note tracker 3): on v9.52 + LEVEL for MIDI notes (combined-test18; SY
  * test 6 was on v9.52 (combined-test17) with the CPU meter of IR
  * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
  * BOSS's SY pedals work: 49 semitone bands, each with its own oscillators, from RX pair 0, added to the DRY pair of
@@ -36,6 +36,9 @@
  * Test 8: the synth plays from the screen on (sy.armed): off at power-on and whenever EXT SOURCE goes on (the guitar
  * dry, ROUTING as set), on once the guitar synth screen opens, and on after EXIT, on every page but the plain Sound
  * Generator's, until EXT SOURCE goes off (or SOUND OFF). The ROUTING hold follows it.
+ * Test 10: the screen opened over a Sound Generator page already up (the plain page, drum mode) draws its footer at
+ * once (it kept the page's own until SHIFT); the chord works on the looper's page (0x27) too, as SHIFT + RECORD
+ * SETTING does there; with looper mode on, REC on the screen goes to the looper (capturing a loop) as on the stock page.
  * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
@@ -124,6 +127,8 @@
 #define KEY_UP_FN ((void (*)(const s16 *))0x8003ADA1u)
 #define SY_BAR_X0 57                                             /* the bar's PRM part (the item box x 73..95) */
 #define SY_GRACE 2u                                              /* SY test 8: steps after a start not held to SLOW */
+#define LOOPER_PAGE 0x27                                         /* SY test 10: the looper (MARK with MARK = Looper) */
+#define LOOPER_ON (*(volatile const u8 *)0x82E0B92Cu)            /* looper mode on: the SG page's REC goes to it */
 #define SY_BAR_X1 127
 #define PADS 16u                   /* key IDs 0..15 are the pads */
 #define KEY_BYTES 11
@@ -1311,8 +1316,8 @@ UI_SMALL SCREEN static void sy_mode_on(sy_t *s) {
     }
     if (!SET_GET(SETTINGS, EXT_SOURCE, 0)) sy_ext_on();
     s->ext_fix = 1;
-    s->shift_down = 0;
-    s->foot = 0;
+    s->shift_down = 0;                                  /* test 10: the footer kept (it was cleared here, so a screen
+                                                           opened over the page up kept the page's own footer) */
     sy_changed(s);
     if (PAGE == SG_PAGE) {
         s->mode = 1;
@@ -1498,6 +1503,7 @@ UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val)
             sy_sound_set(s, (u32)what == SY_OFF_PAD ? 0u : (u32)what + 1u);
             return 1;
         }
+        if (what == KEY_REC && LOOPER_ON) return 0;    /* test 10: the looper's REC (a loop), as on the stock page */
         if (what == KEY_SUB_PAD || what == KEY_REC || what == KEY_VALUE) {
             sy_take(s, what);
             if (what == KEY_VALUE) {                    /* SY test 7: the synth's bus, DRY -> BUS 1 -> BUS 2 -> BOTH */
@@ -1536,7 +1542,7 @@ EXPORT SCREEN s32 sy_event(const s16 *ev) {
     if ((type == EV_KEY || type == EV_KEY_UP) && sy_remain(s, type, what, ev[2])) return 1;
     if (type == EV_KEY_UP) sy_flush(s);
     if (type == EV_KEY && what == KEY_REC_SET && key_held(KEY_EXT_SOURCE) && !key_held(KEY_SHIFT) &&
-        (PAGE == MAIN_PAGE || PAGE == SG_PAGE)) {
+        (PAGE == MAIN_PAGE || PAGE == SG_PAGE || PAGE == LOOPER_PAGE)) {   /* test 10: the looper too */
         sy_take(s, what);
         sy_mode_on(s);
         return 1;
@@ -1627,14 +1633,17 @@ EXPORT SCREEN void sy_col_draw(void *widget) {
  * font; the widget is kept to be drawn again when the sound changes (sy_sg_poll, only while the page stays up and the
  * widget's first word is still its vtable). */
 EXPORT SCREEN void sy_foot_draw(void *widget) {
+    sy_t *s = &sy;
+    s32 *w = (s32 *)widget;
+    if (PAGE == SG_PAGE) {                              /* test 10: kept outside the screen too, so the screen's */
+        s->foot = (u32)widget;                          /* first update redraws it (the mode tick forgets it off
+                                                           the page) */
+        s->foot_vt = (u32)w[0];
+    }
     if (!sy_shown()) {
         FOOT_DRAW(widget);
         return;
     }
-    sy_t *s = &sy;
-    s32 *w = (s32 *)widget;
-    s->foot = (u32)widget;
-    s->foot_vt = (u32)w[0];
     char text[24];
     sy_foot_text(text);
     void *fb = sy_clear(w);

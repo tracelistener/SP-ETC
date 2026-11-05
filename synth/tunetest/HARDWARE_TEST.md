@@ -1,8 +1,7 @@
-# SY synth test 9: test 8 with the quieter Sound Generator and kits
+# SY synth test 10: the footer, and the guitar synth from the looper
 
-A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, and the Sound Generator and kits at about a
-sample's loudness) plus the SY synth and guitar synth test 6 on the Sound Generator page. Not for sharing. To go back,
-patch v9.52 again.
+A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, and the quieter Sound Generator and kits) plus the
+SY synth and guitar synth test 6 on the Sound Generator page. Not for sharing. To go back, patch v9.52 again.
 
 | File | SHA-256 |
 | --- | --- |
@@ -11,20 +10,18 @@ patch v9.52 again.
 
 What's new:
 
-- **The Sound Generator and kits are quieter** (combined-test19). One Sound Generator note at LEVEL 127 now peaks at
-  about -12 dBFS (it was -1.2), four notes at about -1.5 dBFS without clipping, and kit hits at -6.4 dBFS at most (they
-  were -1.3). REC and BOUNC record the same as before.
-- Everything from test 8 stays:
-  - the guitar synth starts from its screen (hold EXT SOURCE, press RECORD SETTING) and plays until EXT SOURCE goes off;
-  - push VALUE on the screen for the synth's bus (OUT: DRY / BUS 1 / BUS 2 / BOTH);
-  - LEVEL turns down MIDI notes on the Sound Generator.
+- **The footer names the synth's sound straight away.** Before, the guitar synth screen opened over the Sound Generator
+  still said CHROMATIC INPUT, and over drum mode it was blank, until you pressed SHIFT.
+- **The guitar synth screen opens from the looper.** Hold EXT SOURCE and press RECORD SETTING on the looper screen, as
+  from the Sound Generator or kits.
+- **REC goes to the looper while the screen is up**, as it does on the stock Sound Generator page with looper mode on.
+  With looper mode off, REC still does nothing on the screen.
+- Everything from test 9 stays.
 
-1. Volume low at first. On the plain Sound Generator, play single notes and four-note chords at LEVEL 127, then a
-   sample pad: are they about as loud?
-2. On a kit, play hits against a sample pad.
-3. Test 8's steps: EXT SOURCE on (only your guitar), the guitar synth screen (the synth), EXIT (still the synth),
-   EXT SOURCE off and on (only your guitar).
-4. The synth on BUS 2 with DELAY on BUS 2 (OUT: BUS 2), then BUS 1 and BOTH.
+1. Open the Sound Generator (SHIFT + RECORD SETTING), then the guitar synth screen. The footer should name the sound at
+   once. Then the same from drum mode.
+2. Turn looper mode on, open the looper with MARK, then the guitar synth screen from there.
+3. Volume low. Press REC, play the guitar for a few bars, press REC again.
 
-Tell me: are the Sound Generator and kits about as loud as a sample now? Does the synth start only from its screen?
-Does it get the effect on BUS 2 and BUS 1?
+Tell me: does the footer show the sound straight away? Does the screen open from the looper? Does REC record a loop,
+and does the loop have the synth in it?

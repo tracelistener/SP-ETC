@@ -2271,6 +2271,42 @@ def sy_screen_checks(img, man):
           f'SY test 8: EXT SOURCE on, the screen never opened: no synth, no ROUTING hold; the screen opened: armed, held '
           f'on ExtIn, the synth on; EXIT: it plays on; EXT SOURCE off: disarmed, the hold let go (the user\'s ROUTING '
           f'sent back); on again: silent until the screen opens (ROUTING sent {hold0} / {hold1} / {hold4})')
+    # 14. SY test 10: the footer drawn on the plain Sound Generator page (outside the screen) is kept, so opening the
+    #     screen over that page redraws it at once; the chord on the looper page (0x27) opens the screen; with looper
+    #     mode on (0x82e0b92c), REC on the screen goes on (the looper's), off: taken as before.
+    f2 = ScreenMachine(img, man, page=SG_PAGE)
+    f2.start()
+    page2 = SCRATCH + 0x1000
+    kids2 = [SCRATCH + 0xA00 + 0x40 * k for k in range(3)]
+    f2.uc.mem_write(page2 + 0x1A6C, struct.pack('<3I', *kids2))
+    f2.draw_footer()                                   # the page's own footer ("CHROMATIC INPUT"), the screen not up
+    kept = f2.sy()['foot']
+    f2.hold(KEY_EXT, True)
+    f2.ev(EV_KEY, KEY_REC_SET)
+    f2.hold(KEY_EXT, False)
+    f2.ev(EV_KEY_UP, KEY_REC_SET)
+    f2.call(sym['sy_ui'])
+    f2.invalid.clear()
+    f2.call(sym['sy_sg_poll'], page2)
+    redrawn = list(f2.invalid)
+    lp = ScreenMachine(img, man, page=0x27)
+    lp.start()
+    lp.hold(KEY_EXT, True)
+    lchord = lp.ev(EV_KEY, KEY_REC_SET)
+    lp.hold(KEY_EXT, False)
+    lreq = list(lp.requests)
+    rc = ScreenMachine(img, man, page=SG_PAGE)
+    rc.start()
+    rc.put(sym['sy'] + rc.sl.mode, 1, '<I')
+    rc.put(0x82E0B92C, 1, '<B')
+    rec_on = [rc.ev(EV_KEY, KEY_REC), rc.ev(EV_KEY_UP, KEY_REC)]
+    rc.put(0x82E0B92C, 0, '<B')
+    rec_off = [rc.ev(EV_KEY, KEY_REC), rc.ev(EV_KEY_UP, KEY_REC)]
+    check(kept == FOOTER and redrawn == kids2 + [FOOTER] and lchord == (1, False) and lreq == [SG_PAGE] and
+          rec_on == [(0, True), (0, True)] and rec_off == [(1, False), (1, False)],
+          f'SY test 10: the page\'s own footer kept outside the screen, so the screen opened over the page redraws it '
+          f'with the columns ({redrawn}); the chord on the looper page asks for the Sound Generator page ({lreq}); with '
+          f'looper mode on REC goes on to the looper, with it off REC is taken as before')
     report['sy']['screen'] = dict(columns=want_cols, footer='SUPERSAW', bar='OUT: <bus>', fx_passes=fa['fx_passes'],
                                   remain=dict(taps=st_r['rem_taps'], holds=st_r['rem_holds']), bus_texts=texts)
 

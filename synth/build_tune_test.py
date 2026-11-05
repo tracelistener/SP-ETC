@@ -98,7 +98,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test9'
+REVISION = 'sy-synth-test10'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -245,6 +245,10 @@ GUARDS = [
     (0x0001BB64, 6, ['ldrb.w r0, [r0, #0x258]', 'bx lr'], 'the feed\'s pair: the byte at 0x82e0e71c + 0x258'),
     (FEED + 0x46, 0x0C, ['add.w r1, r4, r2, lsl #1', 'ldrh.w r4, [ip]', 'movs r2, #0', 'b #0x1caf2'],
      'recorder feed: reads the packet (r0 on entry, in r4) at that word'),
+    # SY test 10: the looper
+    (0x8015C676, 6, ['movs r0, #0x27', 'bl #0x800da598'], "the SG page's MARK asks for page 0x27, the looper"),
+    (0x8015C6B0, 0x10, ['movw r0, #0xb71c', 'movt r0, #0x82e0', 'ldrb.w r0, [r0, #0x210]', 'cmp r0, #0'],
+     "the SG page's REC: looper mode on (the byte at 0x82e0b92c) hands REC to the looper (LOOPER_ON)"),
     # SY test 6: REMAIN on the Sound Generator page, the FX screens, the bar's PRM part
     (0x8003ABD0, 0x0A, ['movw ip, #0x221f', 'movt ip, #0x83fe', 'bx ip'],
      "the UI dispatcher's key press: FX deep edit's bridge first (sy_stock_key hands a REMAIN tap and an EXIT here)"),
@@ -1022,7 +1026,10 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 9: test 8 on combined-test19 (v9.52 with LEVEL for MIDI notes and the Sound '
+        description='SY synth test 10: the footer drawn when the screen opens over the Sound Generator page '
+                    '(plain or drum mode) already up; the chord on the looper page (0x27); REC on the screen to the '
+                    'looper while looper mode is on (0x82e0b92c). '
+                    'SY synth test 9: test 8 on combined-test19 (v9.52 with LEVEL for MIDI notes and the Sound '
                     'Generator and kits at about a sample\'s loudness). '
                     'SY synth test 8: the synth plays from the guitar synth screen on (sy.armed): off at power-on '
                     'and whenever EXT SOURCE goes on, on once the screen opens, on after EXIT on every page but the '

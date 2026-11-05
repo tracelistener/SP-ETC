@@ -1,4 +1,4 @@
-# SY synth tests 1 to 9: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 10: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -616,6 +616,35 @@ BOUNC record as before. The SY code is test 8's; only the parent changed, and ev
 
 **Emulator checks:** 333 (167 distinct) pass on `release/sy-synth-test9`.
 
+## SY synth test 10 (sy-synth-test10): the footer, and the looper
+
+On the unit (tests 8/9): "if i go into sound gen mode then back to guitar synth mode, guitar synth mode shows
+chromatic mode on bottom menu until i press shift. drum mode-guitar synth it is blank until shift. also guitar synth
+mode won't open when in looper mode." Asked how the looper should behave: like the Sound Generator and kits, leaving
+the looper's screen for the guitar synth's, with REC still capturing the loop.
+
+- **The footer:** `sy_mode_on` cleared the kept footer widget (`sy.foot`), and `sy_foot_draw` kept it only while the
+  screen was up. A screen opened over the SG page already up redrew its columns (the page update), but not the footer,
+  so the page's own stayed ("CHROMATIC INPUT", drum mode's blank) until SHIFT made the page draw it again. Now every
+  footer draw on the SG page keeps the widget, the chord no longer clears it, and the mode tick still forgets it off
+  the page; the screen's first page update redraws it.
+- **The looper's page (0x27, MARK with MARK Function = Looper)** takes the chord too, as SHIFT + RECORD SETTING does
+  there; the SG page is asked for as from the main screen.
+- **REC with looper mode on** (the byte at 0x82e0b92c, which the SG page's REC case tests at 0x8015c6b0) goes on to
+  stock: the page posts the looper's REC (0x800c23c8(0, 0, 0), message 0xa4) as on the stock page. With looper mode off
+  the screen takes REC as before (no export). Guards: 0x8015c676 (the page's MARK asks for 0x27) and 0x8015c6b0.
+
+**DM-404** (the release's APP1): the screen opened over the plain SG page showed "SAW LEAD" in the footer at once (it
+was "CHROMATIC INPUT"), and over drum mode too (it was blank). REC on the screen with looper mode off posted nothing.
+With looper mode on (SHIFT + VALUE, OK), MARK opened the looper (page 0x27, "empty"); the stock SG page's REC reached
+from there posted the looper's message (0xa4, as the ring at 0x80b5dfa4 showed); the chord on the looper's page opened
+the screen (page 0x1e, mode 1), and REC on it posted 0xa4 too, each time, with the screen staying up. Back on the
+looper it read "rec wait" (AUTO TRIG on, no input in DM-404).
+
+**Emulator checks:** 340 (168 distinct) pass on `release/sy-synth-test10`. Test 10's: the page's own footer kept outside the
+screen and redrawn with the columns once the screen opens over the page; the chord on page 0x27 asks for the SG page;
+REC passed on with looper mode on, taken with it off.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -631,5 +660,6 @@ BOUNC record as before. The SY code is test 8's; only the parent changed, and ev
 - How the low notes' 20-30 ms feel in longer playing (nothing was reported against them).
 - Test 3: whether the file saves and comes back on the unit (FX deep edit's way of saving works there), and whether
   the shared knob positions (the bus effect jumping after an edit) get in the way.
+- Test 10: whether a looper take made from the guitar synth screen has the synth in it.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.
