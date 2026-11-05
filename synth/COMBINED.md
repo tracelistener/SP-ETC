@@ -423,3 +423,56 @@ combined-test16, then the fast boot and the kit footer.
 **Checked** (Unicorn, `analysis/kit_pr1_audit/dev_combined17/run_suites.py`): on the final APP1,
 `test_fx_deep_edit.py` 99 of 102 (the same 2 layout checks and ROLL's key), `test_note_repeat.py` 109 of 113 (the 4
 layout checks) and the kit suites pass. fx-deep-edit-test14 on its own parent passes all 102.
+
+## 19. combined-test18
+
+A fork user's MIDI keyboard has no velocity: every note comes at 127, and the Sound Generator played it at full volume
+with no way to turn it down. Stock's LEVEL is no value of its own: its getter reads voice 0's level, so it shows the
+last note's velocity, and only the page's pads use it (as their velocity, with FIXED VELOCITY on). The SG LEVEL step
+(`build_sg_level.py`, module `sg-level-test1`, SG_LEVEL.md) goes on top of combined-test17, after the fast boot and the
+kit footer:
+- LEVEL (CTRL 3, CC 72) is kept by SetParam's Sound Generator call and read back by its getter.
+- The Sound Generator's melodic MIDI note-ons play at velocity x LEVEL / 127 (at least 1), ARP on or off, on either M.CH
+  route.
+- A LEVEL change scales the MIDI keys the arp holds again.
+- Drum mode and the pads are as before.
+
+```
+python synth/build_sg_level.py release/combined-test17/SP404MKII_APP1.bin OUT_DIR --zig ZIG \
+    --kits release/bounce-3-test7/kits-manifest.json --revision combined-test18
+```
+
+- **APP1:** `e5788fca...170f`, 3,158,224 bytes, in `analysis/kit_pr1_audit/release/combined-test18`. Every module and
+  patch of combined-test17 is as it was. The step adds three patches (`0x1ff20`, `0x80020480`, `0x83fa3448`) and one
+  copy row (35 rows): the 552-byte module in a 2 KB slot at `0x83FA1800`. That slot is between v9.6's scale module and
+  the kit stage, RAM no fork branch uses.
+- **One patch inside another feature's guard:** `arp_midi_event`'s entry (`0x83fa3448`) is inside kits save's guard over
+  the whole kit stage, as the kit footer's byte is. Kits save uses the kit stage's addresses and never calls
+  `arp_midi_event`; the step's manifest says so (`inside_guards`).
+
+**Checked** (Unicorn, `analysis/kit_pr1_audit/dev_combined18/run_suites.py`, every suite). It is combined-test17's runner,
+with the kit manifest's module hashes re-pointed for the kit footer's byte and the entry patch. The suites not rerun on
+combined-test17 got a baseline run there (`dev_combined18/baseline17`).
+
+| Suite | Result | Against combined-test17 |
+| --- | --- | --- |
+| `test_sg_level.py` (new) | 26 of 26 | |
+| `test_bounce.py` | 543 cases; 16 checks pass, 7 layout checks fail | the same |
+| `test_fx_deep_edit.py` | 99 of 102 | the same (2 layout checks, ROLL's key) |
+| `test_pad_env.py` (stage 1) | 29, then the UI section stops at page 5 | the same lines |
+| the same, on step 3's output | 64 of 64 | |
+| `test_pad_pitch_filter.py` | 42 of 44 | the same |
+| `test_kits_save.py` | 166 of 169 | the same 3 (2 layout checks; its kit-stage guard: the footer's byte, now the entry too) |
+| `test_note_repeat.py` | 109 of 113 | the same (4 layout checks) |
+| `test_chroma.py` | 35 of 38 | the same |
+| `test_sg_subpad.py` | 23 of 25 | one more layout check: the rows are SUB PAD's parent's plus one more (this step's) |
+| `test_start_fix.py` (v3) | 13; 4 layout checks fail | the same |
+| kit suites: kits, capture, chord, shortcut, midi (CC 72 included), restart, hot resample | pass | |
+| kit bounce: 13 kits, 4 tweaked, flow | 18 of 18 | |
+
+**DM-404** (SG_LEVEL.md section 6). MIDI notes on the real firmware, CTRL 3 at three positions:
+- combined-test18: a note at velocity v and LEVEL l peaks as combined-test17's note at v x l / 127 does (565 and 275 at
+  LEVEL 35, 1081 and 533 at 67), and at LEVEL 127 as before. The screen keeps the LEVEL set.
+- combined-test17: CTRL 3 changes nothing for MIDI.
+
+**Not run:** the unit.
