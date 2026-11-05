@@ -1,21 +1,29 @@
-"""LEVEL for MIDI notes on the Sound Generator (build_sg_level.py), through the real stock MIDI dispatcher.
+"""The Sound Generator's level (build_sg_level.py): LEVEL for MIDI notes (test 1) and the output stage (test 2),
+through the real stock MIDI dispatcher and render loop.
 
 Both APP1s boot into Unicorn the way test_kit_midi.py's machine does (its harness: the scatter rows in order, real
-Sound Generator code, the RTOS dispatch and delay calls and the peripherals stubbed; no screen, no timing). The
-build is compared with its parent (combined-test17) wherever nothing should change. This is not a hardware test.
+Sound Generator code, the RTOS dispatch and delay calls and the peripherals stubbed; no screen, no timing), on
+Unicorn's ARM_MAX CPU (some v9 waves use VFP instructions its default lacks). The build is compared with its parent
+(combined-test17) wherever nothing should change. The SG's mix is read at the output stage's entry (kit_mix_finish on
+the parent, sgl_mix_finish here): the bus before the SG's voices and the voices' part. This is not a hardware test.
 
-1. Layout: the three patches and the module in place, every guard holding with them put back, the kit stage
-   v9.46's apart from the kit footer's byte and the entry patch.
+1. Layout: the patches and the module in place, every guard holding with them put back, the kit stage v9.46's
+   apart from the kit footer's byte and the entry patch; the render exit's new target has kit_mix_gate's shape.
 2. LEVEL: SetParam sets it (clamped as stock) and the voices as the parent's; it reads back as set at power-on
    (127) and after pad and MIDI notes (the parent reads the last note's velocity); the other settings as the parent.
 3. MIDI, ARP off, M.CH 16 and M.CH 1: every LEVEL x velocity, a note-on's voice at velocity x LEVEL / 127 (at least 1)
-   x 100; note-offs (also a note-on at velocity 0) release. A note at velocity v and LEVEL l plays exactly as the
-   parent's note at the scaled velocity (voices and audio, sample for sample); at LEVEL 127 a chord-and-steal
-   sequence is the parent's.
+   x 100; note-offs (also a note-on at velocity 0) release. A note at velocity v and LEVEL l is the parent's note at
+   the scaled velocity (voices and the SG's mix, sample for sample); at LEVEL 127 a chord-and-steal sequence is the
+   parent's.
 4. ARP on: MIDI keys are held at the scaled velocity and the steps start at it; a LEVEL change scales the MIDI keys
    again from their own velocities (a pad key stays); with LEVEL 127 the arp's steps are the parent's.
-5. Drum mode, pads: as the parent at any LEVEL.
+5. Drum mode, pads: as the parent at any LEVEL (voices and the SG's mix).
 6. CC 72 on M.CH sets LEVEL (after the screen update) and MIDI follows it.
+7. The output stage: every bus sample is the bus before the SG plus the stage of the SG's part, at x0.5 in melodic
+   mode and x1 in drum mode, with the kit stage's knee (a float32 model of kit_master_sample), also with other audio
+   in the bus; the parent's stage is x2. One note at LEVEL 127 peaks at 8192 (-12 dBFS) and never reaches the knee;
+   four notes stay under 32000; a kit pad alone never reaches the knee. The REC mix: x1 melodic, x2 drum mode (the
+   parent's kit_export_mix in drum mode exactly), with v9.5's export mix answering a sweep of values.
 
 Usage: python synth/test_sg_level.py BUILD_DIR PARENT_DIR KITS_MANIFEST
 """
@@ -29,20 +37,33 @@ import sys
 import tempfile
 from pathlib import Path
 
-from unicorn import UC_HOOK_CODE
+import numpy as np
+from unicorn import Uc, UC_HOOK_CODE
 from unicorn import arm_const as ar
 
-from build_sg_level import GUARDS, KIT_BASE, KIT_END, KIT_FOOTER, KIT_MODULE_SHA
+import test_kit_midi as tkm
+from build_arp import listing
+from build_sg_level import GUARDS, KIT, KIT_BASE, KIT_END, KIT_FOOTER, KIT_MIX_BASELINE, KIT_MODULE_SHA, V95_EXPORT_MIX
 from build_sg_subpad import Runtime
-from test_kit_midi import Machine, NOTE_ENGINE, RET, SETTINGS, STACK, VOICES
+from test_kit_midi import Machine, NOTE_ENGINE, RET, SETTINGS, STACK, VOICES, BUS, FRAMES, CHANNELS, RENDER
 
+
+def uc_max(arch, mode):
+    u = Uc(arch, mode)
+    u.ctl_set_cpu_model(ar.UC_CPU_ARM_MAX)
+    return u
+
+
+tkm.Uc = uc_max
 SETPARAM = 0x800DD0C0
 PROJECT_PARAM = 0x800DDA38              # (0x82e009d0, id, pad): stubbed, the project's settings from SG.project
 SG_PAD_TAIL = 0x8015C0C8                # the SG page's pad press, from FIXED VELOCITY on (r4 pad, r5 velocity, r6 note)
 FIXED_VELOCITY = 0xDB
-LEVEL = 0x7D
+LEVEL, TYPE, ENV = 0x7D, 0x7B, 0x82
 OTHERS = (0x7B, 0x7C, 0x7E, 0x7F, 0x80, 0x81, 0x82)
 MIDI_SRC = 0x100
+PARENT_FINISH = KIT['kit_mix_finish'] & ~1
+GAINS = {'live': (0.5, 1.0), 'export': (1.0, 2.0), 'parent': (2.0, 2.0)}   # (melodic, drum)
 results = []
 
 
@@ -62,11 +83,32 @@ def want(vel, level):
     return max(1, vel * level // 127)
 
 
+def master(x, gain):
+    """kit_master_sample's stage at another gain, in float32 as the module computes it."""
+    f = np.float32
+    y = f(x) * f(gain)
+    a = -y if y < 0 else y
+    if a > f(24576):
+        a = f(24576) + f(7424) * (a - f(24576)) / (f(7424) + a - f(24576))
+        y = -a if y < 0 else a
+    return int(y)
+
+
 class SG(Machine):
-    def __init__(self, folder, symbols, entries=None):
+    def __init__(self, folder, symbols, entries=None, finish=None):
         self.project = {}
         super().__init__(folder, symbols)
         self.E = entries or {}
+        self.mix, self.base = [], []
+        self.uc.hook_add(UC_HOOK_CODE, self._finish, begin=finish, end=finish)
+
+    def _finish(self, uc, a, size, _):
+        """The output stage's entry (bus, frames, channels): the bus before the SG and the SG's part of it."""
+        bus, n = uc.reg_read(ar.UC_ARM_REG_R0), uc.reg_read(ar.UC_ARM_REG_R1) * uc.reg_read(ar.UC_ARM_REG_R2)
+        cur = struct.unpack(f'<{n}i', bytes(uc.mem_read(bus, 4 * n)))
+        base = struct.unpack(f'<{n}i', bytes(uc.mem_read(KIT_MIX_BASELINE, 4 * n)))
+        self.base += base
+        self.mix += [c - b for c, b in zip(cur, base)]
 
     def stub(self, address, value=0, log=None):
         if address != PROJECT_PARAM:
@@ -76,6 +118,16 @@ class SG(Machine):
             uc.reg_write(ar.UC_ARM_REG_R0, self.project.get(uc.reg_read(ar.UC_ARM_REG_R1), value))
             uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
         self.uc.hook_add(UC_HOOK_CODE, hook, begin=address, end=address)
+
+    def mixed(self, blocks, bus=None):
+        """`blocks` render blocks (the bus cleared, or `bus` before each): (output, the SG's part, the bus before)."""
+        self.mix, self.base = [], []
+        out = []
+        for _ in range(blocks):
+            self.uc.mem_write(BUS, struct.pack(f'<{FRAMES * CHANNELS}i', *bus) if bus else bytes(FRAMES * CHANNELS * 4))
+            self.call(RENDER, 0, BUS, FRAMES, CHANNELS)
+            out += struct.unpack(f'<{FRAMES * CHANNELS}i', bytes(self.uc.mem_read(BUS, FRAMES * CHANNELS * 4)))
+        return out, self.mix, self.base
 
     def sg_pad(self, pad, vel):
         """The SG page's pad press from its FIXED VELOCITY test on (0x8015c0c8) to its note event and return."""
@@ -140,8 +192,8 @@ def main():
     try:
         new_view, old_view = view(tmp / 'new', build, kits), view(tmp / 'old', parent, kits)
         symbols = kits['symbols']
-        fresh = lambda: SG(new_view, symbols, E)
-        stock = lambda: SG(old_view, symbols)
+        fresh = lambda: SG(new_view, symbols, E, E['sgl_mix_finish'] & ~1)
+        stock = lambda: SG(old_view, symbols, None, PARENT_FINISH)
         run(build, parent, man, fresh, stock)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -153,14 +205,21 @@ def main():
     print('all passed')
 
 
+def same_sound(m, s, blocks):
+    """The voices and the SG's mix (before the output stage) as the parent's."""
+    a, b = m.mixed(blocks), s.mixed(blocks)
+    return m.raw() == s.raw() and a[1] == b[1] and a[2] == b[2]
+
+
 def run(build, parent, man, fresh, stock):
     # 1. Layout -------------------------------------------------------------------------------------------------
     img = (build / 'SP404MKII_APP1.bin').read_bytes()
     rt = Runtime(img)
     check(sha(img) == man['sha256'] and sha((parent / 'SP404MKII_APP1.bin').read_bytes()) == man['parent_sha256'],
           'the build and its parent are the manifest\'s')
-    check(all(rt.read(p['address'], p['size']).hex() == p['replacement_hex'] for p in man['patches']),
-          'the three patches are in place', [hex(p['address']) for p in man['patches']])
+    check(len(man['patches']) == 5 and
+          all(rt.read(p['address'], p['size']).hex() == p['replacement_hex'] for p in man['patches']),
+          'the five patches are in place', [hex(p['address']) for p in man['patches']])
     blob = rt.read(man['blob_base'], man['blob_size'])
     check(sha(blob) == man['blob_sha256'] and man['slot'] == [0x83FA1800, 0x83FA2000],
           'the module is at its slot as built', f'{man["blob_size"]} bytes')
@@ -183,6 +242,12 @@ def run(build, parent, man, fresh, stock):
     prt = Runtime((parent / 'SP404MKII_APP1.bin').read_bytes())
     same = all(prt.read(p['address'], p['size']).hex() == p['original_hex'] for p in man['patches'])
     check(same, 'the parent has the original bytes at every patch')
+    gate = man['entries']['sgl_mix_gate'] & ~1
+    shape = listing(rt.read(gate, 14), gate)
+    check(shape[:3] == ['mov r0, r4', 'mov r1, r5', 'mov r2, r6'] and
+          shape[3] == f'bl #{man["entries"]["sgl_mix_finish"] & ~1:#x}' and
+          shape[4] == 'pop.w {r4, r5, r6, r7, r8, pc}',
+          'the render exit\'s new target has kit_mix_gate\'s shape (three movs, bl, the stub\'s pop)', shape)
 
     # 2. LEVEL --------------------------------------------------------------------------------------------------
     m, s = fresh(), stock()
@@ -244,10 +309,10 @@ def run(build, parent, man, fresh, stock):
                 x.setparam(LEVEL, level)
             m.on(ch, 64, vel)
             s.on(ch, 64, want(vel, level))
-            if m.raw() != s.raw() or m.render(6) != s.render(6):
+            if not same_sound(m, s, 6):
                 bad.append((ch, level, vel))
     check(not bad, 'a MIDI note at velocity v and LEVEL l: the parent\'s note at the scaled velocity, voices and '
-          'audio sample for sample (6 blocks)', bad or '10 cases')
+          'the SG\'s mix sample for sample (6 blocks)', bad or '10 cases')
     m, s = fresh(), stock()
     seq = [('on', 60, 127), ('on', 64, 100), ('on', 67, 90), ('on', 71, 80), ('on', 74, 70), ('off', 64, 0),
            ('on', 76, 60), ('off', 60, 0), ('on', 60, 127), ('off', 74, 0), ('off', 76, 0), ('off', 67, 0)]
@@ -255,9 +320,9 @@ def run(build, parent, man, fresh, stock):
     for kind, note, vel in seq:
         for x in (m, s):
             (x.on(16, note, vel) if kind == 'on' else x.off(16, note))
-        diffs += m.raw() != s.raw()
-        diffs += m.render(2) != s.render(2)
-    check(diffs == 0, 'LEVEL 127: a chord, steals and note-offs exactly as the parent (voices and audio)', len(seq))
+        diffs += not same_sound(m, s, 2)
+    check(diffs == 0, 'LEVEL 127: a chord, steals and note-offs exactly as the parent (voices and the SG\'s mix)',
+          len(seq))
 
     # 4. ARP on ---------------------------------------------------------------------------------------------------
     m = fresh()
@@ -298,10 +363,9 @@ def run(build, parent, man, fresh, stock):
         x.on(16, 60, 110)
         x.on(16, 63, 90)
         x.on(16, 67, 70)
-    m_audio, s_audio = m.render(400), s.render(400)
-    check(m.raw() == s.raw() and m_audio == s_audio and m.sym('arp_steps', '<I') == s.sym('arp_steps', '<I') >= 4,
-          'LEVEL 127, ARP on: the arp\'s steps exactly as the parent\'s (400 blocks)',
-          (m.raw() == s.raw(), m_audio == s_audio, m.sym('arp_steps', '<I')))
+    ok = same_sound(m, s, 400)
+    check(ok and m.sym('arp_steps', '<I') == s.sym('arp_steps', '<I') >= 4,
+          'LEVEL 127, ARP on: the arp\'s steps exactly as the parent\'s (400 blocks)', m.sym('arp_steps', '<I'))
     m, s = fresh(), stock()
     for x in (m, s):
         x.setsym('arp_mode', 1, '<i')
@@ -309,8 +373,7 @@ def run(build, parent, man, fresh, stock):
     s.setparam(LEVEL, 64)
     m.on(16, 60, 127)
     s.on(16, 60, 64)
-    check(m.render(120) == s.render(120) and m.raw() == s.raw(),
-          'ARP on, LEVEL 64: a key at 127 steps exactly as the parent\'s key at 64 (120 blocks)')
+    check(same_sound(m, s, 120), 'ARP on, LEVEL 64: a key at 127 steps exactly as the parent\'s key at 64 (120 blocks)')
 
     # 5. Drum mode, pads ------------------------------------------------------------------------------------------
     bad = []
@@ -321,9 +384,9 @@ def run(build, parent, man, fresh, stock):
             x.setparam(LEVEL, level)
             x.on(16, 36, 100)
             x.on(16, 40, 60)
-        if m.raw() != s.raw() or m.render(8) != s.render(8):
+        if not same_sound(m, s, 8):
             bad.append(level)
-    check(not bad, 'drum mode: MIDI hits as the parent\'s at LEVEL 127, 40 and 0 (voices and audio)', bad or 3)
+    check(not bad, 'drum mode: MIDI hits as the parent\'s at LEVEL 127, 40 and 0 (voices and the SG\'s mix)', bad or 3)
     bad = []
     for level in (127, 40):
         m, s = fresh(), stock()
@@ -331,7 +394,7 @@ def run(build, parent, man, fresh, stock):
             x.setparam(LEVEL, level)
             x.call(NOTE_ENGINE, 0, x.pad_note(2), 100, 0, stack0=2)
             x.call(NOTE_ENGINE, 0, x.pad_note(7), 45, 0, stack0=7)
-        if m.raw() != s.raw() or m.render(6) != s.render(6):
+        if not same_sound(m, s, 6):
             bad.append(level)
     check(not bad, 'pads: as the parent\'s at LEVEL 127 and 40 (their own velocity)', bad or 2)
     m = fresh()
@@ -362,6 +425,102 @@ def run(build, parent, man, fresh, stock):
     m.on(1, 60, 127)
     check(lv == 64 and [v['to'] for v in m.live()] == [6400], 'CC 72 on M.CH sets LEVEL (after the screen update) and '
           'MIDI follows it', (lv, m.live()))
+
+    # 7. The output stage -----------------------------------------------------------------------------------------
+    def stage_ok(machine, gain, blocks, bus=None):
+        out, mix, base = machine.mixed(blocks, bus)
+        model = [b + master(x, gain) for x, b in zip(mix, base)]
+        return out == model and len(mix) == blocks * FRAMES * CHANNELS, out, mix
+
+    def peak(x):
+        return max(abs(v) for v in x)
+
+    bad, rows = [], []
+    for type_value in (0, 4, 8, 12, 15, 20, 24, 29):
+        for notes in ([60], [60, 64, 67, 71], [48, 55, 60, 64]):
+            pair = []
+            for x, gain in ((fresh(), GAINS['live'][0]), (stock(), GAINS['parent'][0])):
+                x.setparam(TYPE, type_value)
+                x.setparam(ENV, 0)
+                for n in notes:
+                    x.send(0x9F, n, 127)
+                x.mixed(4)
+                ok, out, mix = stage_ok(x, gain, 40)
+                pair.append((ok, peak(out), peak(mix)))
+            if not (pair[0][0] and pair[1][0] and pair[0][2] == pair[1][2]):
+                bad.append((type_value, notes, pair))
+            rows.append((type_value, len(notes), pair[0][1], pair[1][1]))
+    check(not bad, 'melodic: every bus sample is the bus before plus the stage of the SG\'s part at x0.5 (the '
+          'parent: x2), the knee as the kit stage\'s, the SG\'s part itself the parent\'s (8 TYPEs, one note and two '
+          'chords, ENV OFF, 40 blocks each)', bad[:2] or f'{len(rows)} cases')
+    one = [r[2] for r in rows if r[1] == 1]
+    four = [r[2] for r in rows if r[1] == 4]
+    check(max(one) == 8192 and peak([r[3] for r in rows if r[1] == 1]) == 28470 and max(four) <= 32000,
+          'one note at LEVEL 127 peaks at 8192 (-12 dBFS; the parent: 28470 in the knee), four notes stay under '
+          '32000', dict(one=one, four=four))
+    m = fresh()
+    m.setparam(ENV, 0)
+    m.send(0x9F, 60, 127)
+    m.mixed(40)
+    check(m.sym('kit_master_limited', '<I') == 0, 'one note never reaches the knee')
+    m, s = fresh(), stock()
+    sample = [((i * 7919) % 4001 - 2000) * 9 for i in range(FRAMES * CHANNELS)]   # other audio already in the bus
+    for x in (m, s):
+        x.setparam(ENV, 0)
+        for n in (60, 64, 67):
+            x.send(0x9F, n, 127)
+    okm, outm, _ = stage_ok(m, GAINS['live'][0], 12, sample)
+    oks, outs, _ = stage_ok(s, GAINS['parent'][0], 12, sample)
+    check(okm and oks, 'other audio in the bus passes the stage untouched (the bus before plus the stage of the '
+          'SG\'s part)')
+    bad, peaks, knee = [], [], 0
+    for kit in (1, 3, 10):
+        for pad in range(16):
+            pair = []
+            for x, gain in ((fresh(), GAINS['live'][1]), (stock(), GAINS['parent'][1])):
+                x.setsym('kit_mode', kit)
+                x.call(NOTE_ENGINE, 0, x.pad_note(pad), 127, 0, stack0=pad)
+                ok, out, mix = stage_ok(x, gain, 48)
+                pair.append((ok, peak(out), mix, x.sym('kit_master_limited', '<I')))
+            if not (pair[0][0] and pair[1][0] and pair[0][2] == pair[1][2]):
+                bad.append((kit, pad + 1))
+            peaks.append(pair[0][1])
+            knee += pair[0][3]
+    check(not bad, 'drum mode: every bus sample is the bus before plus the stage of the SG\'s part at x1 (the parent: '
+          'x2), the hits themselves the parent\'s (every pad of kits 1, 3 and 10, 48 blocks)', bad[:3] or 48)
+    check(knee == 0 and max(peaks) <= 16384, 'a kit pad alone never reaches the knee (peaks at most 16384)',
+          dict(max=max(peaks), knee=knee))
+    m = fresh()
+    m.setsym('kit_mode', 3)
+    for pad in range(4):
+        m.call(NOTE_ENGINE, 0, m.pad_note(pad), 127, 0, stack0=pad)
+    ok, out, mix = stage_ok(m, GAINS['live'][1], 48)
+    check(ok and peak(out) <= 32000, 'four kit pads at once: the stage as modelled, under 32000 (the knee holds their '
+          'joint onset)', dict(raw=peak(mix), out=peak(out)))
+
+    # The REC mix: v9.5's export mix answers each value; sgl_export_mix (here) and kit_export_mix (the parent).
+    values = [0, 1, -1, 5000, -5000, 8192, 12288, -12288, 16383, -16384, 24576, 30000, -32768, 32767]
+    for kit_mode in (0, 1):
+        got_new, got_old = [], []
+        for x, fn, out in ((fresh(), man['entries']['sgl_export_mix'], got_new),
+                           (stock(), KIT['kit_export_mix'], got_old)):
+            x.setsym('kit_mode', kit_mode)
+            answer = [0]
+
+            def hook(uc, a, size, _):
+                uc.reg_write(ar.UC_ARM_REG_R0, answer[0] & 0xFFFFFFFF)
+                uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+            x.uc.hook_add(UC_HOOK_CODE, hook, begin=V95_EXPORT_MIX, end=V95_EXPORT_MIX)
+            for v in values:
+                answer[0] = v
+                r = x.call(fn, 10, 100, 99)
+                out.append(struct.unpack('<i', struct.pack('<I', r))[0])
+        gain = GAINS['export'][kit_mode]
+        check(got_new == [master(v, gain) for v in values] and
+              got_old == [master(v, GAINS['parent'][kit_mode]) for v in values] and
+              (got_new == got_old) == bool(kit_mode),
+              f'the REC mix, {"drum" if kit_mode else "melodic"} mode: x{gain} with the knee '
+              f'({"the parent\'s exactly" if kit_mode else "the parent: x2"})', got_new[:8])
 
 
 if __name__ == '__main__':

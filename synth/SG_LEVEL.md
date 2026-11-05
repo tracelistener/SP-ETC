@@ -1,9 +1,12 @@
-# LEVEL for MIDI notes on the Sound Generator (sg-level-test1)
+# The Sound Generator's level: LEVEL for MIDI notes (sg-level-test1), the output level (sg-level-test2)
 
 A fork user's MIDI keyboard has no velocity: every note arrives at 127, and the Sound Generator plays it at full
 volume with no way to turn it down. They asked for "a setting in tone generator to set a fixed velocity (or more like a
-volume setting)". This step makes LEVEL (CTRL 3) that volume for MIDI notes. It goes on top of the finished combined
-APP1 (combined-test17 = v9.52, after the fast boot and the kit footer), as `combined-test18`.
+volume setting)". Test 1 makes LEVEL (CTRL 3) that volume for MIDI notes (sections 1-6, `combined-test18`). Test 2
+(section 7, `combined-test19`) turns the Sound Generator and the kits down to about a sample's loudness. The user's
+words: "at 127, sound generator is way too loud especially with 4 notes at a time. it should be similar to loudness
+of a sample. same with kits". Both go on top of the finished combined APP1 (combined-test17 = v9.52, after the fast
+boot and the kit footer), as one module.
 
 ## 1. What stock does (5.52, as v9.52 has it)
 
@@ -133,3 +136,73 @@ of each note, read 0.35 s in for 0.5 s.
   boot on the real firmware.
 
 **Not checked:** the unit.
+
+## 7. The output level (sg-level-test2, combined-test19)
+
+### Measured (combined-test18)
+
+The scale is the bus's signed 16-bit scale. A sample reaches the bus at that scale: on DM-404, a sine fed into the
+input at -6 dBFS, sampled to a pad and played at full press, comes back at -6 dBFS. So a normalized sample at full press
+peaks at 0 dBFS there. The main outputs keep 24 dB above that: the bus words go into the 20-bit DAC slots unsaturated
+(`0x1c840`). The 16-bit ceiling is the sampling path's (RESAMPLE, skip-back, the SG's REC) and the kit stage's knee.
+
+Emulator, at LEVEL 127, velocity 127, ENV OFF:
+- **Raw:** one voice peaks at 16384 (-6 dBFS) for the full-scale TYPEs. Four voices reach up to 65532 (+6 dBFS).
+- **The kit stage's master (since v9.39):** x2, then a knee from 24576 to 32000. One note comes out at -1.2 dBFS,
+  squashed by the knee, with a sine's RMS at -3.6 dBFS: as loud as a normalized sine sample. Four notes come out at
+  -0.3 dBFS, RMS -2.5 dBFS, held by the knee.
+- **Kits:** raw hits peak at -6.3 dBFS at most (medians -7 to -12). After x2 they sit in the knee at -1.3 dBFS (8 to 16
+  pads per kit). Four pads at once reach +4 dBFS raw.
+
+DM-404 gives the same Sound Generator numbers through the real firmware: one note -1.2 dBFS peak, RMS -3.6 dBFS; four
+notes -0.3 dBFS, RMS -2.5 dBFS.
+
+### What this build does
+
+The same stage runs on the kit stage's own capture of the bus, with another gain:
+
+| | Live | REC / BOUNC | Was |
+| --- | --- | --- | --- |
+| Melodic | x0.5 | x1 | x2 |
+| Drum mode | x1 | x2 (unchanged) | x2 |
+
+- **The REC gain is twice the live gain**, because v9.5's export mix halves each voice. So a REC'd or bounced pad
+  plays back at the level you heard. BOUNC writes exactly what it wrote before.
+- **The knee is unchanged.** The gains are powers of two and the knee is the kit stage's own expression
+  (`-ffp-contract=off`), so for the same input the results equal the kit stage's.
+- **Melodic x0.5:** one voice at full level is -12 dBFS (RMS -15 dBFS for a sine), about as loud as typical normalized
+  sample material (RMS -12 to -18 dBFS). Four voices can reach 0 dBFS only when in phase, so they never clip; the knee
+  touches only those peaks.
+- **Drum x1:** the kit engine's own level. Hits peak at -6.3 dBFS at most and never reach the knee alone.
+- **Not one gain for both, and not per-voice headroom:** one gain for both would make either the kits too quiet or
+  four SG notes clip. A gain that follows the number of sounding voices would pump as notes start and stop.
+
+| Patch | Bytes | Was | Now |
+| --- | --- | --- | --- |
+| `0x0001FDD4` | 8 | the SG render stub's exit: movw/movt to `kit_mix_gate` | `sgl_mix_gate`: the same three movs, bl and pop, with `sgl_mix_finish` |
+| `0x8353BA06` | 8 | the REC exporter bridge: movw/movt to `kit_export_mix` | `sgl_export_mix` |
+
+- **New guards:** the render stub, the export bridge, v9.5's `export_mix`, and `kit_mix_gate`, `kit_mix_finish` and
+  `kit_export_mix` by their instructions (the capture's state: count and bus at `0x83fc8324`/`0x83fc8328`, the bus
+  before the SG at `0x83fc59e8`). No step guards either site.
+- **The SY builds** (`claude/tune-test`) shape-check the render exit's target; `sgl_mix_gate` has `kit_mix_gate`'s
+  shape. The module (912 bytes) stays in its 2 KB slot at `0x83FA1800`, clear of the SY slots.
+
+### After (combined-test19)
+
+| | combined-test18 | combined-test19 |
+| --- | --- | --- |
+| One note (full-scale TYPEs) | -1.2 dBFS peak (in the knee), RMS -3.6 (sine) | -12.0 dBFS peak, RMS -15.1 (sine), knee never |
+| Four notes (C E G B) | -0.3 dBFS, RMS -2.5, knee on 3,000 to 6,000 samples | -1.2 to -2.0 dBFS, RMS -8.8, knee on in-phase peaks only |
+| Kit pads alone | -1.3 dBFS, 8 to 16 pads per kit in the knee | at most -6.4 dBFS, none in the knee |
+| Four kit pads at once | in the knee | up to +4 dBFS raw, held by the knee under 32000 |
+
+DM-404 on combined-test19:
+- The sample reference is unchanged (-6 dBFS).
+- One note peaks at -12.0 dBFS, RMS -15.1; four notes at -1.3 dBFS, RMS -9.1. These match the emulator.
+- The kit readings there missed the onsets (the measuring window starts after each hit), so the kit figures above
+  are the emulator's.
+
+`test_sg_level.py` (36 of 36) checks the stage sample for sample against a float32 model of the kit stage's knee:
+melodic and drum mode, other audio already in the bus, and the REC mix (melodic x1; drum x2, the parent's exactly).
+The SG's raw mix is the parent's.

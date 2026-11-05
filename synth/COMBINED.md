@@ -476,3 +476,43 @@ combined-test17 got a baseline run there (`dev_combined18/baseline17`).
 - combined-test17: CTRL 3 changes nothing for MIDI.
 
 **Not run:** the unit.
+
+## 20. combined-test19
+
+The user said: "at 127, sound genrator is way too louf esp[ecially with 4 notes at a time. it should be similar to
+loudness of a sample. same with kits". The same step, with the module at `sg-level-test2` (SG_LEVEL.md section 7),
+replaces the kit stage's output stage. That stage (x2 and a knee, since v9.39) applied to melodic notes too.
+
+- **Before (combined-test18):** one note -1.2 dBFS (in the knee), four notes -0.3 dBFS, kit hits -1.3 dBFS.
+- **The reference:** samples reach the bus at their own level (DM-404: a sampled -6 dBFS sine plays back at -6 dBFS).
+- **Now:** the same capture and knee, with x0.5 in melodic mode and x1 in drum mode. REC and BOUNC get twice that
+  (BOUNC unchanged).
+
+```
+python synth/build_sg_level.py release/combined-test17/SP404MKII_APP1.bin OUT_DIR --zig ZIG \
+    --kits release/bounce-3-test7/kits-manifest.json --revision combined-test19
+```
+
+- **APP1:** `95f6ce80...77a3`, 3,158,576 bytes, in `analysis/kit_pr1_audit/release/combined-test19`. It rebuilds byte
+  for byte.
+- **Two more patches** (8 bytes each): the SG render stub's exit `0x1fdd4` goes to `sgl_mix_gate`, which has
+  `kit_mix_gate`'s shape (the SY builders check it); the REC exporter bridge `0x8353ba06` goes to `sgl_export_mix`.
+  No step guards either.
+- **The module** (912 bytes) stays in its slot at `0x83FA1800`.
+
+| | combined-test18 | combined-test19 |
+| --- | --- | --- |
+| one note, LEVEL 127 (full-scale TYPEs) | -1.2 dBFS (knee), RMS -3.6 (sine) | -12.0 dBFS, RMS -15.1, no knee |
+| four notes (C E G B) | -0.3 dBFS, RMS -2.5 | -1.2 to -2.0 dBFS, RMS -8.8; the knee on in-phase peaks only |
+| kit pads alone | -1.3 dBFS (8 to 16 pads per kit in the knee) | at most -6.4 dBFS, none in the knee |
+
+**Checked** (Unicorn, `analysis/kit_pr1_audit/dev_combined19/run_suites.py`, every suite):
+- `test_sg_level.py` passes 36 of 36. It checks the stage sample for sample against a float32 model of the kit stage's
+  knee (melodic, drum mode, other audio in the bus, the REC mix), and that the SG's raw mix is the parent's.
+- Every other suite gives combined-test18's results (the layout checks' changed-byte counts aside).
+- The kit suites (kits, capture, chord, shortcut, midi, restart, hot resample) pass. All 18 kit bounce runs pass:
+  BOUNC goes through the stage at x2, as before.
+- DM-404: one note -12.0 dBFS peak (RMS -15.1) and four notes -1.3 dBFS (RMS -9.1), against -1.2 and -0.3 on
+  combined-test18, with the sampled reference unchanged.
+
+**Not run:** the unit.

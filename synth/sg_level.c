@@ -1,6 +1,7 @@
-/* LEVEL for MIDI notes on the Sound Generator (hardware test build), on v9.52 (combined-test17). SG_LEVEL.md.
+/* The Sound Generator's level (hardware test build), on v9.52 (combined-test17): LEVEL for MIDI notes (test 1) and
+ * the output level of the Sound Generator and the kits (test 2). SG_LEVEL.md.
  *
- * A fork user's keyboard has no velocity: every note arrives at 127 and the Sound Generator plays it at full
+ * 1. LEVEL for MIDI notes. A fork user's keyboard has no velocity: every note arrives at 127 and the Sound Generator plays it at full
  * volume. In stock 5.52 a Sound Generator note's loudness is its velocity alone: the pad and MIDI note-ons set the
  * voice's level to velocity x 100 (+0x74 now, +0x198 the level it moves to, one step a sample; 12700 = unity).
  * LEVEL (CTRL 3, setting 0x7d, also CC 72 on M.CH) is no setting of its own either: the setter writes every voice's
@@ -20,7 +21,21 @@
  *     Drum mode (a kit on) is left alone: its notes are pad strikes with each pad's own Level.
  *   - A LEVEL change also scales again the keys the arp holds from MIDI (from each key's own velocity), so a
  *     latched chord follows the knob; the voices already sounding follow it as before (the setter).
- * At LEVEL 127 MIDI is as before. Pads are as before. The power-on LEVEL is 127 (the stock data's). */
+ * At LEVEL 127 MIDI is as before. Pads are as before. The power-on LEVEL is 127 (the stock data's).
+ *
+ * 2. The output level. A voice at LEVEL 127 and velocity 127 peaks at 16384 on the bus's signed 16-bit scale (-6 dBFS),
+ * the scale a sample reaches the bus at from a full press (DM-404: a recorded sample plays at its PCM level). The kit
+ * stage (v9.39 on) ends the mix with x2 (+6 dB) and a knee from 24576 to 32000 (kit_master_sample, in kit_mix_finish
+ * for what is heard and kit_export_mix for REC and BOUNC): one sine note came out at -1.2 dBFS (in the knee, RMS
+ * -3.6 dBFS, as loud as a normalized sine sample), four at -0.3 dBFS held by the knee, and kit hits at -1.3 dBFS.
+ *   - sgl_mix_gate (the SG render's exit, 0x1fdd4, in place of kit_mix_gate) and sgl_mix_finish: the same stage on the
+ *     kit stage's own capture of the bus, with x0.5 in melodic mode (one note -12 dBFS, sine RMS -15 dBFS; four
+ *     notes can reach 0 dBFS only in phase) and x1 in drum mode (the kit engine's own level: hits at most -6.3 dBFS);
+ *     the knee as it was.
+ *   - sgl_export_mix (the REC exporter's bridge, 0x8353ba06, in place of kit_export_mix): v9.5's export mix halves
+ *     each voice, so x1 melodic and x2 drum mode (kit_export_mix's) make a REC or BOUNC sound as it is heard.
+ * The gains are powers of two and the knee is the kit stage's expression, so its results are the kit stage's exactly
+ * for the same input (BOUNC writes what it wrote). */
 #include "sgl_links.h"       /* the kit stage's addresses in v9.46 (written and checked by build_sg_level.py) */
 
 typedef unsigned int u32;
@@ -98,6 +113,52 @@ EXPORT void sgl_param(u32 r0, int id, int value, int flags) {
 /* The LEVEL getter (0x80020480, the singleton's setting 0x7d). */
 EXPORT int sgl_level_get(void) {
     return sgl_level;
+}
+
+/* ---- 2. The output level ---- */
+#define GAIN_MELODIC 0.5f
+#define GAIN_KIT 1.0f
+#define MIX_COUNT (*(volatile int *)(KIT_MIX_STATE_ADDR + 0x14))   /* kit_mix_capture's frames x channels */
+#define MIX_BUS (*(int *volatile *)(KIT_MIX_STATE_ADDR + 0x18))    /* and its bus */
+#define MIX_BASE ((const volatile int *)KIT_MIX_BASELINE_ADDR)     /* the bus before the SG's voices */
+#define KNEE_COUNT (*(volatile u32 *)KIT_MASTER_LIMITED_ADDR)       /* kit_master_limited: samples the knee took */
+typedef int (*export_fn)(int pos, int fp, int limit);
+#define V95_EXPORT_MIX ((export_fn)(V95_EXPORT_MIX_ADDR | 1u))     /* v9.5's REC mix: each voice halved, summed */
+
+EXPORT volatile u32 sgl_blocks;                   /* render blocks the stage took (the tests read these) */
+EXPORT volatile u32 sgl_exports;                  /* REC frames */
+
+/* The kit stage's master with another gain: kit_master_sample's knee, in its order (-ffp-contract=off). */
+static int sgl_master(int input, float gain) {
+    float y = (float)input * gain, a = y < 0 ? -y : y;
+    if (a > 24576) {
+        a = 24576 + 7424 * (a - 24576) / (7424 + a - 24576);
+        y = y < 0 ? -a : a;
+        KNEE_COUNT = KNEE_COUNT + 1;
+    }
+    return (int)y;
+}
+
+/* The SG render's end (from sgl_mix_gate): the SG's part of the bus through the stage, as kit_mix_finish. */
+EXPORT void sgl_mix_finish(int *bus, int frames, int channels) {
+    if (bus != MIX_BUS || frames * channels != MIX_COUNT) return;
+    float gain = KIT_MODE ? GAIN_KIT : GAIN_MELODIC;
+    int n = MIX_COUNT;
+    for (int i = 0; i < n; ++i) bus[i] = MIX_BASE[i] + sgl_master(bus[i] - MIX_BASE[i], gain);
+    MIX_COUNT = 0;
+    sgl_blocks = sgl_blocks + 1;
+}
+
+/* r4 bus, r5 frames, r6 channels (the SG render stub's frame); its pop returns from the stub, as kit_mix_gate's. */
+__attribute__((naked, used)) EXPORT void sgl_mix_gate(void) {
+    __asm__ volatile("mov r0, r4\n\tmov r1, r5\n\tmov r2, r6\n\tbl sgl_mix_finish\n\tpop.w {r4, r5, r6, r7, r8, pc}\n");
+}
+
+/* The REC exporter's frame (pos, frames, limit), from its bridge: v9.5's mix, then the stage at twice the gain. */
+EXPORT int sgl_export_mix(int pos, int fp, int limit) {
+    int y = V95_EXPORT_MIX(pos, fp, limit);
+    sgl_exports = sgl_exports + 1;
+    return sgl_master(y, KIT_MODE ? 2 * GAIN_KIT : 2 * GAIN_MELODIC);
 }
 
 /* arp_midi_event's entry (self, note, velocity, r3): the velocity scaled, then arp_midi_event's first three

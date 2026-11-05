@@ -1,24 +1,33 @@
-"""LEVEL for MIDI notes on the Sound Generator (hardware test build): a step on the finished combined APP1.
+"""The Sound Generator's level (hardware test build): a step on the finished combined APP1.
 
-A step on combined-test17 (v9.52; SG_LEVEL.md), after the fast boot and the kit footer, as those two are. A fork
-user's MIDI keyboard has no velocity: every note comes at 127 and the Sound Generator plays it at full volume. In
-stock 5.52 a note's level is its velocity x 100 (pads and MIDI alike), LEVEL (CTRL 3, setting 0x7d) sets the
-sounding voices' level and then shows the last note's velocity, and only the page's pads use it (as their velocity
-with FIXED VELOCITY on). Here LEVEL is a value of its own and the Sound Generator's MIDI note-ons, melodic mode, ARP
-on or off, play at velocity x LEVEL / 127 (at least 1). Drum mode and the pads are as before.
+A step on combined-test17 (v9.52; SG_LEVEL.md), after the fast boot and the kit footer, as those two are.
+- Test 1, LEVEL for MIDI notes: a fork user's MIDI keyboard has no velocity: every note comes at 127 and the Sound
+  Generator plays it at full volume. In stock 5.52 a note's level is its velocity x 100 (pads and MIDI alike), LEVEL
+  (CTRL 3, setting 0x7d) sets the sounding voices' level and then shows the last note's velocity, and only the page's
+  pads use it (as their velocity with FIXED VELOCITY on). Here LEVEL is a value of its own and the Sound Generator's
+  MIDI note-ons, melodic mode, ARP on or off, play at velocity x LEVEL / 127 (at least 1). Drum mode and the pads are
+  as before.
+- Test 2, the output level: the kit stage's master (x2 and a knee, since v9.39) put one note at -1.2 dBFS, four into
+  the knee at -0.3 dBFS and kit hits at -1.3 dBFS, against samples, which reach the bus at their own level. Here the
+  same stage runs with x0.5 in melodic mode and x1 in drum mode (REC and BOUNC at twice that: v9.5's export mix
+  halves each voice), the knee as it was.
 
-Three patches, each over whole instructions checked against the parent (the module, sg_level.c, goes on from there):
+Five patches, each over whole instructions checked against the parent (the module, sg_level.c, goes on from there):
 - 0x0001FF20 (10 bytes) SetParam's Sound Generator call, a jump to v9.5's parameter engine -> sgl_param, which
   keeps LEVEL's value and goes on to the engine;
 - 0x80020480 (12 bytes) the getter's LEVEL case (+0x198 / 100) -> sgl_level_get;
 - 0x83FA3448 (10 bytes) arp_midi_event's first three instructions -> sgl_midi_gate (the velocity scaled, then
   those instructions, and on at 0x83fa3452). This is inside the kit stage, which kits save guards whole (as booted,
-  for its addresses): kits save never calls arp_midi_event, and nothing in the kit stage moves.
+  for its addresses): kits save never calls arp_midi_event, and nothing in the kit stage moves;
+- 0x0001FDD4 (8 bytes) the SG render stub's exit jump to kit_mix_gate, its movw/movt -> sgl_mix_gate (the same
+  three movs, bl and pop, with sgl_mix_finish), so its bx ip and the stub's frame stay;
+- 0x8353BA06 (8 bytes) the REC exporter bridge's jump to kit_export_mix, its movw/movt -> sgl_export_mix.
 Stock and fork code the module relies on is checked byte for byte (GUARDS), the kit stage as v9.46's module with
-the kit footer's one byte. No direct branch in the image's copy rows goes into a patched span. The module (Zig
-0.13.0, -Os) goes in a new boot copy row in a 2 KB slot at 0x83FA1800: past v9.6's scale module (to 0x83fa17ec),
-below the kit stage (0x83fa2000), RAM no fork branch uses; the builder checks that no row overlaps it and that
-nothing in the input refers to it.
+the kit footer's one byte, and the kit stage functions it stands in for by their instructions (KIT_LISTINGS). No
+direct branch in the image's copy rows goes into a patched span. The module (Zig 0.13.0, -Os, -ffp-contract=off) goes
+in a new boot copy row in a 2 KB slot at 0x83FA1800: past v9.6's scale module (to 0x83fa17ec), below the kit stage
+(0x83fa2000), RAM no fork branch uses; the builder checks that no row overlaps it and that nothing in the input
+refers to it.
 
 usage: python synth/build_sg_level.py IN_APP1 OUT_DIR --zig ZIG [--kits KITS_MANIFEST] [--revision NAME]
 """
@@ -40,7 +49,7 @@ from build_start_fix import refs_into
 HERE = Path(__file__).resolve().parent
 FLASH, COPY = 0x60080000, 0x600800E4
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sg-level-test1'
+REVISION = 'sg-level-test2'
 BASE, SLOT = 0x83FA1800, 0x800
 SCALES_ROW, KIT_BASE, KIT_END = 0x83FA1000, 0x83FA2000, 0x83FC8450
 # The kit stage (kits/build_arp_kit.py, v9.46-test3): its module as it boots (arp_module_sha256, kits save's guard),
@@ -48,9 +57,36 @@ SCALES_ROW, KIT_BASE, KIT_END = 0x83FA1000, 0x83FA2000, 0x83FC8450
 KIT_MODULE_SHA = '666e86b2e139224bb9dfc3f8f343088ccc059a8c2b5a6d3588fb38430ef5b16a'
 KIT_FOOTER = (0x83FBAF36, 0x53, 0x00)
 KIT = dict(arp_midi_event=0x83FA3449, kit_mode=0x83FC58E0, held_count=0x83FC7B84, held_note=0x83FC7B9C,
-           held_vel=0x83FC7BAC, held_src=0x83FC7BBC)
-ENTRIES = ('sgl_param', 'sgl_level_get', 'sgl_midi_gate', 'sgl_midi_velocity')
-EXPORTS = ENTRIES + ('sgl_level', 'sgl_vel', 'sgl_notes', 'sgl_sets')
+           held_vel=0x83FC7BAC, held_src=0x83FC7BBC, kit_mix_gate=0x83FA560F, kit_mix_finish=0x83FA561D,
+           kit_export_mix=0x83FA5A4D, kit_master_limited=0x83FC7E34)
+# kit_mix_capture/kit_mix_finish's static state (not symbols; their instructions name them, KIT_LISTINGS): the count
+# at +0x14 and the bus at +0x18 of 0x83fc8310, the bus before the SG's voices at 0x83fc59e8 (2048 words); and v9.5's
+# REC mix, which kit_export_mix calls (the kits manifest's parent symbol export_mix).
+KIT_MIX_STATE, KIT_MIX_BASELINE, V95_EXPORT_MIX = 0x83FC8310, 0x83FC59E8, 0x83F80FEE
+KIT_LISTINGS = [
+    (0x83FA560E, ['mov r0, r4', 'mov r1, r5', 'mov r2, r6', 'bl #0x83fa561c', 'pop.w {r4, r5, r6, r7, r8, pc}'],
+     'kit_mix_gate: kit_mix_finish (bus, frames, channels) from the stub\'s r4-r6, then the stub\'s own pop'),
+    (0x83FA561C, ['push.w {r4, r5, r6, r7, r8, sb, sl, lr}', 'movw lr, #0x8310', 'movt lr, #0x83fc',
+                  'ldr.w r3, [lr, #0x18]', 'cmp r3, r0', 'beq #0x83fa5634', 'pop.w {r4, r5, r6, r7, r8, sb, sl, pc}',
+                  'muls r1, r2, r1', 'ldr.w r2, [lr, #0x14]', 'cmp r1, r2'],
+     'kit_mix_finish: bus == [0x83fc8328] and frames x channels == [0x83fc8324], else nothing'),
+    (0x83FA5648, ['movw r8, #0x59e8', 'cmp r1, #4', 'and ip, r1, #3', 'movt r8, #0x83fc'],
+     'kit_mix_finish: the bus before the SG\'s voices at 0x83fc59e8'),
+    (0x83FA5A4C, ['push {r7, lr}', 'movw r3, #0xfef', 'movt r3, #0x83f8', 'blx r3'],
+     'kit_export_mix: v9.5\'s export_mix (0x83f80fef), then the master'),
+]
+ENTRIES = ('sgl_param', 'sgl_level_get', 'sgl_midi_gate', 'sgl_midi_velocity', 'sgl_mix_gate', 'sgl_mix_finish',
+           'sgl_export_mix')
+EXPORTS = ENTRIES + ('sgl_level', 'sgl_vel', 'sgl_notes', 'sgl_sets', 'sgl_blocks', 'sgl_exports')
+# Jumps whose movw/movt only change (the bx after them stays): (address, the parent's instructions, entry, what)
+RETARGETS = [
+    (0x0001FDD4, ['movw ip, #0x560f', 'movt ip, #0x83fa', 'bx ip'], 'sgl_mix_gate',
+     'the SG render stub\'s exit (after the singleton and the three clones), a jump to kit_mix_gate -> sgl_mix_gate: '
+     'the SG\'s part of the bus through the master at the mode\'s gain'),
+    (0x8353BA06, ['movw ip, #0x5a4d', 'movt ip, #0x83fa', 'bx ip'], 'sgl_export_mix',
+     'the REC exporter\'s bridge (r0 = sl, r1 = fp, r2 = [sp, #4] set just before), a jump to kit_export_mix -> '
+     'sgl_export_mix: v9.5\'s export mix through the master at twice the mode\'s gain'),
+]
 # (address, the parent's instructions, the entry that replaces them, what)
 PATCHES = [
     (0x0001FF20, ['movw ip, #0xb181', 'movt ip, #0x8353', 'bx ip'], 'sgl_param',
@@ -89,6 +125,13 @@ GUARDS = [
      'the render loop: a voice\'s level (+0x74) moves to +0x198 one step a sample'),
     (0x8015C0C8, 0x8015C134, '9f35ff8e3e202fdd6640a9dcbb103734df80416158508040dac239fde227707d',
      'the SG page\'s pad: with FIXED VELOCITY (project setting 0xdb) on, its velocity is GetParam(0x7d), LEVEL'),
+    (0x0001FD80, 0x0001FDDE, '04de41c6c123e1e42151ee0fded78ff9077811beddce043e3bd10a6d7bd9a3d7',
+     'the SG render stub (from the mixer 0x1c766, r4-r6 bus, frames, channels): the arp tick and the kits\' capture, '
+     'the singleton and the three clones into the bus, then the exit jump (patched)'),
+    (0x8353BA00, 0x8353BA10, '704a594d90c18775dabc830e5c64286132b0e8449dcc2a32603b1c5360260508',
+     'the REC exporter\'s bridge: its frame\'s position, count and limit to r0-r2, then the jump (patched)'),
+    (0x83F80FEE, 0x83F810A2, '84be83a3cb1a7eb01697825aac70e224b1d5d93149b350d11af8421c3e3e5f45',
+     'v9.5\'s export_mix: the export voices, each halved, summed, saturated once; the end fade'),
 ]
 
 
@@ -133,7 +176,10 @@ def compile_module(folder: Path, zig: Path, base: int):
     links = (f'#define KIT_MODE_ADDR {KIT["kit_mode"]:#x}u\n#define HELD_COUNT_ADDR {KIT["held_count"]:#x}u\n'
              f'#define HELD_NOTE_ADDR {KIT["held_note"]:#x}u\n#define HELD_VEL_ADDR {KIT["held_vel"]:#x}u\n'
              f'#define HELD_SRC_ADDR {KIT["held_src"]:#x}u\n#define KIT_MODE_LO {KIT["kit_mode"] & 0xFFFF:#x}\n'
-             f'#define MIDI_RESUME_LO {resume & 0xFFFF:#x}\n#define MIDI_RESUME_HI {resume >> 16:#x}\n')
+             f'#define MIDI_RESUME_LO {resume & 0xFFFF:#x}\n#define MIDI_RESUME_HI {resume >> 16:#x}\n'
+             f'#define KIT_MIX_STATE_ADDR {KIT_MIX_STATE:#x}u\n#define KIT_MIX_BASELINE_ADDR {KIT_MIX_BASELINE:#x}u\n'
+             f'#define KIT_MASTER_LIMITED_ADDR {KIT["kit_master_limited"]:#x}u\n'
+             f'#define V95_EXPORT_MIX_ADDR {V95_EXPORT_MIX:#x}u\n')
     (folder / 'sgl_links.h').write_text(links, encoding='ascii', newline='\n')
     keep = ' '.join(f'KEEP(*(.text.{n}))' for n in ENTRIES)
     (folder / 'sg_level.ld').write_text(f'''ENTRY(sgl_param)
@@ -152,7 +198,8 @@ SECTIONS {{
     env = dict(os.environ, ZIG_GLOBAL_CACHE_DIR=str(cache), ZIG_LOCAL_CACHE_DIR=str(cache))
     # -g only keeps the symbol table (Zig's -Os strips it otherwise); --no-gc-sections keeps every export.
     subprocess.run([str(zig), 'cc', '-target', 'thumb-freestanding-eabihf', '-mcpu=cortex_m7+vfp4d16',
-                    '-mfloat-abi=hard', '-Os', '-g', '-ffunction-sections', '-fdata-sections', '-nostdlib',
+                    '-mfloat-abi=hard', '-Os', '-g', '-ffp-contract=off', '-ffunction-sections', '-fdata-sections',
+                    '-nostdlib',
                     '-fno-builtin', '-Wall', '-Werror', '-I', str(folder), '-Wl,--no-undefined', '-Wl,--build-id=none',
                     '-Wl,--no-gc-sections', '-Wl,-e,sgl_param', '-Wl,-T,' + str(folder / 'sg_level.ld'),
                     str(source), '-o', str(folder / 'sg_level.elf')], check=True, env=env)
@@ -196,6 +243,15 @@ def build(inp: Path, out: Path, zig: Path, revision: str, kits: Path = None, bui
         sites.append((addr, n))
     if listing(rt.read(RESUME[0], 6), RESUME[0]) != RESUME[1]:
         raise ValueError(f'{RESUME[0]:#x}: expected {RESUME[1]} (arp_midi_event after its first three instructions)')
+    for addr, old, what in KIT_LISTINGS:
+        n = sum(len(i.bytes) for i in capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
+                .disasm(rt.read(addr, 4 * len(old)), addr, len(old)))
+        if listing(rt.read(addr, n), addr) != old:
+            raise ValueError(f'{addr:#x}: expected {old} ({what})')
+    for addr, old, entry, what in RETARGETS:
+        if listing(rt.read(addr, 10), addr) != old:
+            raise ValueError(f'{addr:#x}: expected {old} ({what})')
+        sites.append((addr, 8))
     hits = branches_into(bytes(img), [(a, a + n) for a, n in sites])
     if hits:
         raise ValueError(f'branches into a patched span: {[(hex(a), m, hex(t)) for a, m, t in hits[:6]]}')
@@ -227,6 +283,17 @@ def build(inp: Path, out: Path, zig: Path, revision: str, kits: Path = None, bui
         img[off:off + n] = new
         patches.append(dict(address=addr, size=n, original=old, original_hex=original.hex(),
                             replacement_hex=new.hex(), entry=entry, target=symbols[entry], what=what))
+    for addr, old, entry, what in RETARGETS:
+        target = symbols[entry]
+        new = checked_asm(f'movw ip, #{target & 0xFFFF}\nmovt ip, #{target >> 16}\n', addr)
+        if len(new) != 8 or listing(new + bytes.fromhex('6047'), addr) != [
+                f'movw ip, #{target & 0xFFFF:#x}', f'movt ip, #{target >> 16:#x}', 'bx ip']:
+            raise ValueError(f'{addr:#x}: retarget encoding')
+        off = file_offset(img, addr, 8)
+        original = bytes(img[off:off + 8])
+        img[off:off + 8] = new
+        patches.append(dict(address=addr, size=8, original=old[:2], original_hex=original.hex(),
+                            replacement_hex=new.hex(), entry=entry, target=target, what=what))
     file_at = (len(img) + 15) & ~15
     img += bytes(file_at - len(img)) + module
     table = (len(img) + 15) & ~15
@@ -261,15 +328,23 @@ def build(inp: Path, out: Path, zig: Path, revision: str, kits: Path = None, bui
                     'melodic note-on plays at velocity x LEVEL / 127 (at least 1), ARP on or off, either M.CH route; '
                     'LEVEL 127 is as before. The LEVEL shown and saved is the LEVEL set, not the last note\'s velocity; '
                     'keys the arp holds from MIDI follow a LEVEL change. Drum mode and the pads are as before (pads '
-                    'with FIXED VELOCITY on play at LEVEL, as stock). The rest of the parent as it was',
+                    'with FIXED VELOCITY on play at LEVEL, as stock). Test 2: the output stage at x0.5 in melodic mode '
+                    '(one note -12 dBFS, four notes within full scale) and x1 in drum mode (hits at most -6.3 dBFS), '
+                    'was x2 for both; REC and BOUNC at twice that, as heard; the knee as it was. The rest of the parent '
+                    'as it was',
         module_revision=REVISION,
+        output_stage=dict(live=dict(melodic=0.5, drum=1.0), export=dict(melodic=1.0, drum=2.0), was=2.0,
+                          knee=dict(start_s16=24576, ceiling_s16=32000),
+                          kit_mix_state=KIT_MIX_STATE, kit_mix_baseline=KIT_MIX_BASELINE,
+                          v95_export_mix=V95_EXPORT_MIX, kit_listings=[dict(address=a, listing=l, what=w)
+                                                                       for a, l, w in KIT_LISTINGS]),
         parent_app1=str(inp), parent_sha256=parent_sha,
         parent_revision=json.loads(parent_manifest.read_text(encoding='utf-8')).get('revision')
         if parent_manifest.exists() else None,
         sha256=sha(img), size=len(img), app0_sha256=APP0_SHA,
         slot=[BASE, BASE + SLOT], blob_base=BASE, blob_file_offset=file_at, blob_size=len(module),
         blob_sha256=sha(module), source='synth/sg_level.c', source_sha256=source_sha, links=links,
-        compiler='zig 0.13.0 cc -Os', entries=symbols, kit_stage=dict(symbols=KIT, module_sha256=KIT_MODULE_SHA,
+        compiler='zig 0.13.0 cc -Os -ffp-contract=off', entries=symbols, kit_stage=dict(symbols=KIT, module_sha256=KIT_MODULE_SHA,
                                                                        footer_byte=list(KIT_FOOTER)),
         patches=patches, guards=[dict(start=s, end=e, sha256=d, establishes=w) for s, e, d, w in GUARDS],
         inside_guards=[dict(
