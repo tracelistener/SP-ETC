@@ -1,4 +1,4 @@
-/* SY synth test 7, with guitar synth test 6 (note tracker 3): on v9.52 + LEVEL for MIDI notes (combined-test18; SY
+/* SY synth test 8, with guitar synth test 6 (note tracker 3): on v9.52 + LEVEL for MIDI notes (combined-test18; SY
  * test 6 was on v9.52 (combined-test17) with the CPU meter of IR
  * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
  * BOSS's SY pedals work: 49 semitone bands, each with its own oscillators, from RX pair 0, added to the DRY pair of
@@ -33,6 +33,9 @@
  * BUS 2"), the file keeps it (byte 98). On BUS 1 or BUS 2 the synth plays on that bus's TX stem (words 2/3, 4/5), so
  * the bus's effect (the FX buttons) is on it; BOTH puts half on each. The guitar's own bus stays INPUT BUS (REMAIN +
  * EXT SOURCE), so the two can sit on any buses: the guitar on BUS 1 cut by the Isolator, the synth on BUS 2.
+ * Test 8: the synth plays from the screen on (sy.armed): off at power-on and whenever EXT SOURCE goes on (the guitar
+ * dry, ROUTING as set), on once the guitar synth screen opens, and on after EXIT, on every page but the plain Sound
+ * Generator's, until EXT SOURCE goes off (or SOUND OFF). The ROUTING hold follows it.
  * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
@@ -120,6 +123,7 @@
 #define KEY_DOWN_FN ((void (*)(const s16 *))0x8003ABD1u)         /* the UI dispatcher's key press and release */
 #define KEY_UP_FN ((void (*)(const s16 *))0x8003ADA1u)
 #define SY_BAR_X0 57                                             /* the bar's PRM part (the item box x 73..95) */
+#define SY_GRACE 2u                                              /* SY test 8: steps after a start not held to SLOW */
 #define SY_BAR_X1 127
 #define PADS 16u                   /* key IDs 0..15 are the pads */
 #define KEY_BYTES 11
@@ -211,7 +215,7 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
     OFFSET(sy_block_t, started), OFFSET(sy_block_t, tone), OFFSET(sy_block_t, nper), OFFSET(sy_t, tone_req),
     OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads), OFFSET(sy_t, mode),
     OFFSET(sy_t, rec), OFFSET(sy_t, oct), OFFSET(sy_t, susk), OFFSET(sy_block_t, fund_cut), OFFSET(sy_t, dynk),
-    OFFSET(sy_t, rem_down), OFFSET(sy_block_t, hold), OFFSET(sy_t, out_bus)};
+    OFFSET(sy_t, rem_down), OFFSET(sy_block_t, hold), OFFSET(sy_t, out_bus), OFFSET(sy_t, armed)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
@@ -614,7 +618,9 @@ static u32 sy_account(sy_t *s, u32 dt, u32 budget) {
 
 /* After the tracker (audio task): one SY engine step while the UI wants it, and on through the fade once it stops
  * wanting it (8 blocks). It stops itself (SLOW) when one step takes over a whole block, or the mixer, the tracker and
- * the engine take over 9/10 of one twice in a row. */
+ * the engine take over 9/10 of one twice in a row. SY test 8: not in the first SY_GRACE steps after a start (a cold
+ * first step: DM-404 timed one at 1,232,940 cycles, the emulator translating the code), since a SLOW now holds until
+ * EXT SOURCE goes off. */
 EXPORT void sy_rx(void) {
     sy_t *s = &sy;
     s->rx++;
@@ -631,6 +637,7 @@ EXPORT void sy_rx(void) {
     if (st == SY_OFF) {
         s->state = st = SY_RUN;
         s->stopping = 0;
+        s->run_steps = 0;
     }
     u32 budget = meter.budget ? meter.budget : NOMINAL;
     u32 t0 = DWT_CYCCNT;
@@ -640,7 +647,8 @@ EXPORT void sy_rx(void) {
     s->fresh = 1;
     u32 tot = sy_account(s, dt, budget);
     s->hot = tot > budget / 10u * 9u ? s->hot + 1u : 0u;
-    if (dt > budget || s->hot >= 2u) {
+    if (s->run_steps < 255u) s->run_steps++;
+    if (s->run_steps > SY_GRACE && (dt > budget || s->hot >= 2u)) {
         next = SY_SLOW;
         s->slow_cycles = tot;
         s->fresh = 0;
@@ -1047,7 +1055,8 @@ static inline u32 syn_live(const tt_t *t) { return t->ext && t->hold && DWT_CYCC
  * firmware sends into ExtIn too (the RECORD SETTING and looper screens, its chip resets). The recorder meanwhile gets
  * the mix (pair 1 x 2) on ROUTING Mix, the input and the synth on ExtIn (sy_rec). */
 UI_SMALL static void route_hold(tt_t *t, u32 now) {
-    u32 want = t->ext && ((PAGE == SG_PAGE && !sy.mode) || !sy.muted);   /* test 5: the SG page's own synth */
+    u32 want = t->ext && ((PAGE == SG_PAGE && !sy.mode) || (!sy.muted && sy.armed));   /* test 5: the SG page's own
+                                                                                           synth; SY test 8: armed */
     if (want && !t->hold) {
         t->hold = 1;
         t->hold_at = now;
@@ -1125,7 +1134,7 @@ UI_SMALL static void sy_start(sy_t *s) {
 /* Where the synth can play: every page but the Sound Generator's (guitar synth test 6 plays there; test 5: but the SY
  * screen's), with EXT SOURCE on and the chip held on ExtIn (test 4; on Mix it hands back the mix as heard: the engine
  * would hear its own sound). */
-static inline u32 sy_can_play(void) { return syn_live(&tt) && (PAGE != SG_PAGE || sy.mode); }
+static inline u32 sy_can_play(void) { return syn_live(&tt) && sy.armed && (PAGE != SG_PAGE || sy.mode); }
 
 UI_SMALL SCREEN static void sy_mode_tick(sy_t *s, u32 now);
 
@@ -1137,6 +1146,10 @@ EXPORT UI_SMALL void sy_ui(void) {
     u32 now = DWT_CYCCNT;
     if (PAGE != SG_PAGE) s->sg_page = 0;                /* SY test 6: its object goes with the page */
     sy_mode_tick(s, now);
+    if (s->mode == 1u)                                  /* SY test 8: the screen arms the synth; EXT SOURCE off */
+        s->armed = 1;                                   /* disarms it (not while the chord's release puts it on) */
+    else if (!tt.ext && !s->ext_fix)
+        s->armed = 0;
     if (now - s->tempo_checked >= CHECK_CYCLES) {
         s->tempo_checked = now;
         s32 bank = CUR_BANK;

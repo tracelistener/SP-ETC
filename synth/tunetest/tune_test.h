@@ -197,6 +197,7 @@ typedef struct {
     volatile u32 seq;                       /* odd while pub is written */
     sy_window pub;
     u32 tot_max_ever, over, slow_cycles, hot, reset_ack;
+    u32 run_steps;                          /* SY test 8: steps since this start (the first two not held to the budget) */
     /* test 5: the guitar synth screen (EXT SOURCE + RECORD SETTING: the Sound Generator page in SY mode), UI task */
     u32 mode;                               /* 0 off; 1 the screen is up (the SG page); 2 the page was asked for */
     u32 mode_at;                            /* when it was asked for (cycle count) */
@@ -213,7 +214,8 @@ typedef struct {
        preview bus) */
     u8 rem_down, rem_fx;
     volatile u8 out_bus;                    /* SY test 7: the synth's bus: 0 DRY, 1 BUS 1, 2 BUS 2, 3 both (half each) */
-    u8 pad6;
+    volatile u8 armed;                      /* SY test 8: the synth may play: set while the screen is up, kept after
+                                               EXIT, cleared once EXT SOURCE is off (not while the chord puts it back) */
     u32 rem_taps, rem_holds, fx_passes;     /* REMAIN taps handed on, REMAIN + FX freezes; events an FX screen got */
     u32 sg_page;                            /* the Sound Generator page's object (its views), from its update; 0 off it */
     /* test 4, audio task: the synth's newest block as TX added it, for the recorder on ROUTING ExtIn */

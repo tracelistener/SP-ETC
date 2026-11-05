@@ -1,4 +1,4 @@
-# SY synth tests 1 to 7: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 8: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -577,6 +577,34 @@ so the synth itself was not heard there: the unit's test says whether BUS 2's st
 synth on each bus's words (BUS 1 2/3, BUS 2 4/5, BOTH half on each, DRY again; the other words untouched, clipped to 20
 bits); VALUE's push stepping the bus with its press and release taken; the bar's text for each; the file's byte 98
 written and read back, a bad one read as DRY; the layout's `out_bus`.
+
+## SY synth test 8 (sy-synth-test8): the synth starts from its screen
+
+On the unit, test 7: "without going to guitar synth mode, ext in still has synth sound with guitar in". Since test 1
+the synth played on every page whenever EXT SOURCE was on (unless SOUND was OFF); the screen only edited it. The user
+chose: off at power-on and whenever EXT SOURCE goes on, on once the guitar synth screen opens, and on after EXIT
+(every page but the plain Sound Generator's) until EXT SOURCE goes off.
+
+- `sy.armed` (the byte after `out_bus`): `sy_ui` sets it while the screen is up (mode 1) and clears it when `tt.ext`
+  (EXT SOURCE, read every 0.1 s) is off, but not while the chord's EXT SOURCE release is still to be undone
+  (`ext_fix`, GATE). The BSS zero is off.
+- `sy_can_play` needs it, and so does the ROUTING hold (`route_hold`): with the synth off, ROUTING is the user's own (the
+  plain Sound Generator page's tracker keeps its hold as before). SOUND OFF still turns it off; opening the screen turns
+  a SOUND OFF on again, as in test 5.
+- **A start's first two steps are not held to the budget** (`SY_GRACE`, `sy.run_steps`). DM-404 timed the engine's
+  first step after a start at 1,232,940 cycles (steady steps 50-80k; the emulator translating the code), which set
+  SLOW at once. Tests 6 and 7 restarted it on the next page change, so it never showed; with test 8 it held until
+  EXT SOURCE went off. On the unit a cold first step should stay far under the 800,000-cycle block, but a SLOW there
+  now costs the whole session. A real overload still stops it from the third step.
+- The checks start their machines armed (as if the screen had been opened) unless a check says otherwise; the first
+  engine check sees the arming cleared before the UI has read EXT SOURCE.
+
+**DM-404** (the release's APP1): EXT SOURCE on at the main screen: not armed, no engine; the screen: armed, the engine
+asked for; EXIT: still armed; EXT SOURCE off: disarmed; on again: not armed. The first step after the start read 1,245,660 cycles there, and the engine kept running (1,313 steps by the screen, 2,182 after EXIT, no step after it over 9/10 of a block).
+
+**Emulator checks:** 333 (167 distinct) pass on `release/sy-synth-test8`. Test 8's: EXT SOURCE on with the screen never opened (no
+engine, no hold), the screen (armed, held on ExtIn, the engine on), EXIT (on), EXT SOURCE off (disarmed, the hold let
+go: the user's ROUTING sent back), on again (off until the screen).
 
 ## Still not known
 

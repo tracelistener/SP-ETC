@@ -1043,7 +1043,8 @@ SY_KNOB_AT = 4 * len(SY_HEAD)                  # test 3: s8 knob[15][3], dirty, 
 SY_FILE_AT = SY_KNOB_AT + 96                   # SY test 6: dynk[15] and three pad bytes after susk
 SY_RUN_AT = SY_FILE_AT + 4 * len(SY_FILE)
 SY_OUT_AT = SY_RUN_AT + 4 * len(SY_RUNF)
-SY_TAIL = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack'.split()
+SY_TAIL = ('w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack '
+           'run_steps').split()
 SY_SCREEN = 'mode mode_at rev drawn_rev bar_rev bar_drawn taken_hi pads_taken'.split()   # test 5, then 4 bytes,
 SY_COUNTS = 'enters leaves pads_ate turns vsteps foot foot_vt'.split()   # these; SY test 6: rem_down, rem_fx,
 SY_REM = 'rem_taps rem_holds fx_passes sg_page rec_fresh'.split()          # two pad bytes, these, then rec[64]
@@ -1065,19 +1066,20 @@ DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own 
 class SyLayout:
     """sy_t and sy_block_t offsets, from the module's sy_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<30I', m.bytes(sym['sy_layout'], 120))
+        v = struct.unpack('<31I', m.bytes(sym['sy_layout'], 124))
         (self.sy_bytes, self.state, self.out, self.w_n, self.pub, self.tot_max_ever, self.block_bytes, self.e,
          self.per, self.ph, self.amp, self.owned, self.env, self.started, self.tone, self.nper, self.tone_req,
          self.fe, self.knob, self.dirty, self.loads, self.mode, self.rec, self.oct, self.susk, self.fund_cut,
-         self.dynk, self.rem_down, self.hold, self.out_bus) = v
+         self.dynk, self.rem_down, self.hold, self.out_bus, self.armed) = v
         check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
               self.dirty == SY_KNOB_AT + 45 and self.oct == SY_KNOB_AT + 48 and self.susk == self.oct + 15 and
               self.dynk == self.susk + 15 and self.loads == SY_FILE_AT and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
-              self.mode == self.tot_max_ever + 20 and self.rem_down == self.mode + 64 and self.rec == self.mode + 88 and
+              self.mode == self.tot_max_ever + 24 and self.rem_down == self.mode + 64 and self.rec == self.mode + 88 and
               self.sy_bytes == self.rec + 128 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
               self.started + 12 <= self.block_bytes and self.fund_cut + 4 <= self.block_bytes and
-              self.hold + 49 <= self.block_bytes and self.out_bus == self.rem_down + 2,
+              self.hold + 49 <= self.block_bytes and self.out_bus == self.rem_down + 2 and
+              self.armed == self.rem_down + 3,
               'sy_t and sy_block_t layout as the test reads it (SY test 6: DYNAMICS, REMAIN, the bands\' hold)')
 
 
@@ -1085,9 +1087,11 @@ class SyMachine(SynthMachine):
     """SynthMachine on the main screen, its RX block running tune_rx then sy_rx (as diag_rx_c), then the UI tick's
     syn_ui and sy_ui. Test 5: UI events go in through sy_event (note repeat's handler, nr_event_c, stubbed: it records
     what reaches it and returns 0); the page request and the settings setter recorded (EXT SOURCE follows the setter)."""
-    def __init__(self, img, man, page=1, store=None, **kw):
+    def __init__(self, img, man, page=1, store=None, armed=True, **kw):
         super().__init__(img, man, page=page, **kw)
         self.sl = SyLayout(self, self.sym)
+        if armed:                                      # SY test 8: as if the guitar synth screen had been opened
+            self.put(self.sym['sy'] + self.sl.armed, 1, '<B')
         self.files = Files(self, store)                # test 3: the stock file calls, on files kept in Python
         self.passed, self.requests, self.sets, self.stock_keys = [], [], [], []
         nr = int(man['nr_hook']['nr_event_c'], 16)
@@ -1136,7 +1140,7 @@ class SyMachine(SynthMachine):
         st.update(zip(SY_SCREEN, struct.unpack('<8I', self.bytes(s + self.sl.mode, 32))))
         (st['shift_page'], st['shift_down'], st['shift_used'], st['ext_fix']) = self.bytes(s + self.sl.mode + 32, 4)
         st.update(zip(SY_COUNTS, struct.unpack('<7I', self.bytes(s + self.sl.mode + 36, 28))))
-        st['rem_down'], st['rem_fx'], st['out_bus'] = self.bytes(s + self.sl.rem_down, 3)
+        st['rem_down'], st['rem_fx'], st['out_bus'], st['armed'] = self.bytes(s + self.sl.rem_down, 4)
         st.update(zip(SY_REM, struct.unpack('<5I', self.bytes(s + self.sl.rem_down + 4, 20))))
         st['rec'] = list(struct.unpack('<64h', self.bytes(s + self.sl.rec, 128)))
         return st
@@ -1344,10 +1348,12 @@ def sy_checks(parent_img, img, man, kit_sym):
     m.uc.mem_write(sym['sy_block'], b'\xA5' * lay.block_bytes)         # leftovers of an earlier run
     m.call(sym['sy_ui'])
     check(m.sy()['req'] == 0, 'before the UI has read EXT SOURCE and ROUTING: the engine not started')
+    disarmed = m.sy()['armed']                         # SY test 8: EXT SOURCE not read yet (off): disarmed
+    m.put(sym['sy'] + lay.armed, 1, '<B')              # the screen opened since (the arming: sy_screen_checks)
     m.start()
     st = m.sy()
-    check(st['req'] == 1 and st['starts'] == 1 and not any(m.bytes(sym['sy_block'], lay.block_bytes)) and
-          m.routing_dt1() == [1],
+    check(disarmed == 0 and st['req'] == 1 and st['starts'] == 1 and
+          not any(m.bytes(sym['sy_block'], lay.block_bytes)) and m.routing_dt1() == [1],
           'main screen, EXT SOURCE on, ROUTING ExtIn: the chip held (ROUTING DT1 ExtIn), the engine cleared and handed '
           'over')
     st = m.step()
@@ -1588,7 +1594,9 @@ def sy_checks(parent_img, img, man, kit_sym):
     ms.step()
     ms.step()
     ms.page(1)
-    ms.step()
+    ms.step()                                                          # the UI asks for it again
+    ms.step()                                                          # SY test 8: the start's two steps, then
+    ms.step()                                                          # the one over the whole block
     ms.cyc_step = 850_000
     ms.feed([1000] * 64)
     ms.call(sym['sy_rx'])
@@ -1597,6 +1605,21 @@ def sy_checks(parent_img, img, man, kit_sym):
     check(st['state'] == SY_SLOW and st['slow_cycles'] == 850_000 and st['p_max'] == 850_000 and st['starts'] == 2,
           'left and back: started afresh; one step over the whole 800,000-cycle block: SLOW at once, the window so '
           'far published')
+    # SY test 8: the first two steps after a start are not held to it (a cold first step): a 1.3 M-cycle first step
+    # and a hot second one leave it running; the third over the whole block stops it.
+    mg = SyMachine(img, man)
+    mg.start()
+    seq = []
+    for cyc in (1_300_000, 750_000, 850_000):
+        mg.cyc_step = cyc
+        mg.feed([1000] * 64)
+        mg.call(sym['sy_rx'])
+        mg.cyc_step = 0
+        g = mg.sy()
+        seq.append((g['state'], g['run_steps']))
+    check(seq == [(SY_RUN, 1), (SY_RUN, 2), (SY_SLOW, 3)],
+          f'SY test 8: a start\'s first two steps are not held to the budget (DM-404 timed a first step at 1.2 M cycles); '
+          f'the third over the whole block: SLOW ({seq})')
     report['sy']['tables'] = {k: round(float(v), 9) for k, v in sy_ref.G.items()}
     sy_tone_checks(img, man)
 
@@ -2217,6 +2240,37 @@ def sy_screen_checks(img, man):
           f'SY test 7: VALUE\'s push steps the synth\'s bus DRY -> BUS 1 -> BUS 2 -> BOTH -> DRY ({seen}), press and '
           f'release taken; the bar shows each ({texts}), redrawn after each; the file keeps it (byte 98 = '
           f'{wrote[98] if wrote else None}) and gives it back; a bus byte out of range reads as DRY')
+    # 13. SY test 8: the synth plays from the screen on. EXT SOURCE on, the screen never opened: no engine, no ROUTING
+    #     hold; the screen opens: armed, the hold and the engine; EXIT to the main screen: it plays on; EXT SOURCE off:
+    #     disarmed; on again: silent (no hold) until the screen opens again.
+    a = ScreenMachine(img, man, armed=False)
+    a.start()
+    a.call(sym['sy_ui'])
+    s0, hold0 = a.sy(), list(a.routing_dt1())
+    a.open_screen()
+    a.ui(0)
+    a.call(sym['sy_ui'])
+    s1, hold1 = a.sy(), list(a.routing_dt1())
+    a.page(1)
+    a.call(sym['sy_ui'])
+    a.ui(0)
+    a.call(sym['sy_ui'])
+    s2 = a.sy()
+    a.ext = 0
+    a.ui(0)
+    a.call(sym['sy_ui'])
+    s3 = a.sy()
+    a.ext = 1
+    a.ui(0)
+    a.call(sym['sy_ui'])
+    s4, hold4 = a.sy(), list(a.routing_dt1())
+    check(s0['armed'] == 0 and s0['req'] == 0 and not hold0 and s1['armed'] == 1 and s1['mode'] == 1 and
+          hold1 and hold1[-1] == 1 and s1['req'] == 1 and s2['mode'] == 0 and s2['armed'] == 1 and s2['req'] == 1 and
+          s3['armed'] == 0 and s3['req'] == 0 and s4['armed'] == 0 and s4['req'] == 0 and
+          len(hold4) == len(hold1) + 1 and hold4[-1] == a.tt()['routing'],
+          f'SY test 8: EXT SOURCE on, the screen never opened: no synth, no ROUTING hold; the screen opened: armed, held '
+          f'on ExtIn, the synth on; EXIT: it plays on; EXT SOURCE off: disarmed, the hold let go (the user\'s ROUTING '
+          f'sent back); on again: silent until the screen opens (ROUTING sent {hold0} / {hold1} / {hold4})')
     report['sy']['screen'] = dict(columns=want_cols, footer='SUPERSAW', bar='OUT: <bus>', fx_passes=fa['fx_passes'],
                                   remain=dict(taps=st_r['rem_taps'], holds=st_r['rem_holds']), bus_texts=texts)
 
