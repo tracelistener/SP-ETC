@@ -1,4 +1,5 @@
-/* SY synth test 6, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
+/* SY synth test 7, with guitar synth test 6 (note tracker 3): on v9.52 + LEVEL for MIDI notes (combined-test18; SY
+ * test 6 was on v9.52 (combined-test17) with the CPU meter of IR
  * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
  * BOSS's SY pedals work: 49 semitone bands, each with its own oscillators, from RX pair 0, added to the DRY pair of
  * TX line 3 one block later, on every page while EXT SOURCE is on (the Sound Generator's only in the guitar synth
@@ -28,6 +29,10 @@
  * preview bus, waits); let go with no FX button, the stock press and release follow (the preview bus); with a frozen FX
  * screen up it closes it. Drum mode: every guitar note strikes a pad (the open low E pad 1, a pad a fret to pad 16,
  * higher notes an octave lower at a time).
+ * Test 7: the synth's bus. VALUE's push on the screen steps it DRY -> BUS 1 -> BUS 2 -> BOTH, the bar shows it ("OUT:
+ * BUS 2"), the file keeps it (byte 98). On BUS 1 or BUS 2 the synth plays on that bus's TX stem (words 2/3, 4/5), so
+ * the bus's effect (the FX buttons) is on it; BOTH puts half on each. The guitar's own bus stays INPUT BUS (REMAIN +
+ * EXT SOURCE), so the two can sit on any buses: the guitar on BUS 1 cut by the Isolator, the synth on BUS 2.
  * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
@@ -206,7 +211,7 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
     OFFSET(sy_block_t, started), OFFSET(sy_block_t, tone), OFFSET(sy_block_t, nper), OFFSET(sy_t, tone_req),
     OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads), OFFSET(sy_t, mode),
     OFFSET(sy_t, rec), OFFSET(sy_t, oct), OFFSET(sy_t, susk), OFFSET(sy_block_t, fund_cut), OFFSET(sy_t, dynk),
-    OFFSET(sy_t, rem_down), OFFSET(sy_block_t, hold)};
+    OFFSET(sy_t, rem_down), OFFSET(sy_block_t, hold), OFFSET(sy_t, out_bus)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
@@ -451,15 +456,26 @@ static s32 sat16(s32 v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : v; }
 /* After the mixer: the SY engine's newest block, if TX has not added it yet, onto the DRY pair of the TX line 3 block
  * the mixer has just packed (as cabinet test 2's cab_tx). Test 4: also kept for the recorder (sy_rec, this wake's RX)
  * at the capture's scale, which is the stems'. */
-EXPORT void sy_tx(const volatile u32 *bufs, u32 mix) {
+/* SY test 7: on the synth's bus: TX line 3's stems are DRY (words 0/1), BUS 1 (2/3: pads on BUS 1 play there, DM-404)
+ * and BUS 2 (4/5); both: half on each. In the SY slot's text (.sytext): the module is full. */
+EXPORT __attribute__((section(".sytext"))) void sy_tx(const volatile u32 *bufs, u32 mix) {
     sy_t *s = &sy;
     s->last_mix = mix;
     if (!s->fresh || !bufs) return;
     volatile s32 *p = (volatile s32 *)bufs[0];
+    u32 bus = s->out_bus, w = bus == 1u ? 2u : bus == 2u ? 4u : 0u;
     for (u32 f = 0; f < FRAMES; f++, p += TX_WORDS) {
         s32 e = s->out[f];
-        p[0] = clip20(p[0] + e);
-        p[1] = clip20(p[1] + e);
+        if (bus == 3u) {
+            s32 h = e >> 1;
+            p[2] = clip20(p[2] + h);
+            p[3] = clip20(p[3] + h);
+            p[4] = clip20(p[4] + h);
+            p[5] = clip20(p[5] + h);
+        } else {
+            p[w] = clip20(p[w] + e);
+            p[w + 1] = clip20(p[w + 1] + e);
+        }
         s->rec[f] = (s16)sat16(e);
     }
     s->rec_fresh = 1;
@@ -1183,6 +1199,10 @@ UI_SMALL static void sy_ready(void) {
         s->susk[i] = (u8)(su <= 101u ? su : 0u);
         s->dynk[i] = (u8)(dk <= 101u ? dk : 0u);
     }
+    {
+        u32 bus = v2 ? 0u : sy_file[98];                /* SY test 7: the synth's bus (test 6's files: 0, DRY) */
+        s->out_bus = (u8)(bus <= 3u ? bus : 0u);
+    }
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
     s->muted = sy_file[6] & 1u;
     s->loads++;
@@ -1217,7 +1237,7 @@ UI_SMALL static void sy_save(void) {
         sy_file[68 + i] = s->susk[i];
         sy_file[83 + i] = s->dynk[i];
     }
-    sy_file[98] = 0;
+    sy_file[98] = s->out_bus;                           /* SY test 7 */
     sy_file[99] = 0;
     put32(sy_file + SY_FILE_SUM, sy_fnv(sy_file, SY_FILE_SUM));
     s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
@@ -1467,6 +1487,11 @@ UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val)
         }
         if (what == KEY_SUB_PAD || what == KEY_REC || what == KEY_VALUE) {
             sy_take(s, what);
+            if (what == KEY_VALUE) {                    /* SY test 7: the synth's bus, DRY -> BUS 1 -> BUS 2 -> BOTH */
+                s->out_bus = (u8)((s->out_bus + 1u) & 3u);
+                s->dirty = 1;
+                sy_changed(s);
+            }
             return 1;
         }
         if (what == KEY_SHIFT) {
@@ -1619,7 +1644,9 @@ EXPORT SCREEN void sy_sg_poll(void *page) {
 }
 
 /* The bar (PRM: item, value). Test 6: blank on the screen (VALUE picks the sound, the footer names it): no item name,
- * no value, and its part of the bar (x 57 on, the item's box, "PRM:") painted over. */
+ * no value, and its part of the bar (x 57 on, the item's box, "PRM:") painted over. Test 7: the synth's bus there
+ * ("OUT: BUS 2"), in the bar's own font, centred, one row down as the stock item text is. */
+static const char *const SY_BUS_TEXT[4] = {"OUT: DRY", "OUT: BUS 1", "OUT: BUS 2", "OUT: BOTH"};
 EXPORT UI_SMALL SCREEN void sy_bar_name_c(char *out) { *out = 0; }
 
 EXPORT UI_SMALL SCREEN void sy_bar_text_c(char *out) { *out = 0; }
@@ -1628,6 +1655,7 @@ EXPORT UI_SMALL SCREEN void sy_bar_blank_c(void *fb, s32 y0, s32 y1) {
     const s32 r[4] = {SY_BAR_X0, y0, SY_BAR_X1, y1};
     F_COLOR(fb, 0xFFFFFF, 0);
     F_RECT(fb, r);
+    F_TEXT(fb, (SY_BAR_X0 + SY_BAR_X1) / 2, y0 + 1, SY_BUS_TEXT[sy.out_bus & 3u]);
 }
 
 /* The bar's update: 1 when it should be drawn again (what it shows changed, or the screen came or went). */

@@ -1,7 +1,7 @@
-# SY synth test 6: the screen's controls, FX screens, REMAIN, and smoother notes
+# SY synth test 7: the synth's bus, and LEVEL for MIDI notes
 
-A test build: {{PARENT_REVISION}} (v9.52) plus the SY synth and guitar synth test 6 on the Sound Generator page. Not
-for sharing. To go back, patch v9.52 again.
+A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes) plus the SY synth and guitar synth test 6 on the
+Sound Generator page. Not for sharing. To go back, patch v9.52 again.
 
 | File | SHA-256 |
 | --- | --- |
@@ -10,27 +10,20 @@ for sharing. To go back, patch v9.52 again.
 
 What's new:
 
-- **The guitar synth screen** (hold EXT SOURCE, press RECORD SETTING):
-  - VALUE and the pads pick the sound. CTRL 1 is now the sound's own setting (RESO, DETUNE, ATTACK...), CTRL 2 TONE
-    (-50 to +50), CTRL 3 LEVEL (0-100, 50 as designed).
-  - Tap SHIFT: OCTAVE, SUSTAIN and DYNAMICS. Lower DYNAMICS evens out loud and soft notes (it brings up quiet ones,
-    such as the high E).
-  - The bottom bar no longer shows PRM: SOUND.
-- **FX screens on the synth screen:** the knobs, VALUE and SHIFT now go to the effect, so its screen stays while you
-  adjust it. Holding MFX, VALUE, CTRL 3 or a pad picks the effect.
-- **REMAIN on the Sound Generator page** (the synth screen, the plain Sound Generator and the kits): hold REMAIN and
-  press an FX button to keep the FX screen up, as on other pages. Press REMAIN again to close it. A REMAIN tap on its
-  own still changes the preview bus.
-- **Smoother single notes:** the synth flickered between bands for the first 150 ms of each note (all through some
-  notes). That is mostly gone. Each note now plays at the level of its loudest harmonic.
-- **Kits:** every guitar note now hits a pad. The open low E is pad 1 (the kick), one pad per fret up to pad 16, and
-  higher notes fold down an octave at a time.
-- Your test 5 settings are kept.
+- **The synth's bus:** on the guitar synth screen, push VALUE to step where the synth plays: DRY, BUS 1, BUS 2, BOTH.
+  The bar shows it ("OUT: BUS 2").
+  - DRY is as before: the FX buttons' effects don't reach the synth.
+  - On BUS 1 or BUS 2 the synth goes through that bus's effect. With Routing Type A, BUS 1 also feeds BUS 2.
+  - BOTH puts half the synth on each bus (with Type B: two effects side by side).
+  - Your guitar's bus is still REMAIN + EXT SOURCE (dark DRY, lit BUS 1, blinking BUS 2), so any pairing works.
+- **LEVEL for MIDI notes** (combined-test18): the Sound Generator's LEVEL now turns down notes played from MIDI. The
+  guitar synth's notes on the Sound Generator page follow it too.
+- Everything from test 6 stays, your settings too.
 
 1. Volume low at first. Guitar in, main screen.
-2. Hold EXT SOURCE and press RECORD SETTING. Play single notes on every string, then chords. Try CTRL 1, and DYNAMICS
-   on the SHIFT page.
-3. Press an FX button and turn the knobs. Then hold REMAIN, press an FX button, let go, and turn the knobs.
-4. On a kit (the Sound Generator page in drum mode), play notes all over the neck.
+2. Pick BUS 2 for the effects (BUS FX blinking) and turn on DELAY. Open the guitar synth screen and push VALUE until
+   the bar shows OUT: BUS 2. Play: the synth should echo.
+3. Try OUT: BUS 1 with an effect on BUS 1, and OUT: BOTH.
+4. On the plain Sound Generator page, play from a MIDI keyboard and turn LEVEL down.
 
-Tell me: do single notes sound better? Is the high E still too quiet? Do the FX screens and REMAIN work as you wanted?
+Tell me: does the synth get the effect on BUS 2? On BUS 1? Does LEVEL turn MIDI notes down?

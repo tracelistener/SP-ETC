@@ -1065,11 +1065,11 @@ DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own 
 class SyLayout:
     """sy_t and sy_block_t offsets, from the module's sy_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<29I', m.bytes(sym['sy_layout'], 116))
+        v = struct.unpack('<30I', m.bytes(sym['sy_layout'], 120))
         (self.sy_bytes, self.state, self.out, self.w_n, self.pub, self.tot_max_ever, self.block_bytes, self.e,
          self.per, self.ph, self.amp, self.owned, self.env, self.started, self.tone, self.nper, self.tone_req,
          self.fe, self.knob, self.dirty, self.loads, self.mode, self.rec, self.oct, self.susk, self.fund_cut,
-         self.dynk, self.rem_down, self.hold) = v
+         self.dynk, self.rem_down, self.hold, self.out_bus) = v
         check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
               self.dirty == SY_KNOB_AT + 45 and self.oct == SY_KNOB_AT + 48 and self.susk == self.oct + 15 and
               self.dynk == self.susk + 15 and self.loads == SY_FILE_AT and
@@ -1077,7 +1077,7 @@ class SyLayout:
               self.mode == self.tot_max_ever + 20 and self.rem_down == self.mode + 64 and self.rec == self.mode + 88 and
               self.sy_bytes == self.rec + 128 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
               self.started + 12 <= self.block_bytes and self.fund_cut + 4 <= self.block_bytes and
-              self.hold + 49 <= self.block_bytes,
+              self.hold + 49 <= self.block_bytes and self.out_bus == self.rem_down + 2,
               'sy_t and sy_block_t layout as the test reads it (SY test 6: DYNAMICS, REMAIN, the bands\' hold)')
 
 
@@ -1136,7 +1136,7 @@ class SyMachine(SynthMachine):
         st.update(zip(SY_SCREEN, struct.unpack('<8I', self.bytes(s + self.sl.mode, 32))))
         (st['shift_page'], st['shift_down'], st['shift_used'], st['ext_fix']) = self.bytes(s + self.sl.mode + 32, 4)
         st.update(zip(SY_COUNTS, struct.unpack('<7I', self.bytes(s + self.sl.mode + 36, 28))))
-        st['rem_down'], st['rem_fx'] = self.bytes(s + self.sl.rem_down, 2)
+        st['rem_down'], st['rem_fx'], st['out_bus'] = self.bytes(s + self.sl.rem_down, 3)
         st.update(zip(SY_REM, struct.unpack('<5I', self.bytes(s + self.sl.rem_down + 4, 20))))
         st['rec'] = list(struct.unpack('<64h', self.bytes(s + self.sl.rec, 128)))
         return st
@@ -1524,6 +1524,21 @@ def sy_checks(parent_img, img, man, kit_sym):
     check(any(st['out']) and st['fresh'] == 1 and got == exp and again == exp and st2['fresh'] == 0 and
           st2['tx'] == st['tx'] + 1 and st2['last_mix'] == 123456,
           'sy_tx adds the block to DRY L/R only (words 0/1 of TX line 3), clipped to 20 bits, once')
+    # SY test 7: the synth's bus: BUS 1 (words 2/3), BUS 2 (4/5), BOTH (half on each), each once, the others untouched.
+    bus_ok = []
+    for bus, words, div in ((1, (2, 3), 1), (2, (4, 5), 1), (3, (2, 3, 4, 5), 2), (0, (0, 1), 1)):
+        mr.uc.mem_write(TXBUF, struct.pack('<1024i', *basew))
+        mr.put(sym['sy'] + mr.sl.out_bus, bus, '<B')
+        mr.put(sym['sy'] + SY_RUN_AT + 4 * SY_RUNF.index('fresh'), 1, '<I')
+        mr.call(sym['sy_tx'], base.ARGS, 123456)
+        got = list(struct.unpack('<1024i', mr.bytes(TXBUF, 4096)))
+        exp = list(basew)
+        for f in range(64):
+            for w in words:
+                exp[16 * f + w] = max(-0x80000, min(0x7FFFF, basew[16 * f + w] + (st['out'][f] >> (div - 1))))
+        bus_ok.append(got == exp)
+    check(all(bus_ok), f'SY test 7, the synth\'s bus: BUS 1 on words 2/3, BUS 2 on 4/5, BOTH half on each, DRY 0/1 '
+                       f'again; every other word untouched, clipped to 20 bits ({bus_ok})')
     mp, mw = Machine(parent_img), SyMachine(img, man)
     for x in (mp, mw):
         base.make_voices(x, 9090, occupancy=0.5)
@@ -1734,7 +1749,7 @@ class Files:
         self._ret(uc, 0)
 
 
-def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=3):
+def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=3, bus=0):
     """B:/_sy_tones.bin as sy_save writes it (SY test 6, version 3): "SYTN", 3, tone, muted, 15, 45 knob positions,
     15 OCTAVE, 15 SUSTAIN, 15 DYNAMICS, two zeros, FNV-1a of the first 100. version=2: test 5's (88 bytes: no
     DYNAMICS, one zero, the sum of the first 84)."""
@@ -1742,7 +1757,7 @@ def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=3
     suss = suss or [0] * 15
     dyns = dyns or [0] * 15
     body = (b'SYTN' + bytes([version, tone, muted, 15]) + bytes(64 + d for row in knobs for d in row) +
-            bytes(o & 0xFF for o in octs) + bytes(suss) + (bytes(dyns) + bytes(2) if version == 3 else bytes(1)))
+            bytes(o & 0xFF for o in octs) + bytes(suss) + (bytes(dyns) + bytes([bus, 0]) if version == 3 else bytes(1)))
     h = 2166136261
     for c in body:
         h = ((h ^ c) * 16777619) & 0xFFFFFFFF
@@ -2038,18 +2053,19 @@ def sy_screen_checks(img, man):
     b.ev(EV_ENC, 0, 4)
     name = b.bar_name()
     text = b.bar_text()
+    bar_text = [d[1:4] for d in b.draws if d[0] == 'text']           # SY test 7: OUT: DRY
     poll = b.bar_poll()
     poll2 = b.bar_poll()
     b.put(sym['sy'] + b.sl.mode, 0, '<I')
     name_o = b.bar_name()
     text_o = b.bar_text()
-    check(name[:2] == ('end', '') and text[:3] == ('drawn', '', None) and
+    check(name[:2] == ('end', '') and text[:2] == ('drawn', '') and bar_text == [(92, BAR_Y0 + 1, 'OUT: DRY')] and
           text[4] == [('color', 0xFFFFFF, 0), ('rect', 57, BAR_Y0, 127, BAR_Y1)] and
           poll[0] == 'arp' and poll[1] == [BAR_SCREEN] and poll[2] and poll2[1] == [] and
           name_o[0] == 'arp' and name_o[2] and text_o[0] == 'arp' and text_o[3],
-          f'the bar on the screen: blank (no item name, x 57..127 of the item box\'s rows painted over, no value, the '
-          f'displaced draw skipped), redrawn once after SOUND changed; outside it the arp\'s bridges with r0-r5 and lr '
-          f'as they came ({name}, {text[:2]}, {text[4]})')
+          f'the bar on the screen: no item name, x 57..127 of the item box\'s rows painted over, no value, the '
+          f'displaced draw skipped, SY test 7\'s "OUT: DRY" centred there; redrawn once after SOUND changed; outside it '
+          f'the arp\'s bridges with r0-r5 and lr as they came ({name}, {text[:2]}, {text[4]}, {bar_text})')
     # 8. Leaving and the input: SHIFT + RECORD SETTING gives the page back (and goes on); the chord with EXT SOURCE off
     #    (the press toggled it off) puts it on; with GATE, its release putting it off: on again; a page asked for that
     #    never comes: given up after 1 s.
@@ -2169,8 +2185,40 @@ def sy_screen_checks(img, man):
           'cleared at the release; alone, the stock press and release follow it (the preview bus); held + DELAY: the '
           'button goes on, no stock REMAIN; with a frozen FX screen up: taken, an EXIT closes it, the flag cleared; '
           'not frozen, and on the main screen: REMAIN goes on as stock')
-    report['sy']['screen'] = dict(columns=want_cols, footer='SUPERSAW', bar='blank', fx_passes=fa['fx_passes'],
-                                  remain=dict(taps=st_r['rem_taps'], holds=st_r['rem_holds']))
+    # 12. SY test 7: VALUE's push steps the synth's bus, DRY -> BUS 1 -> BUS 2 -> BOTH -> DRY, its press and release
+    #     taken; the bar shows each ("OUT: BUS 2"), redrawn after each; written to the file's byte 98 at a key release
+    #     and read back; a bad byte there (4) read as DRY.
+    v = ScreenMachine(img, man, page=SG_PAGE)
+    v.start()
+    v.put(sym['sy'] + v.sl.mode, 1, '<I')
+    seen, texts, pushes, polls = [], [], [], []
+    for _ in range(4):
+        pushes += [v.ev(EV_KEY, KEY_VALUE), v.ev(EV_KEY_UP, KEY_VALUE)]
+        seen.append(v.sy()['out_bus'])
+        polls.append(v.bar_poll()[1] == [BAR_SCREEN])
+        v.bar_text()
+        texts.append([d[3] for d in v.draws if d[0] == 'text'])
+    v.ev(EV_KEY, KEY_VALUE)
+    v.ev(EV_KEY, KEY_VALUE)
+    v.ev(EV_KEY_UP, KEY_VALUE)                                       # BUS 2 (its release is taken: no file)
+    v.ev(EV_KEY_UP, 0x20)                                            # a key release that goes on writes it
+    wrote = v.files.writes[-1][1] if v.files.writes else b''
+    vf, _ = ScreenMachine(img, man, store={SY_PATH: wrote}), None
+    vf.start()
+    vf.ev(EV_KEY, KEY_EXT)
+    bad = sy_file_bytes(0, 0, [[0, 0, 0]] * 15, bus=4)
+    vb = ScreenMachine(img, man, store={SY_PATH: bad})
+    vb.start()
+    vb.ev(EV_KEY, KEY_EXT)
+    check(all(x == (1, False) for x in pushes) and seen == [1, 2, 3, 0] and all(polls) and
+          texts == [['OUT: BUS 1'], ['OUT: BUS 2'], ['OUT: BOTH'], ['OUT: DRY']] and len(wrote) == 104 and
+          wrote[98] == 2 and vf.sy()['out_bus'] == 2 and vf.sy()['loads'] == 1 and vb.sy()['out_bus'] == 0 and
+          vb.sy()['loads'] == 1,
+          f'SY test 7: VALUE\'s push steps the synth\'s bus DRY -> BUS 1 -> BUS 2 -> BOTH -> DRY ({seen}), press and '
+          f'release taken; the bar shows each ({texts}), redrawn after each; the file keeps it (byte 98 = '
+          f'{wrote[98] if wrote else None}) and gives it back; a bus byte out of range reads as DRY')
+    report['sy']['screen'] = dict(columns=want_cols, footer='SUPERSAW', bar='OUT: <bus>', fx_passes=fa['fx_passes'],
+                                  remain=dict(taps=st_r['rem_taps'], holds=st_r['rem_holds']), bus_texts=texts)
 
 
 def sy_route_checks(img, man):

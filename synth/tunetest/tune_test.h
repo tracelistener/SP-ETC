@@ -211,7 +211,9 @@ typedef struct {
     /* test 6: REMAIN on the Sound Generator page: its press taken (its held bit set as stock's would be, so REMAIN +
        an FX button freezes the FX screen); let go with no FX button pressed, the stock press and release follow (the
        preview bus) */
-    u8 rem_down, rem_fx, pad6[2];
+    u8 rem_down, rem_fx;
+    volatile u8 out_bus;                    /* SY test 7: the synth's bus: 0 DRY, 1 BUS 1, 2 BUS 2, 3 both (half each) */
+    u8 pad6;
     u32 rem_taps, rem_holds, fx_passes;     /* REMAIN taps handed on, REMAIN + FX freezes; events an FX screen got */
     u32 sg_page;                            /* the Sound Generator page's object (its views), from its update; 0 off it */
     /* test 4, audio task: the synth's newest block as TX added it, for the recorder on ROUTING ExtIn */

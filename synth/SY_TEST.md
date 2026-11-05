@@ -1,4 +1,4 @@
-# SY synth tests 1 to 6: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 7: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -548,6 +548,36 @@ multi-pitch step.
 - **The engine:** every tone with OCTAVE, SUSTAIN and DYNAMICS turned value for value; the bands on the partials at 96%
   or more; drum mode's pads (E2 pad 1, the riff E2 E2 G2 A2 E2 on pads 1, 1, 4, 6, 1).
 
+## SY synth test 7 (sy-synth-test7): the synth's bus, on combined-test18
+
+The user asked whether the guitar synth goes through the effects. It didn't: it plays on the DRY bus, which BUS 1 and
+BUS 2's effects never reach (manual p. 34); BUS 3 and BUS 4 reach it only with DRY Routing on BUS3 (p. 143). The
+guitar's own sound goes to INPUT BUS (REMAIN + EXT SOURCE). The user then asked for a bus setting, built on
+combined-test18 (v9.52 with LEVEL for MIDI notes, `COMBINED.md`) so one flash has both. The user confirmed that
+Routing Type A ("serial") is BUS 1 feeding BUS 2.
+
+**The bus.** TX line 3's stems are DRY (words 0/1), BUS 1 (2/3: pads on BUS 1 play there in DM-404) and BUS 2 (4/5:
+DM-404's reading, not seen yet). `sy_tx` adds the synth to the stem `sy.out_bus` names: DRY, BUS 1, BUS 2, or BOTH
+(half on each, for Type B's two effects side by side). On the screen VALUE's push steps it DRY -> BUS 1 -> BUS 2 ->
+BOTH (its press and release taken, as before), and the bar's PRM part shows it ("OUT: BUS 2", the bar's font,
+centred, one row down as the stock item is). The file keeps it in byte 98, still version 3: test 6's files have 0
+there (DRY); a byte out of range reads as DRY. With ROUTING Mix a sample has the synth with its bus's effect; with ExtIn
+`sy_rec` still adds the synth without it. `sy_tx` moved to `.sytext` (the module is 44,936 bytes).
+
+**combined-test18 under it.** That build's `sgl_midi_gate` takes the SG MIDI entry's first three instructions
+(`0x83fa3448`: push.w, sub sp, the movw of the drum-mode byte's low half) and jumps back at entry + 10. The builder's
+`kit_mode_flag` follows the jump and reads them in the gate: the same byte as before (`0x83fc58e0`). The guitar synth
+test 6's notes (`syn_ui` through `arp_midi_event`) now follow LEVEL as MIDI notes do.
+
+**DM-404** (the release's APP1): four VALUE pushes stepped the bus 1, 2, 3, 0 and the bar read OUT: BUS 1 / BUS 2 /
+BOTH / DRY; test 6's FX screen, REMAIN and MFX steps gave test 6's results on the new base. DM-404 has no audio input,
+so the synth itself was not heard there: the unit's test says whether BUS 2's stem is BUS 2.
+
+**Emulator checks:** 327 (165 distinct) pass on `release/sy-synth-test7`, 165 (49 distinct) of them in the SY section. Test 7's: the
+synth on each bus's words (BUS 1 2/3, BUS 2 4/5, BOTH half on each, DRY again; the other words untouched, clipped to 20
+bits); VALUE's push stepping the bus with its press and release taken; the bar's text for each; the file's byte 98
+written and read back, a bad one read as DRY; the layout's `out_bus`.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -556,6 +586,7 @@ multi-pitch step.
 - Test 4: whether a RESAMPLE or looper take with the synth on is as loud as one with it off (pair 1 x 2 is from
   the readout's rounded peaks).
 - Test 5: whether FUND loses notes a chord needs; whether the screen's chord feels right with GATE on.
+- Test 7: whether TX words 4/5 are BUS 2 (DM-404's reading): the synth on BUS 2 with an effect there.
 - Test 6: whether single notes sound smooth now; whether the high E is still quiet (DYNAMICS); whether the stock FX
   screens and REMAIN behave on the unit as in DM-404; how the kit pads feel across the neck.
 - Whether the chip takes a ROUTING DT1 while sampling is armed without a click in the recording.

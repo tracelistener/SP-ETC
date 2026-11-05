@@ -98,7 +98,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test6'
+REVISION = 'sy-synth-test7'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -524,9 +524,22 @@ def sg_midi_entry(img):
 
 def kit_mode_flag(img, entry):
     """The kits' drum-mode byte (kit_mode), which the SG MIDI entry tests first: movw/movt r6 around a mov, then
-    ldrb r7, [r6]; cmp r7, #0; beq (the melodic path)."""
+    ldrb r7, [r6]; cmp r7, #0; beq (the melodic path). SY test 7: on combined-test18 (LEVEL for MIDI notes) the
+    entry's first three instructions are a jump to sgl_midi_gate, which ends with them (push.w, sub sp, the movw r6)
+    and jumps back to entry + 10: they are read there."""
     at = entry & ~1
     text = listing(read(img, at, 0x20), at)
+    jump = movw_movt(read(img, at, 8), at)
+    if jump and jump[1] == 'ip' and text[2] == 'bx ip':
+        gate = jump[0] & ~1
+        ins = list(MD.disasm(read(img, gate, 0x40), gate))
+        gt = [f'{i.mnemonic} {i.op_str}'.strip() for i in ins]
+        k = next((j for j in range(len(gt) - 5) if gt[j] == 'push.w {r4, r5, r6, r7, r8, sb, lr}'), None)
+        back = movw_movt(read(img, ins[k + 3].address, 8), ins[k + 3].address) if k is not None else None
+        if k is None or gt[k + 1] != 'sub sp, #4' or not gt[k + 2].startswith('movw r6, #') or not back or \
+                back[1] != 'ip' or back[0] != (at + 10) | 1 or gt[k + 5] != 'bx ip':
+            raise ValueError(f'SG MIDI entry {at:#x}: a jump to {gate:#x}, not the LEVEL gate expected ({gt[:12]})')
+        text = gt[k:k + 3] + text[3:]
     if text[:2] != ['push.w {r4, r5, r6, r7, r8, sb, lr}', 'sub sp, #4'] or not text[2].startswith('movw r6, #') or \
             text[3] != 'mov r4, r1' or not text[4].startswith('movt r6, #') or \
             text[5:7] != ['ldrb r7, [r6]', 'cmp r7, #0'] or not text[7].startswith('beq #'):
@@ -1009,7 +1022,11 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 6 (test 5 on the unit): on the screen VALUE and the pads pick the sound, CTRL 1 is '
+        description='SY synth test 7: the synth\'s bus, DRY / BUS 1 / BUS 2 / BOTH (half each), on TX line 3\'s stems '
+                    '(words 0/1, 2/3, 4/5), stepped by VALUE\'s push on the screen, shown in the bar ("OUT: BUS 2"), '
+                    'kept in the file (byte 98); on combined-test18 (v9.52 + LEVEL for MIDI notes: the guitar synth\'s '
+                    'Sound Generator notes follow LEVEL too). '
+                    'SY synth test 6 (test 5 on the unit): on the screen VALUE and the pads pick the sound, CTRL 1 is '
                     'the tone\'s own setting, CTRL 2 TONE (-50..+50), CTRL 3 LEVEL (0..100, 50 as designed), SHIFT '
                     'OCTAVE / SUSTAIN / DYNAMICS (new: a note\'s level L x (L / 0.1)^(d - 1)); the bar\'s PRM part '
                     'blank; with an FX screen up (found on the SG page\'s own object: 0x80cfd350 is 0 there) the knobs, '
