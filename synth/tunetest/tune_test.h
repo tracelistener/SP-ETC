@@ -69,6 +69,16 @@ typedef struct {
                                                (note + 1), 0 none; the audio task writes it whole, and a note-on
                                                bumps seq */
     volatile u32 drum;                      /* syn_ui: the kits' drum mode is on (only plucks play notes there) */
+    /* SY test 4 (UI task): the effects chip held on ExtIn while a synth listens to pair 0, so ROUTING can stay on
+     * Mix; and what the recorder gets meanwhile */
+    volatile u32 hold;                      /* 1: every ROUTING DT1 goes out as ExtIn (sy_route_dt1) */
+    u32 hold_at;                            /* the hold's send (cycle count): the synths listen 20 ms after */
+    volatile u32 rec_mix;                   /* the recorder's pair 0 := pair 1 x 2 (ROUTING Mix while held, and 30 ms
+                                               after: the mix before BUS 3/4) */
+    volatile u32 rec_ext;                   /* the synth added to the recorder's pair 0 (ROUTING ExtIn while held) */
+    u32 grace, grace_at;                    /* rec_mix after the release, from when */
+    u32 holds, route_sends, route_held, route_last;   /* hold starts; ROUTING DT1s seen, sent as ExtIn; the last value */
+    u32 rec_blocks, rec_adds, rec_other;    /* blocks given pair 1, given the synth, left as the feed took another pair */
 } tt_t;
 
 /* The tracker's memory, in the module. The UI clears it before a start. */
@@ -178,6 +188,15 @@ typedef struct {
     volatile u32 seq;                       /* odd while pub is written */
     sy_window pub;
     u32 tot_max_ever, over, slow_cycles, hot, reset_ack;
+    /* test 4: the picker (VALUE + EXT SOURCE), UI task */
+    u32 picker;                             /* 1: open: the pads pick, CTRL 1-3 edit */
+    u32 picker_at;                          /* its last touch (cycle count): it closes 4 s after */
+    s32 picker_page;                        /* the page it opened on: another page closes it */
+    u32 opens, closes, handoffs;            /* VALUE presses handed to FX deep edit's input FX screens */
+    u8 ext_taken, exit_taken, value_taken, lit;   /* releases to take too; the pads show the picker */
+    /* test 4, audio task: the synth's newest block as TX added it, for the recorder on ROUTING ExtIn */
+    volatile u32 rec_fresh;                 /* rec holds a block the recorder has not had */
+    s16 rec[FRAMES];
 } sy_t;
 
 /* The engine's memory, in the module. The UI clears it before a start. Test 2: no stack of its own: the engine runs

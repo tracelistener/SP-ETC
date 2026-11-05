@@ -1,4 +1,4 @@
-# SY synth tests 1 and 2: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 4: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -273,12 +273,96 @@ The user asked about parameter editing, then chose to include saving.
   - The builder's three calls are in FX deep edit's bridges.
   - Separately, every tone with its knobs turned (four settings across the tones) equals the twin value for value.
 
+## SY synth test 4 (sy-synth-test4): the picker, and ROUTING Mix
+
+On the unit (2026-11-04) test 3 "works really well", and bus FX already work with the synth. Then the user asked for
+a better way to pick sounds than holding VALUE, for the synth on ROUTING Mix without switching to ExtIn, and to "use
+guitar synth sound with looper sampling etc"; and suggested VALUE + EXT SOURCE to bring the synth up.
+
+**What tests 2 and 3 took over.** VALUE held + pad is a stock shortcut (manual p. 162: it selects a sample without
+playing it), and VALUE held + CTRL 1-3 is stock's sub-parameter edit on the FX screen. Test 4 gives both back.
+
+**The picker** (`tune_test.c`: `sy_key_down`, `sy_key_up`, `sy_knob`, `sy_picker_*`):
+- Hold VALUE and press EXT SOURCE, on any page but the Sound Generator's. FX deep edit opened the input FX's extra
+  screens with that chord; now `sy_key_down` sees it before FX deep edit does.
+  - With EXT SOURCE on, its press and release are taken, so the input stays on. With EXT SOURCE off, the press goes on
+    to stock, which switches the input on.
+  - If pad 16 had put the synth off, it comes back on with the sound it had.
+- The pads light while it is open, through the key light bounce uses (`0x800d4910`, repainted every UI tick over
+  whatever stock paints): the sound playing white, the other sounds blue, pad 16 red, bright while the synth is off.
+- A pad picks; pad 16 puts the synth off and closes the picker. CTRL 1-3 edit the sound as test 3 did, without VALUE.
+- It closes on EXIT, the chord again, 4 s untouched, another page, or any other key (that key then goes on as usual).
+  Closing asks stock to paint the pads again (`0x802496f0 |= 2`) and closes the picker's popup if it is the one up.
+- VALUE in the picker closes it and goes on to the input FX's extra screens. FX deep edit's handler gets VALUE's press
+  (so it counts VALUE as held), then an EXT SOURCE press and release: its own chord.
+- The file is written at the key that closes the picker, or at the next key release after a timeout. It is never
+  written from the UI tick, and never with an FX screen up.
+- Popups: `SY 4 SUPERSAW` / `TAP A PAD` when the picker opens; the sound's name after a pick; test 3's popup on a knob.
+  The widest line is 94 px.
+
+**ROUTING Mix.** Pair 0 is the input alone only on ExtIn. ROUTING itself (system 0x5c, sent to the chip as DT1
+`02 01 00 1e`) only chooses what REC, RESAMPLE, the looper and skip-back record (manual p. 36, 41, 44); it doesn't
+change what is heard. So:
+- **The hold** (`route_hold`, every UI tick): while a synth listens, the chip is told ExtIn, and the user's own value
+  goes back when nothing does. A synth listens while EXT SOURCE is on and the SY synth isn't off (pad 16), or on the
+  Sound Generator page for test 6.
+  - v9.52's FX deep edit already catches every DT1 at the builder's entry (`0x800d8118` jumps to its `fde_dt1`). The
+    builder re-points that jump to `sy_dt1`, which passes ROUTING's value through `sy_route_dt1` (ExtIn while held)
+    and goes on to `fde_dt1`. That covers the RECORD SETTING and looper screens, and the chip resets
+    (`0x801803b0` sends ROUTING 0).
+  - Other IDs go on with the caller's registers and stack untouched. The builder makes some boot frames from leftover
+    stack.
+  - The synths start 20 ms after the hold goes out, so the chip has switched first.
+- **The recorder.** The feed (`0x1ca80`) copies one pair of the RX packet for every recording, inside its own call:
+  pair 1 if settings + 0x64 is set, else the pair the byte at `0x82e0e974` names (both guarded). Bounce's rx bridge
+  now calls `sy_feed` in place of the feed: the tracker's pairs first, then `sy_rec`, then the feed. When the feed
+  will take pair 0:
+  - **ROUTING Mix, held:** pair 0 becomes pair 1 x 2, saturated. Pair 1 is the mix before BUS 3/4: it came back 4
+    frames before pair 0 in the bounce probe, carried pads on DRY and BUS 1, and read half pair 0's level in cab test
+    2 (13-14% against 27-28%). So a recording made with the synth on has the pads, the guitar, the synth and BUS 1/2's
+    effects, but not BUS 3/4's. This lasts 30 ms past the hold while the chip switches back.
+  - **ROUTING ExtIn, held:** pair 0 gets the synth's newest block added, as `sy_tx` added it to TX. The stems are at
+    the capture's scale.
+  - **The feed taking another pair:** the packet is left as it is.
+- Test 5's popup (`SYNTH NEEDS` / `ROUTING ExtIn`) is gone.
+- **Memory:** the module is 44,420 bytes of 45,056.
+
+**Emulator checks:** 299 (155 distinct: the two layout checks run with every emulated machine) pass on `release/sy-synth-test4` (APP1 `e6fa0a91…d834`, 3,202,080 bytes). The SY section has
+142 (44 distinct) of them, 21 distinct checks for test 4:
+- **Picker:**
+  - The chord opens it: the press and release are taken, FX deep edit never sees them, the pads are lit, and the
+    popup fits.
+  - VALUE + pad with the picker closed goes on.
+  - A pad picks and its press and release are taken; pad 16 closes the picker and puts the synth off; the chord again
+    brings the synth back.
+  - With EXT SOURCE off, the chord's press goes on to stock.
+  - EXIT, another page, another key (which goes on), the chord again and 4 s untouched each close it. The pads are
+    repainted every tick until then. A pick is written at the next release, not from the tick.
+  - VALUE hands on to FX deep edit's chord, in the expected order and with the expected events.
+  - The Sound Generator page keeps the chord for FX deep edit.
+- **Knobs and file** (test 3's checks through the picker): EXIT with an FX screen up holds the file back, and the next
+  release with none writes it byte for byte.
+- **Hold:**
+  - On Mix, the Sound Generator page plays and the main screen's engine runs, 20 ms after the hold.
+  - EXT SOURCE off or pad 16 sends the user's Mix back.
+  - A firmware ROUTING DT1 goes out as ExtIn while held and as sent otherwise; other IDs are untouched, on the
+    caller's stack.
+  - The readout with EXT SOURCE off runs the tracker without a hold.
+- **Recorder:**
+  - Mix gives pair 1 x 2, saturated, and the tracker still gets the guitar.
+  - ExtIn adds the synth's block once.
+  - The feed taking another pair leaves the packet alone.
+  - The 30 ms grace, then stock again.
+- **Tracker:** `sy_feed` reads the pairs from its r0 packet, then calls the feed with the same r0 and r1.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
 - The heavier tones' cycles at SDRAM speed (the readout's SY line): the FM bell, supersaw, pad, organ and bass take
   about 1.4-1.6 times the saw lead's instructions.
-- Whether anything on the unit uses VALUE + pad (nothing in v9.52's modules does; stock is not known to).
+- Test 4: whether the picker's pad colours read well on the unit, and whether a RESAMPLE or looper take with the
+  synth on is as loud as one with it off (pair 1 x 2 is from the readout's rounded peaks).
+- Whether the chip takes a ROUTING DT1 while sampling is armed without a click in the recording.
 - How the low notes' 20-30 ms feel in longer playing (nothing was reported against them).
 - Test 3: whether the file saves and comes back on the unit (FX deep edit's way of saving works there), and whether
   the shared knob positions (the bus effect jumping after an edit) get in the way.

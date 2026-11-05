@@ -1,30 +1,32 @@
-# SY synth test 3: three knobs per sound, saved
+# SY synth test 4: the sound picker, and recording the synth
 
-A test build: {{PARENT_REVISION}} (v9.52) plus the SY synth (15 sounds, now editable) and guitar synth test 6 on the
-Sound Generator page. Not for sharing. To go back, patch v9.52 again.
+A test build: {{PARENT_REVISION}} (v9.52) plus the SY synth and guitar synth test 6 on the Sound Generator page. Not
+for sharing. To go back, patch v9.52 again.
 
 | File | SHA-256 |
 | --- | --- |
 | SP404MKII_APP1.bin ({{APP1_SIZE}} bytes) | `{{APP1_SHA256}}` |
 | SP404MKII_APP0.bin (stock 5.52) | `{{APP0_SHA256}}` |
 
-What's new: each sound has three knobs. Hold VALUE (pushed in) and turn CTRL 1, 2 or 3. A popup shows the sound, the
-setting and the knob's position: 64 is the sound as it was in test 2. Each sound keeps its own settings. While VALUE
-is held the knobs don't touch the bus effect, but the next time you turn a knob without VALUE, the bus effect jumps
-to where that knob now sits.
+What's new:
 
-- CTRL 1, BRIGHT: darker to brighter.
-- CTRL 2, one setting per sound: resonance (saw lead, wah), width (square, pulse), detune (supersaw), attack (pad,
-  strings), rotary speed (organ), breath (flute), metal (bell), how far it opens on each pick (brass), sub level
-  (bass, warm), sweep speed (sweep), step rate (seq: 1/8, 1/16, 1/32).
-- CTRL 3, LEVEL: the synth's volume, from silent to twice as loud.
+- **The picker:** hold VALUE and press EXT SOURCE.
+  - The pads light up: your sound white, the other sounds blue, pad 16 red. Tap a pad to pick a sound; pad 16 turns
+    the synth off.
+  - While the pads are lit, CTRL 1-3 edit the sound without holding VALUE.
+  - It closes after 4 seconds untouched, or with EXIT.
+  - If the synth or EXT SOURCE was off, the chord turns it on.
+  - Pressing VALUE in the picker opens the input FX's hidden settings, which VALUE + EXT SOURCE opened before.
+  - VALUE + pad and VALUE + CTRL work as on stock again.
+- **ROUTING can stay on Mix,** and the SP records the synth: REC, RESAMPLE, the looper and skip-back sampling.
+  - On Mix you get everything, minus BUS 3/4 effects while the synth is on.
+  - On ExtIn you get your guitar and the synth, without the pads.
+  - The synth now plays whenever EXT SOURCE is on, on Mix too. Turn it off with pad 16 in the picker before you
+    sample something else through the input.
 
-Your settings and the sound you picked are saved on the SP when you let go of VALUE, and come back after a restart.
+1. Volume low at first. Guitar in, input FX Bypass, ROUTING on Mix (SHIFT + EXT SOURCE, CTRL 2), main screen.
+2. Hold VALUE and press EXT SOURCE, tap a pad, and play. Turn CTRL 1-3 while the pads are lit.
+3. Record a few bars with the looper, or RESAMPLE, while you play over some pads. Listen back: the synth should be
+   there, as loud as it was live.
 
-Picking a sound is as in test 2: VALUE + pad 1-15, and pad 16 for off.
-
-1. Volume low at first. Guitar in, EXT SOURCE on, input FX Bypass, ROUTING ExtIn, main screen.
-2. Pick a sound, then hold VALUE and turn CTRL 1, 2 and 3 while you play.
-3. Switch the SP off and on, press EXT SOURCE, and play: the same sound with your settings.
-
-Tell me: are the knob settings useful, and which would you change? Did your settings come back after the restart?
+Tell me: is the picker better? Is the synth in your recordings, at the right level?

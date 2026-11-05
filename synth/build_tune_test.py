@@ -1,4 +1,4 @@
-"""SY synth test 3, with guitar synth test 6 (note tracker 3), on v9.52 (test only).
+"""SY synth test 4, with guitar synth test 6 (note tracker 3), on v9.52 (test only).
 
 SY synth test 1: a polyphonic guitar synth in the way BOSS's SY pedals work (Roland's patent US 9,542,923). The
 input the effects chip hands back (RX pair 0) is split into 49 bands a semitone apart, E2..E6; each band's pitch
@@ -17,6 +17,14 @@ SY synth test 3: VALUE held + CTRL 1-3 set the picked tone's BRIGHT, its own set
 FX deep edit's knob bridge, its call re-pointed to sy_knob, which asks FX deep edit's handler first). The picks and
 knobs are kept in B:/_sy_tones.bin, with the stock file calls FX deep edit's file uses (their code checked here).
 
+SY synth test 4: VALUE held + EXT SOURCE opens a picker (any page but the Sound Generator's): the pads light, a pad
+picks (16: off), CTRL 1-3 edit without VALUE held; it closes after 4 s untouched, on EXIT, the chord again or another
+key; VALUE goes on to FX deep edit's input FX screens (which the chord opened before). VALUE + pad and VALUE + CTRL are
+stock's again. The synths no longer need ROUTING ExtIn: while one listens (EXT SOURCE on) the builder's entry
+(0x800d8118, whose jump to FX deep edit's fde_dt1 now goes to sy_dt1 first) sends every ROUTING DT1 as ExtIn, and
+bounce's rx bridge calls sy_feed in place of the recorder feed: the pairs for the tracker, then the recorder's pair 0
+as ROUTING asks (Mix: pair 1 x 2, the mix before BUS 3/4; ExtIn: the input plus the synth), then the feed.
+
 On the Sound Generator page, guitar synth test 6 as before:
 The input the effects chip hands back (RX pair 0, after the input FX) goes through a note tracker on the main
 processor (YIN, an analysis every 5.3 ms); on the Sound Generator page with EXT SOURCE on and ROUTING on ExtIn, its
@@ -34,7 +42,9 @@ The input is v9.52 (combined-test17); the hooks are cabinet test 2's (IR diagnos
   0x80005870  per-voice stub (12 bytes)          -> meter_voice
   0x0001fd84  the fork's SG stub, pre call's movw/movt (8 of 10 bytes) -> meter_sg_pre
   bounce's ui bridge, its bnc_ui call's movw/movt (8 bytes) -> diag_ui (bnc_ui, the meter, tune_ui)
-  bounce's rx bridge, its bnc_rx call's movw/movt (8 bytes) -> diag_rx (bnc_rx, tune_pairs, tune_rx)
+  bounce's rx bridge, its bnc_rx call's movw/movt (8 bytes) -> diag_rx (bnc_rx, tune_rx, sy_rx)
+  bounce's rx bridge, its feed call's movw/movt (8 bytes) -> sy_feed (SY test 4: tune_pairs, sy_rec, the feed)
+  0x800d8118  the DT1 builder's jump to FX deep edit's fde_dt1, its movw/movt (8 bytes) -> sy_dt1 (SY test 4)
 The module (tunetest/: the integer side tune_test.c, the FPU side tune_fp.c, and the tracker's memory) goes in a new
 boot copy row at BASE, in the free SDRAM between the kits' last zero row (0x83fc8450) and sg-subpad's row
 (0x83fd4000).
@@ -70,7 +80,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test3'
+REVISION = 'sy-synth-test4'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -110,12 +120,16 @@ SHA_GUARDS = [
 ]
 FDE_SLOT = (0x83FE2000, 0x83FE6000)
 PAD_TEMPO = 0x80047DD0              # the stock sample tempo (BPM x 100) for a pad, as the arp asks it
+# SY test 4: the DT1 builder's entry, where v9.52's FX deep edit jumps to its fde_dt1 (movw/movt ip, bx ip)
+DT1_ENTRY = 0x800D8118
+LED = 0x800D4910                    # the key light (key, mode, level) bounce lights its target pad with
 
 EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', 'meter_sg_end',
            'meter_mix_begin', 'meter_mix_end', 'meter_ui_tick', 'tune_format', 'diag_ui', 'diag_rx',
            'tune_rx', 'tune_ui', 'tune_pairs', 'diag_rx_c', 'tune_fp_call', 'tune_fp_step', 'syn_ui', 'memset',
            'memcpy', 'meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy_rx', 'sy_tx', 'sy_ui', 'sy_fp_call',
-           'sy_fp_step', 'sy', 'sy_block', 'sy_layout', 'sy_key_down', 'sy_key_up', 'sy_knob', 'sy_path', 'sy_file')
+           'sy_fp_step', 'sy', 'sy_block', 'sy_layout', 'sy_key_down', 'sy_key_up', 'sy_knob', 'sy_path', 'sy_file',
+           'sy_feed', 'sy_dt1', 'sy_route_dt1')
 DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file')
 
 # Exact instructions at and around every site (capstone text).
@@ -178,6 +192,17 @@ GUARDS = [
     # SY test 2: the SP's tempo as the arp reads it (arp.c refresh_tempo: PAD_TEMPO(bank x 16), bank 0x82dfff44)
     (PAD_TEMPO, 0x0C, ['push {r4, r5, r6, lr}', 'movw r4, #0x9d0', 'movt r4, #0x82e0', 'ldr r1, [r4, #0x50]'],
      'the sample tempo for a pad (r0 pad; BPM x 100), the function the arp calls for the tempo'),
+    # SY test 4: the recorder feed's choice of pair (sy_rec gives pair 0 only when the feed takes it): word 2 (pair 1)
+    # when settings + 0x64 is set, else twice the byte at 0x82e0e71c + 0x258; the frame read at r4 + word * 2.
+    (FEED + 0x18, 0x2E, ['movw r0, #0xe71c', 'movt r0, #0x82e0', 'bl #0x1bb64', 'movw r1, #0x1144', 'movs r2, #2',
+                         'movt r1, #0x82e0', 'movw ip, #0x179c', 'movt ip, #0x8059', 'movw lr, #0xd0a0',
+                         'ldr r1, [r1, #0x64]', 'movt lr, #0x202a', 'cmp r1, #0', 'it eq', 'lsleq r2, r0, #1'],
+     'recorder feed: pair 1 when [0x82e01144 + 0x64] is set, else the pair 0x1bb64 returns'),
+    (0x0001BB64, 6, ['ldrb.w r0, [r0, #0x258]', 'bx lr'], 'the feed\'s pair: the byte at 0x82e0e71c + 0x258'),
+    (FEED + 0x46, 0x0C, ['add.w r1, r4, r2, lsl #1', 'ldrh.w r4, [ip]', 'movs r2, #0', 'b #0x1caf2'],
+     'recorder feed: reads the packet (r0 on entry, in r4) at that word'),
+    (LED, 0x10, ['push {r4, r5, r6, lr}', 'mov r4, r0', 'uxth r0, r0', 'cmp r0, #0x31', 'bhi #0x800d495e',
+                 'movw r6, #0xccfc', 'mov r5, r1'], 'the key light (key < 0x32, mode, level): the picker\'s pads'),
 ]
 
 MD = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
@@ -351,7 +376,7 @@ def bounce_bridges(img):
     if len(c) < 5 or c[0][2] != 'ldr.w ip, [ip]' or c[2][1:] != (FEED | 1, 'blx ip') or not in_slot(c[3][1]) or \
             c[3][2] != 'blx ip' or c[4][1:] != (LOOP | 1, 'bx ip'):
         raise ValueError(f'bounce rx bridge {RX_BRIDGE:#x}: unexpected {listing(rx, RX_BRIDGE)[:20]}')
-    rx_call, bnc_rx = c[3][0], c[3][1]
+    rx_call, bnc_rx, feed_call = c[3][0], c[3][1], c[2][0]
     ui = read(img, UI_BRIDGE, 0x30)
     t = listing(ui, UI_BRIDGE)
     c = ip_calls(ui, UI_BRIDGE)
@@ -359,7 +384,29 @@ def bounce_bridges(img):
             not in_slot(c[0][1]) or c[0][2] != 'blx ip' or t[5:9] != ['pop {r0, r1}', 'movw r4, #0x22ac', 'movt r4, #0x8059',
                                                                     'ldr r1, [r4, #8]'] or c[1][1:] != (TICK_REST | 1, 'bx ip'):
         raise ValueError(f'bounce ui bridge {UI_BRIDGE:#x}: unexpected {t[:12]}')
-    return dict(rx_call=rx_call, bnc_rx=bnc_rx, ui_call=c[0][0], bnc_ui=c[0][1])
+    return dict(rx_call=rx_call, bnc_rx=bnc_rx, ui_call=c[0][0], bnc_ui=c[0][1], feed_call=feed_call)
+
+
+def dt1_hook(img):
+    """SY test 4: v9.52's FX deep edit jumps from the DT1 builder's entry to its fde_dt1 (movw/movt ip, bx ip), which
+    sends an FxType for slots 0-4 to fde_dt1_fxtype and everything else on to the builder (fde_dt1_stock). Returns
+    fde_dt1 (Thumb) and its listing."""
+    jump_code = read(img, DT1_ENTRY, 10)
+    t = movw_movt(jump_code, DT1_ENTRY)
+    if not t or t[1] != 'ip' or listing(jump_code, DT1_ENTRY)[2] != 'bx ip' or not t[0] & 1 or \
+            not FDE_SLOT[0] <= t[0] < FDE_SLOT[1]:
+        raise ValueError(f'{DT1_ENTRY:#x}: expected FX deep edit\'s jump to fde_dt1, found {listing(jump_code, DT1_ENTRY)}')
+    at = t[0] & ~1
+    body = listing(read(img, at, 0x10), at)
+    if body[:2] != ['sub.w ip, r1, #0x7e', 'cmp.w ip, #4'] or not body[2].startswith('bhi.w #') or \
+            not body[3].startswith('b.w #'):
+        raise ValueError(f'fde_dt1 {at:#x}: unexpected {body}')
+    stock = int(body[2].split('#')[-1], 0)
+    tail = listing(read(img, stock, 0x14), stock)
+    if tail != ['push.w {r4, r5, r6, r7, r8, sb, sl, fp, lr}', 'sub sp, #0xc', 'movw sb, #0xe1c8', 'movw ip, #0x8123',
+                'movt ip, #0x800d', 'bx ip']:
+        raise ValueError(f'fde_dt1_stock {stock:#x}: unexpected {tail}')
+    return t[0], dict(entry=hex(DT1_ENTRY), fde_dt1=hex(at), fde_dt1_stock=hex(stock), listing=body[:4])
 
 
 SG_NOTE_ON_SITE, SG_NOTE_OFF_SITE = 0x80066E64, 0x800670B8   # the stock note dispatcher: the kits' note gates
@@ -572,7 +619,7 @@ def integer_spans(map_text, obj):
     return spans
 
 
-def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fde):
+def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fde, fde_dt1):
     folder.mkdir(parents=True, exist_ok=True)
     inc = folder / 'include'
     inc.mkdir(exist_ok=True)
@@ -585,7 +632,8 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fd
         f'#define SG_PRE_TARGET {pre_target:#010x}\n#define BNC_UI {bridges["bnc_ui"]:#010x}u\n'
         f'#define BNC_RX {bridges["bnc_rx"]:#010x}u\n#define SG_MIDI {sg_midi:#010x}u\n'
         f'#define KIT_MODE {kit_mode:#010x}u\n#define FDE_DOWN {fde["down"]["handler"] | 1:#010x}u\n'
-        f'#define FDE_UP {fde["up"]["handler"] | 1:#010x}u\n#define FDE_KNOB {fde["knob"]["handler"] | 1:#010x}u\n',
+        f'#define FDE_UP {fde["up"]["handler"] | 1:#010x}u\n#define FDE_KNOB {fde["knob"]["handler"] | 1:#010x}u\n'
+        f'#define FDE_DT1_LO {fde_dt1 & 0xFFFF:#x}\n#define FDE_DT1_HI {fde_dt1 >> 16:#x}\n',
         encoding='ascii', newline='\n')
     (folder / 'sy_tables.h').write_text(sy_ref.c_header(), encoding='ascii', newline='\n')
     (folder / 'sy_names.h').write_text(sy_ref.c_names(), encoding='ascii', newline='\n')
@@ -710,6 +758,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     if not (BASE <= base and (base & 0xFFF) == 0 and base < LIMIT):
         raise ValueError(f'base {base:#x} outside {BASE:#x}..{LIMIT:#x}')
     guards, pre_target, bridges, sg_midi, kit_mode, fde = check_guards(img)
+    fde_dt1, dt1_info = dt1_hook(img)
     rows = scatter(img)
     for load, dst, n, fn in rows:
         if max(dst, base) < min(dst + n, LIMIT):
@@ -724,7 +773,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     if hits:
         raise ValueError(f'input refers to sy_block\'s slot: {hits[:4]}')
     code, syms, funcs, text, integer = compile_module(zig, (build_dir or out / 'build').resolve(), base, pre_target,
-                                                      bridges, sg_midi, kit_mode, fde)
+                                                      bridges, sg_midi, kit_mode, fde, fde_dt1)
     end = base + len(code)
     if end > LIMIT or end > GAP_END:
         raise ValueError(f'module {base:#x}+{len(code):#x} passes {LIMIT:#x}')
@@ -751,15 +800,21 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     patches.append(dict(address=SG_PRE_SITE, size=10, original_hex=bytes(img[off:off + 10]).hex(),
                         replacement_hex=new.hex(), target=sg & ~1, original_target=pre_target))
     img[off:off + 10] = new
-    for site, name, original in ((bridges['rx_call'], 'diag_rx', bridges['bnc_rx']),
-                                 (bridges['ui_call'], 'diag_ui', bridges['bnc_ui'])):
+    for site, name, original, what in (
+            (bridges['rx_call'], 'diag_rx', bridges['bnc_rx'], "bounce's bridge call -> diag_rx"),
+            (bridges['ui_call'], 'diag_ui', bridges['bnc_ui'], "bounce's bridge call -> diag_ui"),
+            (bridges['feed_call'], 'sy_feed', FEED | 1, "bounce's rx bridge: the recorder feed's call -> sy_feed"),
+            (DT1_ENTRY, 'sy_dt1', fde_dt1, "the DT1 builder's jump to FX deep edit's fde_dt1 -> sy_dt1")):
         t = syms[name] | 1
         off = file_offset(img, site, 8)
+        mm = movw_movt(bytes(img[off:off + 8]), site)
+        if not mm or mm[1] != 'ip' or mm[0] != original:
+            raise ValueError(f'{site:#x}: expected movw/movt ip of {original:#x} before {name}')
         new = bytes(KS.asm(f'movw ip, #{t & 0xFFFF}\nmovt ip, #{t >> 16}\n', site)[0])
         if listing(new, site) != [f'movw ip, #{t & 0xFFFF:#x}', f'movt ip, #{t >> 16:#x}'] or len(new) != 8:
             raise ValueError(f'bad {name} encoding')
         patches.append(dict(address=site, size=8, original_hex=bytes(img[off:off + 8]).hex(), replacement_hex=new.hex(),
-                            target=t & ~1, original_target=original & ~1, what=f"bounce's bridge call -> {name}"))
+                            target=t & ~1, original_target=original & ~1, what=what))
         img[off:off + 8] = new
     # SY test 2: FX deep edit's bridges call sy_key_down / sy_key_up in place of its handlers (one bl each)
     for name, ours in (('down', 'sy_key_down'), ('up', 'sy_key_up'), ('knob', 'sy_knob')):
@@ -787,7 +842,14 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 3: VALUE held + CTRL 1-3 set the picked tone\'s BRIGHT (-2..+2 octaves), its own '
+        description='SY synth test 4: VALUE held + EXT SOURCE opens a picker (pads lit, a pad picks, 16 off, '
+                    'CTRL 1-3 edit without VALUE, 4 s untouched / EXIT / the chord / another key close it, VALUE goes '
+                    'on to FX deep edit\'s input FX screens); VALUE + pad and VALUE + CTRL stock\'s again. ROUTING '
+                    'Mix works: while a synth listens (EXT SOURCE on, the SY synth not off or the SG page) every '
+                    'ROUTING DT1 goes to the chip as ExtIn (sy_dt1 at the builder entry, before FX deep edit\'s '
+                    'fde_dt1), and the recorder feed (sampling, resampling, looper, skip-back) gets pair 1 x 2 on Mix '
+                    '(the mix before BUS 3/4) or the input plus the synth on ExtIn (sy_feed, before the feed). '
+                    'SY synth test 3: VALUE held + CTRL 1-3 set the picked tone\'s BRIGHT (-2..+2 octaves), its own '
                     'setting (sy_ref TONES p2) and LEVEL (0..2 x), through FX deep edit\'s knob bridge (its call '
                     're-pointed to sy_knob); picks and knobs kept in B:/_sy_tones.bin (read at the first key or knob '
                     'event, written when VALUE is let go after a change, no FX screen up). '
@@ -842,6 +904,11 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
         rows_added=[dict(kind='copy', address=base, size=len(code)),
                     dict(kind='zero', address=sy_lo, size=sy_hi - sy_lo, what='sy_block (SY test 3: out of the module)')],
         sy_bss=dict(slot=[SY_BSS[0], SY_BSS[1]], used=[sy_lo, sy_hi]),
+        dt1_hook=dt1_info,
+        routing=dict(hold='while EXT SOURCE is on and the SY synth is not off (or on the Sound Generator page): '
+                          'ROUTING (system 0x5c) goes to the chip as ExtIn, the user\'s value kept and sent back after',
+                     recorder='the feed\'s pair 0 (when it takes pair 0): ROUTING Mix -> pair 1 x 2 (the mix before '
+                              'BUS 3/4), for 30 ms after the hold too; ExtIn -> the input + the synth\'s block'),
         patches=patches, guards={hex(k) if isinstance(k, int) else k: v for k, v in guards.items()},
         tune=dict(memory='tt_block in the module (tt_block_bytes): the 12 kHz ring, an analysis\' span, the '
                          'difference functions, a 2 KB stack',
@@ -854,8 +921,9 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
                        'oscillators (test 2: no stack: the tracker\'s); the tables and tones (sy_tables.h, from '
                        'tunetest/sy_ref.py) in .rodata',
                 tones=[t['name'] for t in sy_ref.TONES],
-                pick='VALUE held + pad 1-16 where the synth can play: tone 1-15, pad 16 off; popup',
-                knobs='VALUE held + CTRL 1-3 where the synth can play: BRIGHT, ' +
+                pick='test 4: VALUE held + EXT SOURCE opens the picker; pads 1-15 a tone, pad 16 off; popup, '
+                     'pads lit (white playing, blue the others, red 16)',
+                knobs='test 4: CTRL 1-3 in the picker: BRIGHT, ' +
                       '/'.join(sorted({t['p2'][0] for t in sy_ref.TONES})) + ', LEVEL of the picked tone; popup',
                 file='B:/_sy_tones.bin, 60 bytes: "SYTN", version 1, tone, muted, 15, 45 knob positions, 3 zero, '
                      'FNV-1a of the first 56',

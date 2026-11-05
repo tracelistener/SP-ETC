@@ -1,4 +1,4 @@
-"""Checks for SY synth test 3 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
+"""Checks for SY synth test 4 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
 tracker (note tracker test 2's, with test 4's click and clean readings), the SY engine (12. below), and the synth: the tracker's note on the Sound Generator,
 the cases synth test 3 got wrong on the unit (picks at the ringing string's level, strings ringing together) and
 test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT; test 5's ROUTING gate (silent on Mix,
@@ -46,7 +46,14 @@ image. On top of them:
      popup); every tone with its knobs turned value for value against sy_ref.py; the file (the stock file calls
      emulated): written when VALUE is let go after a change (not with an FX screen up), read at the first key event of
      a fresh start (the tone and knobs back, the engine as the twin with them), a bad or missing file ignored;
-     sy_block in its own zeroed slot.
+     sy_block in its own zeroed slot;
+   - test 4: VALUE + EXT SOURCE opens the picker (taken with EXT SOURCE on, on to stock with it off; FX deep edit never
+     sees it; the pads lit), a pad picks, pad 16 puts the synth off and closes it, CTRL 1-3 edit there; EXIT, the chord,
+     another page or key, 4 s close it; VALUE hands on to FX deep edit's input FX chord; VALUE + pad and VALUE + CTRL go
+     on as stock; the file at the closing key or the next release (never from the tick, never with an FX screen up);
+     the chip held on ExtIn while a synth listens (a ROUTING DT1 out as ExtIn, others untouched on the caller's stack),
+     ROUTING Mix playing, the user's value back after; sy_feed: the pairs before the feed, then pair 1 x 2 on Mix /
+     the synth added on ExtIn / nothing when the feed takes another pair, 30 ms grace.
 
 Not a hardware test: no timing (instructions are counted as a proxy), no screen, synthetic strings.
 """
@@ -73,6 +80,13 @@ TT_OFF, TT_RUN, TT_SLOW = range(3)
 TT_HEAD = 'req fx ext routing checked checks starts posted_rseq state rx steps task_attr last_mix'.split()
 ROUTING, EXTIN = 0x5C, 1           # system 0x5c, INPUT SETTING's ROUTING: 0 Mix, 1 ExtIn
 TT_MID = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_req reset_ack rseq'.split()
+# SY test 4: the hold and the recorder, after drum
+TT_TAIL = ('hold hold_at rec_mix rec_ext grace grace_at holds route_sends route_held route_last rec_blocks rec_adds '
+           'rec_other').split()
+FEED_PAIR1, FEED_PAIR = 0x82E011A8, 0x82E0E974     # the recorder feed takes pair 1 if the first is set, else this pair
+LED, LED_REFRESH = 0x800D4910, 0x802496F0          # the key light (key, mode, level); |= 2: stock paints the pads
+FEED_FN = 0x0001CA80
+HOLD_SETTLE, REC_GRACE = 12_000_000, 18_000_000    # 20 ms, 30 ms
 report = base.report
 PACKET = TXBUF + 0x6000
 
@@ -80,17 +94,18 @@ PACKET = TXBUF + 0x6000
 class Layout:
     """tt_t and tt_block_t offsets, from the module's tt_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<22I', m.bytes(sym['tt_layout'], 88))
+        v = struct.unpack('<23I', m.bytes(sym['tt_layout'], 92))
         (self.tt_bytes, self.state, self.peak, self.inp, self.w_n, self.pub, self.tot_max_ever, self.reset_ack,
          self.rseq, self.res, self.res_bytes, self.block_bytes, self.b_ring, self.b_span, self.b_d6, self.b_peaks,
-         self.b_z, self.b_started, self.b_stack, self.posted_rseq, self.b_pick, self.b_env) = v
+         self.b_z, self.b_started, self.b_stack, self.posted_rseq, self.b_pick, self.b_env, self.hold) = v
         self.syn = self.res + self.res_bytes
         check(self.state == 4 * TT_HEAD.index('state') and self.posted_rseq == 4 * TT_HEAD.index('posted_rseq') and
               self.peak == 4 * len(TT_HEAD) and self.inp == self.peak + 8 and self.w_n == self.inp + 128 and
               self.pub == self.w_n + 20 and self.rseq == self.w_n + 4 * (len(TT_MID) - 1) and
               self.res == self.rseq + 4 and self.res_bytes == 4 * len(ref.RESULT) and
-              self.tt_bytes == self.syn + 8 and self.b_pick + 16 <= self.b_stack and self.b_env + 24 <= self.b_stack,
-              'tt_t layout as the test reads it (syn, drum at the end)')
+              self.hold == self.syn + 8 and self.tt_bytes == self.hold + 4 * len(TT_TAIL) and
+              self.b_pick + 16 <= self.b_stack and self.b_env + 24 <= self.b_stack,
+              'tt_t layout as the test reads it (syn, drum, then SY test 4\'s hold and recorder fields at the end)')
 
 
 def tt_state(m, sym, lay):
@@ -103,6 +118,7 @@ def tt_state(m, sym, lay):
     st['res'] = r
     st['syn'] = struct.unpack('<I', m.bytes(t + lay.syn, 4))[0]
     st['drum'] = struct.unpack('<I', m.bytes(t + lay.syn + 4, 4))[0]
+    st.update(zip(TT_TAIL, struct.unpack(f'<{len(TT_TAIL)}I', m.bytes(t + lay.hold, 4 * len(TT_TAIL)))))
     return st
 
 
@@ -238,6 +254,35 @@ class TuneMachine(Machine):
         self.put(TCB + 0x10, 0x1001, '<I')
         for a in (SYS_GET, SET_GET):
             self.uc.hook_add(UC_HOOK_CODE, self._getter, begin=a, end=a)
+        # SY test 4: what reaches FX deep edit's fde_dt1 (sy_dt1 goes there) is recorded as (ID, index, value) and
+        # goes no further (the stock builder talks to the chip); the recorder feed records the packet's pairs 0 and 1
+        # as it finds them (r0) and returns 1; the key light records (key, mode, level).
+        self.dt1, self.dt1_sp, self.feeds, self.leds = [], [], [], []
+        self.fde_dt1 = int(man['dt1_hook']['fde_dt1'], 16)
+        self.uc.hook_add(UC_HOOK_CODE, self._dt1, begin=self.fde_dt1, end=self.fde_dt1)
+        self.uc.hook_add(UC_HOOK_CODE, self._feed, begin=FEED_FN, end=FEED_FN)
+        self.uc.hook_add(UC_HOOK_CODE, self._led, begin=LED, end=LED)
+
+    def _dt1(self, uc, a, s, _):
+        self.dt1.append(tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(4)))
+        self.dt1_sp.append(uc.reg_read(ar.UC_ARM_REG_SP))
+        uc.reg_write(ar.UC_ARM_REG_R0, 0)
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def _feed(self, uc, a, s, _):
+        r0, r1 = uc.reg_read(ar.UC_ARM_REG_R0), uc.reg_read(ar.UC_ARM_REG_R1)
+        pk = struct.unpack('<1024h', self.bytes(r0, 2048))
+        self.feeds.append((r0, r1, [pk[16 * f:16 * f + 4] for f in range(64)]))
+        uc.reg_write(ar.UC_ARM_REG_R0, 1)
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def _led(self, uc, a, s, _):
+        self.leds.append(tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(3)))
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def routing_dt1(self):
+        """The ROUTING values sent so far (DT1 ID 0x5c, BMC context, index 0)."""
+        return [v for c, i, x, v in self.dt1 if i == ROUTING and c == 0x80592500 and x == 0]
 
     def _getter(self, uc, a, s, _):
         r1 = uc.reg_read(ar.UC_ARM_REG_R1)
@@ -254,8 +299,11 @@ class TuneMachine(Machine):
         return tt_state(self, self.sym, self.lay)
 
     def ui(self, shown, advance=60_000_001):
+        """The UI's 0.1 s check, then another tick 20 ms on (SY test 4: the chip's hold settled by then)."""
         self.put(self.sym['meter'] + M_SHOWN, shown)
         self.cyc += advance
+        self.call(self.sym['tune_ui'])
+        self.cyc += HOLD_SETTLE + 1
         self.call(self.sym['tune_ui'])
 
     def feed(self, values, pair1=None):
@@ -449,7 +497,9 @@ def tracker_checks(parent_img, img, man):
     pub = struct.unpack('<4I', m.bytes(sym['tt'] + lay.pub, 16))
     check(st['state'] == TT_SLOW and st['slow_cycles'] == 850_000 and pub[2] == 850_000,
           'one step over the whole 800,000-cycle block: SLOW at once; the window so far published')
-    # 6. diag_rx with r6/r9 as the RX site leaves them: this block's bank, pairs 0 and 1, pair 0's (L + R) >> 1.
+    # 6. SY test 4: bounce's rx bridge calls sy_feed in place of the feed (the packet in r0, 0x800 in r1, as the RX
+    #    site leaves them): pairs 0 and 1 read from that packet, then the feed with the same r0/r1; diag_rx after it
+    #    no longer reads them. (Test 3: diag_rx read them from r6/r9.)
     mq = TuneMachine(img, man)
     rxbase, task = TXBUF + 0x4000, SCRATCH + 0x800
     packet = []
@@ -463,14 +513,19 @@ def tracker_checks(parent_img, img, man):
     mq.put(task + 4, 1, '<I')
     mq.uc.reg_write(ar.UC_ARM_REG_R6, task)
     mq.uc.reg_write(ar.UC_ARM_REG_R9, rxbase)
-    mq.call(sym['diag_rx'])
+    ret = mq.call(sym['sy_feed'], rxbase + 0x800, 0x800)
     st = mq.tt()
     want_in = [(packet[16 * f] + packet[16 * f + 1]) >> 1 for f in range(64)]
     p0 = max(max(abs(packet[16 * f]), abs(packet[16 * f + 1])) for f in range(64))
-    check(st['in'] == want_in and st['peak'] == [p0, 3000] and mq.uc.reg_read(ar.UC_ARM_REG_R6) == task and
-          mq.uc.reg_read(ar.UC_ARM_REG_R9) == rxbase,
-          f"diag_rx with r6/r9 as the RX site leaves them: pair 0's (L + R) >> 1 and the peaks of pairs 0 and 1 from "
-          f"this block's packet, not the other bank's ({st['peak']}); r6 and r9 kept")
+    fed = mq.feeds[-1] if mq.feeds else None
+    mq.put(sym['tt'] + lay.inp, 0, '<I')
+    mq.call(sym['diag_rx'])
+    check(st['in'] == want_in and st['peak'] == [p0, 3000] and ret == 1 and fed is not None and
+          fed[:2] == (rxbase + 0x800, 0x800) and [list(x) for x in fed[2]] == [packet[16 * f:16 * f + 4] for f in range(64)]
+          and mq.tt()['in'][:2] == [0, 0],
+          f"sy_feed (in place of the feed): pair 0's (L + R) >> 1 and the peaks of pairs 0 and 1 from the packet it is "
+          f"given ({st['peak']}), then the feed with the same r0 and r1, the packet as it was (no hold change on "
+          f"ROUTING ExtIn with no synth block), its return passed back; diag_rx after it reads no pairs")
     # 7. The readout through the UI tick: the tracker's lines; every 0.1 s while results come.
     mr = TuneMachine(img, man, fx=23)
     mr.put(base.PAGE, 1, '<h')
@@ -834,97 +889,73 @@ def synth_checks(img, man, kit_sym):
     check(gone and len(ml.midi) == 1 and ml.gsyn()['sounding'] == -1,
           f'a note playing when the page closes: forgotten without a call (the Sound Generator stops its voices '
           f'itself); back on the page it does not play again ({ml.midi})')
-    # 10. Test 5: ROUTING. On Mix the effects chip hands back the mix as heard and the synth heard its own note (tests
-    # 2-4 on the unit: stuck notes), so it plays only on ExtIn, and the page says so on Mix.
-    width, line = base.font_widths(img)
-    hint = 'SYNTH NEEDS\nROUTING ExtIn\nSHIFT+EXT SRC'
-    widest = max(sum(width(c) for c in ln) for ln in hint.split('\n'))
-    box_w, box_h = widest - 1 + 18, 3 * line - 1 + 8
+    # 10. Test 5 played only on ROUTING ExtIn (on Mix the effects chip hands back the mix as heard, and the synth heard
+    #     its own note: tests 2-4 on the unit). SY test 4: with EXT SOURCE on the chip is held on ExtIn whatever
+    #     ROUTING says, so the page plays on Mix too, 20 ms after the hold went out; no popup any more.
     mm = SynthMachine(img, man, routing=0)
     mm.popups()
     mm.ui(0)
-    mm.ui(0)
+    hold_st = mm.tt()
+    sends = mm.routing_dt1()
     posts = []
     for b in range(600):
         st = mm.tick(sig[b])
-        t = mm.posted()
-        if t is not None:
-            posts.append((b, t))
-            mm.popups(shown=0x1234)                                    # the popup is up
-    g = mm.gsyn()
-    check(st['req'] == 0 and st['state'] == TT_OFF and st['steps'] == 0 and not mm.midi and
-          posts == [(0, hint)] and g['hints'] == 1 and box_w <= 128 and box_h <= 64,
-          f"ROUTING Mix on the page with EXT SOURCE on: the tracker stays off, a pluck plays nothing, and a popup says "
-          f"so once, at the first UI tick ({posts}; widest line {widest} px -> box {box_w}x{box_h}, screen 128x64)")
-    mm.popups()
-    mm.page(1)
-    mm.tick()
-    mm.page(SG_PAGE)
-    mm.tick()
-    same = mm.posted() is None                                         # SY test 1: still on Mix, so not again
-
-    def ext_again(machine):
-        machine.ext = 0
-        machine.ui(0)
-        machine.tick()
-        machine.ext = 1
-        machine.ui(0)
-    ext_again(mm)
-    mm.tick()
-    back = mm.posted()
-    mm.popups(shown=0x1234)                                            # a stock message is up as it turns on
-    ext_again(mm)
-    for _ in range(5):
-        mm.tick()
-    waited = mm.posted() is None and mm.gsyn()['hint_due'] == 1
-    mm.popups()                                                        # it closes
-    mm.tick()
-    after = mm.posted()
-    check(same and back == hint and waited and after == hint and mm.gsyn()['hints'] == 3,
-          f'the popup again each time EXT SOURCE turns on with ROUTING Mix (SY test 1: on every stock page, so not '
-          f'on a page change); never over a message already up: it waits for it to close ({mm.gsyn()})')
-    mq = SynthMachine(img, man, ext=0, routing=0)
-    mq.popups()
-    mq.ui(0)
-    mq.ui(0)
-    for _ in range(10):
-        mq.tick()
-    mp = SynthMachine(img, man, page=1, routing=0)
-    md = SynthMachine(img, man, page=DOOM_PAGE, routing=0)
-    for x in (mp, md):
-        x.popups()
-        x.ui(0)
-        x.ui(0)
-        for _ in range(10):
-            x.tick()
-    check(mq.posted() is None and mq.gsyn()['hints'] == 0 and md.posted() is None and md.gsyn()['hints'] == 0 and
-          mp.posted() == hint and mp.gsyn()['hints'] == 1,
-          "no popup with EXT SOURCE off (the synths are off anyway) or on DOOM OS's own pages; SY test 1: on the "
-          "main screen too (the SY engine needs ExtIn as well)")
+        if mm.posted() is not None:
+            posts.append((b, mm.posted()))
+    check(hold_st['hold'] == 1 and hold_st['holds'] == 1 and sends == [1] and hold_st['rec_mix'] == 1 and
+          hold_st['rec_ext'] == 0 and st['state'] == TT_RUN and mm.midi and mm.midi[0][2] == 40 and not posts,
+          f"ROUTING Mix, EXT SOURCE on, the Sound Generator page: the chip held on ExtIn (one ROUTING DT1, value 1: "
+          f"{sends}), the recorder given the mix; the tracker runs and the pluck plays ({mm.midi[:1]}); no popup "
+          f"({posts})")
+    mw = SynthMachine(img, man, routing=0)
+    mw.cyc += 60_000_001
+    mw.call(mw.sym['tune_ui'])                                            # the check: EXT SOURCE on, the hold sent
+    early = mw.tt()
+    mw.cyc += HOLD_SETTLE - 1_000
+    mw.call(mw.sym['tune_ui'])
+    early2 = mw.tt()
+    mw.cyc += 2_000
+    mw.call(mw.sym['tune_ui'])
+    late = mw.tt()
+    check(early['hold'] == 1 and early['req'] == 0 and early2['req'] == 0 and late['req'] == 1 and
+          mw.routing_dt1() == [1],
+          'the Sound Generator page waits 20 ms after the hold before its tracker listens (the chip switches first)')
+    mm.ext = 0
+    mm.ui(0)
+    for _ in range(3):
+        st = mm.tick()
+    off = mm.tt()
+    check(off['hold'] == 0 and mm.routing_dt1() == [1, 0] and off['grace'] == 1 and off['rec_mix'] == 1 and
+          st['state'] == TT_OFF,
+          f"EXT SOURCE off: the hold lets go, the user's ROUTING (Mix) sent back ({mm.routing_dt1()}); the recorder "
+          f"keeps the mix 30 ms while the chip switches back; the tracker stops")
+    mm.cyc += REC_GRACE
+    mm.call(mm.sym['tune_ui'])
+    check(mm.tt()['grace'] == 0 and mm.tt()['rec_mix'] == 0,
+          'after 30 ms the recorder takes pair 0 as stock again')
     mx = SynthMachine(img, man)
-    mx.ui(0)
     mx.ui(0)
     b = 0
     while not mx.midi and b < 600:
         mx.tick(sig[b])
         b += 1
     on = list(mx.midi)
-    mx.routing = 0
-    mx.ui(0)
+    mx.ext = 0
     mx.ui(0)
     for k in range(3):
         st = mx.tick(sig[b + k])
     check(len(on) == 1 and on[0][2] == 40 and on[0][4] == 0 and st['state'] == TT_OFF and
           mx.midi[1:] == [(on[0][0] + 1, 2, 40, 0, 1)] and mx.gsyn()['sounding'] == -1,
-          f'a note playing when ROUTING turns Mix: let go at the next UI tick ({mx.midi})')
-    mr = SynthMachine(img, man, routing=0)
+          f'a note playing when EXT SOURCE goes off: let go at the next UI tick ({mx.midi})')
+    mr = SynthMachine(img, man, routing=0, ext=0)
     mr.ui(1)
     for values in ref.to_blocks(ref.open_strings((40, 45), ring=0.8))[:1200]:
         st = mr.tick(values)
-    check(st['state'] == TT_RUN and st['res']['locks'] >= 1 and not mr.midi and mr.gsyn()['sounding'] == -1,
-          f"the readout shown on the page on Mix: the tracker runs for it ({st['res']['locks']} steady notes) but "
-          f"nothing plays ({len(mr.midi)} calls)")
-    report['synth']['routing'] = dict(hint=hint, hint_box=[box_w, box_h])
+    check(st['state'] == TT_RUN and st['res']['locks'] >= 1 and not mr.midi and mr.gsyn()['sounding'] == -1 and
+          mr.tt()['hold'] == 0 and not mr.routing_dt1(),
+          f"the readout shown on the page with EXT SOURCE off: the tracker runs for it ({st['res']['locks']} steady "
+          f"notes), nothing plays, no hold ({len(mr.midi)} calls)")
+    report['synth']['routing'] = dict(hold='EXT SOURCE on: ROUTING DT1s go out as ExtIn; 20 ms settle')
     # 11. Test 6. Synth test 5 on the unit: "if you pluck a note and release right away you hear a second note on
     # release". A fretted note let go 0.15 s after the pick: the note is damped (5 ms), the open string or a touch
     # harmonic rings briefly far quieter, the string leaving the fret clicks; test 5 moved to the open string.
@@ -984,20 +1015,25 @@ SY_FILE_AT = SY_KNOB_AT + 48
 SY_RUN_AT = SY_FILE_AT + 4 * len(SY_FILE)
 SY_OUT_AT = SY_RUN_AT + 4 * len(SY_RUNF)
 SY_TAIL = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack'.split()
+SY_PICK = 'picker picker_at picker_page opens closes handoffs'.split()   # test 4, then 4 bytes, rec_fresh, rec[64]
+KEY_EXT, KEY_EXIT, KEY_VALUE = 0x12, 0x22, 0x31
+PAD_PLAYING, PAD_SOUND, PAD_OFF, PAD_OFF_NOW = 0xFFFFFF, 0x000080, 0x800000, 0xFF0000
+EV = SCRATCH + 0x200
 DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own screens)
 
 
 class SyLayout:
     """sy_t and sy_block_t offsets, from the module's sy_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<21I', m.bytes(sym['sy_layout'], 84))
+        v = struct.unpack('<23I', m.bytes(sym['sy_layout'], 92))
         (self.sy_bytes, self.state, self.out, self.w_n, self.pub, self.tot_max_ever, self.block_bytes, self.e,
          self.per, self.ph, self.amp, self.owned, self.env, self.started, self.tone, self.nper, self.tone_req,
-         self.fe, self.knob, self.dirty, self.loads) = v
+         self.fe, self.knob, self.dirty, self.loads, self.picker, self.rec) = v
         check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
               self.dirty == SY_KNOB_AT + 45 and self.loads == SY_FILE_AT and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
-              self.sy_bytes == self.tot_max_ever + 20 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
+              self.picker == self.tot_max_ever + 20 and self.rec == self.picker + 32 and
+              self.sy_bytes == self.rec + 128 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
               self.started + 12 <= self.block_bytes,
               'sy_t and sy_block_t layout as the test reads it')
 
@@ -1020,7 +1056,48 @@ class SyMachine(SynthMachine):
         st.update(zip(SY_RUNF, struct.unpack(f'<{len(SY_RUNF)}I', self.bytes(s + SY_RUN_AT, 4 * len(SY_RUNF)))))
         st['out'] = list(struct.unpack('<64i', self.bytes(s + self.sl.out, 256)))
         st.update(zip(SY_TAIL, struct.unpack(f'<{len(SY_TAIL)}I', self.bytes(s + self.sl.w_n, 4 * len(SY_TAIL)))))
+        st.update(zip(SY_PICK, struct.unpack('<IIi3I', self.bytes(s + self.sl.picker, 24))))
+        (st['ext_taken'], st['exit_taken'], st['value_taken'], st['lit'],
+         st['rec_fresh']) = struct.unpack('<4BI', self.bytes(s + self.sl.picker + 24, 8))
+        st['rec'] = list(struct.unpack('<64h', self.bytes(s + self.sl.rec, 128)))
         return st
+
+    def ev(self, fn, kind, k, pos=0):
+        """One UI event (kind 5 press, 6 release, 9 knob) through sy_key_down / sy_key_up / sy_knob: what it returned
+        and the stubbed calls it made, as (address, r0)."""
+        self.uc.mem_write(EV, struct.pack('<4h', kind, k, pos, 0))
+        self.log.clear()
+        r = self.call(self.sym[fn], EV)
+        return r, [(a, r0) for a, r0, *_ in self.log]
+
+    def press(self, k):
+        return self.ev('sy_key_down', 5, k)
+
+    def release(self, k):
+        return self.ev('sy_key_up', 6, k)
+
+    def turn(self, k, pos):
+        return self.ev('sy_knob', 9, k, pos)
+
+    def value(self, held):
+        b = self.get(base.KEYS + 6, '<B')
+        self.put(base.KEYS + 6, (b | 2) if held else (b & ~2), '<B')
+
+    def chord(self):
+        """VALUE held, EXT SOURCE pressed and let go, VALUE let go: the press's and the release's results."""
+        self.value(True)
+        r = self.press(KEY_EXT), self.release(KEY_EXT)
+        self.value(False)
+        return r
+
+    def packet(self, pair0, pair1):
+        """A packet at PACKET: pair 0 L = R = pair0, pair 1 L = R = pair1 (lists of 64), the others 0."""
+        pk = [0] * 1024
+        for f in range(64):
+            pk[16 * f] = pk[16 * f + 1] = pair0[f]
+            pk[16 * f + 2] = pk[16 * f + 3] = pair1[f]
+        self.uc.mem_write(PACKET, struct.pack('<1024h', *pk))
+        return PACKET
 
     def start(self):
         """The UI's 0.1 s check (input FX, EXT SOURCE, ROUTING), then sy_ui."""
@@ -1080,7 +1157,8 @@ def sy_checks(parent_img, img, man, kit_sym):
     sym = man['symbols']
     rng = random.Random(404)
     report['sy'] = {}
-    # 1. When it plays: every page but the Sound Generator's, with EXT SOURCE on and ROUTING on ExtIn.
+    # 1. When it plays: every page but the Sound Generator's, with EXT SOURCE on (test 4: ROUTING Mix too, the chip
+    #    held on ExtIn).
     m = SyMachine(img, man)
     lay = m.sl
     m.uc.mem_write(sym['sy_block'], b'\xA5' * lay.block_bytes)         # leftovers of an earlier run
@@ -1088,8 +1166,10 @@ def sy_checks(parent_img, img, man, kit_sym):
     check(m.sy()['req'] == 0, 'before the UI has read EXT SOURCE and ROUTING: the engine not started')
     m.start()
     st = m.sy()
-    check(st['req'] == 1 and st['starts'] == 1 and not any(m.bytes(sym['sy_block'], lay.block_bytes)),
-          'main screen, EXT SOURCE on, ROUTING ExtIn: the engine cleared and handed over')
+    check(st['req'] == 1 and st['starts'] == 1 and not any(m.bytes(sym['sy_block'], lay.block_bytes)) and
+          m.routing_dt1() == [1],
+          'main screen, EXT SOURCE on, ROUTING ExtIn: the chip held (ROUTING DT1 ExtIn), the engine cleared and handed '
+          'over')
     st = m.step()
     check(st['state'] == SY_RUN and st['steps'] == 1 and st['fresh'] == 1 and
           m.get(sym['sy_block'] + lay.started, '<I') == 1 and st['out'] == [0] * 64,
@@ -1116,8 +1196,7 @@ def sy_checks(parent_img, img, man, kit_sym):
           m.get(sym['sy_block'] + lay.started, '<I') == 1,
           'back on the main screen: cleared and started afresh')
     quiet = {}
-    for label, kw, page in (('ROUTING Mix', dict(routing=0), 1), ('EXT SOURCE off', dict(ext=0), 1),
-                            ('Sound Generator page', dict(), SG_PAGE)):
+    for label, kw, page in (('EXT SOURCE off', dict(ext=0), 1), ('Sound Generator page', dict(), SG_PAGE)):
         q = SyMachine(img, man, page=page, **kw)
         q.start()
         for b in range(40):
@@ -1126,9 +1205,15 @@ def sy_checks(parent_img, img, man, kit_sym):
     d = SyMachine(img, man, page=DOOM_PAGE)
     d.start()
     st = d.step(sig[0])
-    check(all(v == (0, SY_OFF, 0, 0) for v in quiet.values()) and st['state'] == SY_RUN,
-          f'not on ROUTING Mix, not with EXT SOURCE off, not on the Sound Generator page; on any other page, '
-          f'DOOM OS\'s too ({quiet})')
+    mix = SyMachine(img, man, routing=0)
+    mix.start()
+    for b in range(40):
+        st_mix = mix.step(sig[b])
+    check(all(v == (0, SY_OFF, 0, 0) for v in quiet.values()) and st['state'] == SY_RUN and
+          st_mix['state'] == SY_RUN and st_mix['starts'] == 1 and mix.routing_dt1() == [1] and
+          mix.tt()['rec_mix'] == 1,
+          f'not with EXT SOURCE off, not on the Sound Generator page; on any other page, DOOM OS\'s too; test 4: on '
+          f'ROUTING Mix too (the chip held on ExtIn, the recorder given the mix) ({quiet})')
     mm = SyMachine(img, man)
     mm.start()
     for b in range(100):
@@ -1136,8 +1221,10 @@ def sy_checks(parent_img, img, man, kit_sym):
     mm.routing = 0
     mm.ui(0)
     states = [mm.step(sig[100 + k])['state'] for k in range(12)]
-    check(states[:8] == [SY_RUN] * 8 and states[9:] == [SY_OFF] * 3,
-          f'ROUTING turned to Mix while it plays: it fades out and stops ({states})')
+    t = mm.tt()
+    check(states == [SY_RUN] * 12 and t['rec_mix'] == 1 and t['rec_ext'] == 0 and mm.routing_dt1() == [1],
+          f'ROUTING turned to Mix while it plays: it plays on (the hold stays), the recorder now given the mix '
+          f'({states})')
     # 2. The module against sy_ref.py, value for value, on the same blocks.
     bend = np.concatenate([np.zeros(4800), ref.guitar(ref._hz(55), 0.9, bend=(0.2, 0.5, 200)), np.zeros(2400)])
     # (signal, the notes whose partials should sound: none for the bend, whose pitch moves, and the clipped strum,
@@ -1369,71 +1456,72 @@ def sy_tone_checks(img, man):
           f'block at one a cycle)')
     report['sy']['tones'] = dict(worst_step_instructions=worst, peaks=peaks,
                                  names=[t['name'] for t in sy_ref.TONES])
-    # 2. The pick: VALUE held + a pad, where the synth can play. FX deep edit's handlers (stubbed: they record the
-    #    call and return 0) are asked first on a press, and on every release the pick did not take.
+    # 2. Test 4: the picker. VALUE held + EXT SOURCE (EXT SOURCE on) opens it: the press and its release taken, FX deep
+    #    edit's handlers (stubbed: they record the call and return 0) never see them; the pads lit; a pad picks (press
+    #    and release taken, FX deep edit not asked); pad 16 puts it off and closes the picker. VALUE + pad with the
+    #    picker closed goes on (FX deep edit, then stock's silent sample select).
     down, up = int(fde['down']['handler'], 16), int(fde['up']['handler'], 16)
     mk = SyMachine(img, man)
     mk.stub(down, 0)
     mk.stub(up, 0)
+    mk.stub(0x8001F730, 0)                                              # the popup close
     mk.start()
     width, line = base.font_widths(img)
-
-    def key(fn, k):
-        mk.uc.mem_write(SCRATCH + 0x200, struct.pack('<4h', 5, k, 0, 0))
-        mk.log.clear()
-        r = mk.call(sym[fn], SCRATCH + 0x200)
-        return r, [(a, r0) for a, r0, *_ in mk.log]
-
-    def value(held):
-        b = mk.get(base.KEYS + 6, '<B')
-        mk.put(base.KEYS + 6, (b | 2) if held else (b & ~2), '<B')
-
     mk.popups()
-    value(False)
-    plain = key('sy_key_down', 3)
-    plain_up = key('sy_key_up', 3)
-    value(True)
-    mk.popups()
-    took = key('sy_key_down', 3)
+    mk.value(True)
+    vpad = mk.press(3)
+    vpad_up = mk.release(3)
+    mk.leds.clear()
+    opened = mk.press(KEY_EXT)
     text = mk.posted()
     st = mk.sy()
-    released = key('sy_key_up', 3)
-    st2 = mk.sy()
-    other = key('sy_key_down', 0x22)                                   # EXIT with VALUE held: not a pad
-    check(plain == (0, [(down, SCRATCH + 0x200)]) and plain_up == (0, [(up, SCRATCH + 0x200)]) and
-          took == (1, [(down, SCRATCH + 0x200)]) and text == sy_ref.popup_name(3) and st['tone_req'] == 3 and
-          st['taken'] == 8 and st['picks'] == 1 and released == (1, []) and st2['taken'] == 0 and
-          other == (0, [(down, SCRATCH + 0x200)]),
-          f'VALUE + pad 4: FX deep edit asked first, then tone 4 picked ({text!r}), the press and its release taken '
-          f'(the release never reaches FX deep edit); a pad without VALUE, and VALUE + another key, go on as before')
+    leds = list(mk.leds)
+    opened_up = mk.release(KEY_EXT)
+    mk.value(False)
     mk.popups()
-    off = key('sy_key_down', 15)
+    took = mk.press(3)
+    ptext = mk.posted()
+    st2 = mk.sy()
+    released = mk.release(3)
+    lit = [(0, 1, PAD_PLAYING)] + [(p, 1, PAD_SOUND) for p in range(1, 15)] + [(15, 1, PAD_OFF)]
+    check(vpad == (0, [(down, EV)]) and vpad_up == (0, [(up, EV)]) and opened == (1, []) and opened_up == (1, []) and
+          text == f'{sy_ref.popup_name(0)}\nTAP A PAD' and st['picker'] == 1 and st['opens'] == 1 and leds == lit and
+          took == (1, []) and ptext == sy_ref.popup_name(3) and st2['tone_req'] == 3 and st2['taken'] == 8 and
+          st2['picks'] == 1 and released == (1, []) and mk.sy()['taken'] == 0,
+          f'VALUE + pad with the picker closed goes on (FX deep edit, then the page: stock\'s sample select); VALUE + '
+          f'EXT SOURCE opens the picker ({text!r}; the press and release taken, FX deep edit never sees them; the '
+          f'pads white / blue / red); pad 4 there picks tone 4 ({ptext!r}), its press and release taken')
+    mk.popups()
+    mk.uc.mem_write(LED_REFRESH, b'\0\0')
+    off = mk.press(15)
     off_text = mk.posted()
-    key('sy_key_up', 15)
+    key_off = mk.sy()
+    mk.release(15)
     sig = ref.to_blocks(sy_strum('G')[0])
     states = [mk.step(sig[k])['state'] for k in range(12)]
     st = mk.sy()
     mk.popups()
-    key('sy_key_down', 6)
-    key('sy_key_up', 6)
+    mk.chord()
+    st_on = mk.sy()
+    mk.press(6)
+    mk.release(6)
     mk.step(sig[12])
     st3 = mk.step(sig[13])
-    check(off[0] == 1 and off_text == 'SY OFF' and st['muted'] == 1 and states[-1] == SY_OFF and
-          SY_RUN in states and st3['state'] == SY_RUN and st3['muted'] == 0 and st3['tone_req'] == 6 and
-          st3['starts'] == 2 and mk.get(sym['sy_block'] + mk.sl.tone, '<I') == 6,
-          f'VALUE + pad 16: SY OFF, the synth fades out and stops ({states}); VALUE + pad 7: on again, started '
-          f'afresh on tone 7')
+    check(off == (1, []) and off_text == 'SY OFF' and key_off['picker'] == 0 and key_off['closes'] == 1 and
+          mk.get(LED_REFRESH, '<H') & 2 and st['muted'] == 1 and states[-1] == SY_OFF and SY_RUN in states and
+          st_on['picker'] == 1 and st_on['muted'] == 0 and st3['state'] == SY_RUN and st3['muted'] == 0 and
+          st3['tone_req'] == 6 and st3['starts'] == 2 and mk.get(sym['sy_block'] + mk.sl.tone, '<I') == 6,
+          f'pad 16 in the picker: SY OFF, the picker closes (stock paints the pads again), the synth fades out and '
+          f'stops ({states}); the chord again: the picker, the synth on again; pad 7: started afresh on tone 7')
     quiet = []
-    for label, kw, page in (('ROUTING Mix', dict(routing=0), 1), ('Sound Generator page', dict(), SG_PAGE)):
+    for label, kw, page in (('Sound Generator page', dict(), SG_PAGE),):
         q = SyMachine(img, man, page=page, **kw)
         q.stub(down, 0)
         q.start()
-        q.put(base.KEYS + 6, 2, '<B')
-        q.uc.mem_write(SCRATCH + 0x200, struct.pack('<4h', 5, 2, 0, 0))
-        quiet.append((label, q.call(sym['sy_key_down'], SCRATCH + 0x200), q.sy()['tone_req']))
-    check(all(r == 0 and t == 0 for _, r, t in quiet),
-          f'where the synth cannot play (ROUTING Mix, the Sound Generator page) VALUE + pad goes on to the page '
-          f'({quiet})')
+        q.value(True)
+        quiet.append((label, q.press(KEY_EXT), q.sy()['picker']))
+    check(all(r == (0, [(down, EV)]) and p == 0 for _, r, p in quiet),
+          f'on the Sound Generator page VALUE + EXT SOURCE stays FX deep edit\'s (its input FX screens) ({quiet})')
     texts = [sy_ref.popup_name(p) for p in range(16)]
     widest = max(sum(width(c) for c in t) for t in texts)
     check(widest - 1 + 18 <= 128, f'every pick\'s popup fits the screen: widest {widest} px ({max(texts, key=len)!r})')
@@ -1446,9 +1534,9 @@ def sy_tone_checks(img, man):
     mism, fade = [], []
     for b, values in enumerate(blocks[:420]):
         if b == 200:
-            mc.put(base.KEYS + 6, 2, '<B')
-            mc.uc.mem_write(SCRATCH + 0x200, struct.pack('<4h', 5, 8, 0, 0))
-            mc.call(sym['sy_key_down'], SCRATCH + 0x200)
+            mc.chord()
+            mc.press(8)
+            mc.release(8)
         mc.feed(values)
         mc.call(sym['sy_rx'])
         got = list(struct.unpack('<64i', mc.bytes(sym['sy'] + mc.sl.out, 256)))
@@ -1459,17 +1547,19 @@ def sy_tone_checks(img, man):
             fade.append((b, mc.get(sym['sy_block'] + mc.sl.tone, '<I'), max(abs(v) for v in got)))
     switched = next(b for b, t, _ in fade if t == 8)
     check(not mism and switched == 207 and fade[2][2] > 0 and fade[9][2] < fade[2][2],
-          f'VALUE + pad 9 while playing: the output fades out over 8 blocks, tone 9 from block {switched}, fades in; '
+          f'pad 9 in the picker while playing: the output fades out over 8 blocks, tone 9 from block {switched}, fades in; '
           f'the module = sy_ref.py value for value across it (first differences {mism[:3]})')
     # 4. The builder's three calls: FX deep edit's bridges now call sy_key_down / sy_key_up / sy_knob.
     pairs = (('down', 'sy_key_down'), ('up', 'sy_key_up'), ('knob', 'sy_knob'))
     calls = {name: (mk.bytes(int(fde[name]['call'], 16), 4).hex(), fn) for name, fn in pairs}
-    patched = [p for p in man['patches'] if 'FX deep edit' in p.get('what', '')]
+    patched = [p for p in man['patches'] if "bridge: bl -> sy_" in p.get('what', '')]
     check(len(patched) == 3 and all(p['target'] == sym[fn] & ~1 and p['original_target'] == int(fde[n]['handler'], 16)
                                     for p, (n, fn) in zip(patched, pairs)) and
           all(mk.bytes(p['address'], 4).hex() == p['replacement_hex'] for p in patched),
           f'FX deep edit\'s bridges call sy_key_down, sy_key_up and sy_knob (bl), in place of its handlers {calls}')
     sy_knob_checks(img, man)
+    sy_picker_checks(img, man)
+    sy_route_checks(img, man)
 
 
 FILE_OPEN, FILE_READ, FILE_WRITE, FILE_CLOSE = 0x800DEC60, 0x800DEC48, 0x800DD9B8, 0x800DEBD8
@@ -1529,51 +1619,35 @@ def sy_file_bytes(tone, muted, knobs):
 
 
 def sy_knob_checks(img, man):
-    """SY test 3: the knobs and the file."""
+    """SY test 3's knobs and file, through test 4's picker."""
     import sy_ref
     sym = man['symbols']
     fde = man['guards']['fde']
     down, up, knob = (int(fde[n]['handler'], 16) for n in ('down', 'up', 'knob'))
-    ev = SCRATCH + 0x200
 
     def machine(store=None, **kw):
         x = SyMachine(img, man, store=store, **kw)
         for a in (down, up, knob):
             x.stub(a, 0)
         x.start()
+        x.popups()
         return x, x.files
-
-    def send(x, fn, kind, k, pos=0):
-        x.uc.mem_write(ev, struct.pack('<4h', kind, k, pos, 0))
-        x.log.clear()
-        r = x.call(sym[fn], ev)
-        return r, [a for a, *_ in x.log]
-
-    def value(x, held):
-        b = x.get(base.KEYS + 6, '<B')
-        x.put(base.KEYS + 6, (b | 2) if held else (b & ~2), '<B')
-    # 1. VALUE + CTRL 1-3 on the picked tone (SUPERSAW): the knob's position, the popup, the turn taken.
+    # 1. CTRL 1-3 in the picker on the picked tone (SUPERSAW): the knob's position, the popup, the turn taken (FX deep
+    #    edit's knob handler not asked); CTRL 4 goes on; with the picker closed CTRL 1-3 go on, VALUE held or not
+    #    (VALUE + CTRL is stock's sub-parameter edit again).
     m, files = machine()
-    value(m, True)
-    send(m, 'sy_key_down', 5, 3)
-    send(m, 'sy_key_up', 6, 3)
+    m.chord()
+    m.press(3)
+    m.release(3)
     m.popups()
-    turned = send(m, 'sy_knob', 9, 2, 100)
+    turned = m.turn(2, 100)
     text = m.posted()
     st = m.sy()
     m.popups()
-    bright = send(m, 'sy_knob', 9, 1, 0)
-    level = send(m, 'sy_knob', 9, 3, 127)
-    ctrl4 = send(m, 'sy_knob', 9, 4, 30)
-    value(m, False)
-    plain = send(m, 'sy_knob', 9, 2, 10)
-    st2 = m.sy()
-    check(turned == (1, [knob]) and text == 'SY 4 SUPERSAW\nDETUNE 100' and st['knob'][3] == [0, 36, 0] and
-          st['dirty'] == 1 and bright[0] == 1 and level[0] == 1 and st2['knob'][3] == [-64, 36, 63] and
-          ctrl4 == (0, [knob]) and plain == (0, [knob]) and st2['knob'][3][1] == 36,
-          f'VALUE + CTRL 2 on SUPERSAW: FX deep edit\'s knob handler asked first, then DETUNE to the knob\'s 100 '
-          f'({text!r}), the turn taken; CTRL 1 and 3 BRIGHT and LEVEL; CTRL 4, and a turn without VALUE, go on')
-    # 2. The file: written when VALUE is let go after the change, not with an FX screen up.
+    bright = m.turn(1, 0)
+    level = m.turn(3, 127)
+    ctrl4 = m.turn(4, 30)
+    # 2. The file: written at the key that closes the picker, or at the next release, never with an FX screen up.
     m.put(TOP_OBJECT, SCRATCH + 0x400, '<I')
     m.put(SCRATCH + 0x600, FX_VIEW_VTABLE, '<I')
     shown = [True]
@@ -1583,22 +1657,34 @@ def sy_knob_checks(img, man):
         uc.reg_write(ar.UC_ARM_REG_R0, SCRATCH + 0x600 if (shown[0] and i == 0) else 0)
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
     m.uc.hook_add(UC_HOOK_CODE, view_at, begin=VIEW_AT, end=VIEW_AT)
-    value(m, True)
-    send(m, 'sy_key_down', 5, 0x31)
-    rel = send(m, 'sy_key_up', 6, 0x31)
+    closed = m.press(KEY_EXIT)
+    closed_up = m.release(KEY_EXIT)
     held_back = (len(files.writes), m.sy()['dirty'])
+    m.value(True)
+    plain_v = m.turn(2, 10)
+    m.value(False)
+    plain = m.turn(2, 11)
+    st2 = m.sy()
+    check(turned == (1, []) and text == 'SY 4 SUPERSAW\nDETUNE 100' and st['knob'][3] == [0, 36, 0] and
+          st['dirty'] == 1 and bright == (1, []) and level == (1, []) and st2['knob'][3] == [-64, 36, 63] and
+          ctrl4 == (0, [(knob, EV)]) and plain_v == (0, [(knob, EV)]) and plain == (0, [(knob, EV)]) and
+          st2['picker'] == 0,
+          f'CTRL 2 in the picker on SUPERSAW: DETUNE to the knob\'s 100 ({text!r}), the turn taken, FX deep edit not '
+          f'asked; CTRL 1 and 3 BRIGHT and LEVEL; CTRL 4 goes on; once EXIT closed it, CTRL 2 goes on (VALUE held or '
+          f'not)')
     shown[0] = False
-    rel2 = send(m, 'sy_key_up', 6, 0x31)
+    rel2 = m.release(0)
     st3 = m.sy()
     want = sy_file_bytes(3, 0, st3['knob'])
-    check(held_back == (0, 1) and rel == (0, [up]) and rel2 == (0, [up]) and
+    check(closed == (1, []) and closed_up == (1, []) and held_back == (0, 1) and rel2 == (0, [(up, EV)]) and
           files.writes == [(SY_PATH, want)] and st3['dirty'] == 0 and st3['saves'] == 1,
-          f'VALUE let go with an FX screen up: no file yet; with none, {SY_PATH} written once ({len(want)} bytes: '
-          f'"SYTN", version 1, tone 4, the 45 knobs, FNV-1a), the release still FX deep edit\'s')
+          f'EXIT closing the picker with an FX screen up: no file yet (nor at its release); at the next release with '
+          f'none, {SY_PATH} written once ({len(want)} bytes: "SYTN", version 1, tone 4, the 45 knobs, FNV-1a), that '
+          f'release still FX deep edit\'s')
     # 3. A fresh start with that file: read at the first key event; the tone and knobs back; the engine as the twin.
     mf, f2 = machine({SY_PATH: want})
     before = mf.sy()['loaded']
-    send(mf, 'sy_key_down', 5, 0x12)                                   # EXT SOURCE: any key reads the file first
+    mf.press(KEY_EXT)                                                   # EXT SOURCE: any key reads the file first
     st4 = mf.sy()
     eng = sy_ref.Engine(3)
     eng.knobs[3] = st4['knob'][3]
@@ -1618,22 +1704,202 @@ def sy_knob_checks(img, man):
     bad = bytearray(want)
     bad[20] ^= 1
     mb, f3 = machine({SY_PATH: bytes(bad)})
-    send(mb, 'sy_key_down', 5, 0x12)
+    mb.press(KEY_EXT)
     mn, f4 = machine()
-    send(mn, 'sy_knob', 9, 2, 50)
+    mn.turn(2, 50)
     sb, sn = mb.sy(), mn.sy()
     check(sb['bad_files'] == 1 and sb['loads'] == 0 and sb['tone_req'] == 0 and all(r == [0, 0, 0] for r in sb['knob'])
           and sn['loaded'] == 1 and sn['loads'] == 0 and sn['bad_files'] == 0 and not f4.writes,
           'a file whose sum is wrong is ignored (the tones as designed); no file: nothing read, nothing written yet')
-    # 4. The popups fit the screen: the tone's line and the setting's at the knob's top.
+    # 4. The popups fit the screen: the tone's line and the setting's at the knob's top; the picker's own.
     width, line = base.font_widths(img)
     texts = [f'{sy_ref.popup_name(t)}\n{n} 127' for t in range(len(sy_ref.TONES))
              for n in ('BRIGHT', sy_ref.TONE[t]['p2name'], 'LEVEL')]
+    texts += [f'{sy_ref.popup_name(t)}\nTAP A PAD' for t in range(len(sy_ref.TONES))]
     widest = max(sum(width(c) for c in ln) for t in texts for ln in t.split('\n'))
-    check(widest - 1 + 18 <= 128 and 2 * line - 1 + 8 <= 64,
-          f'every knob popup fits the screen: widest line {widest} px')
+    check(widest <= 111 and 2 * line - 1 + 8 <= 64,
+          f'every knob and picker popup fits the screen: widest line {widest} px (111 at most)')
     report['sy']['knobs'] = dict(p2=[t['p2name'] for t in sy_ref.TONE], file=SY_PATH, file_bytes=len(want),
                                  widest_popup_px=widest)
+
+
+def sy_picker_checks(img, man):
+    """SY test 4: the picker's other ways in and out, its pads, its time, and VALUE on to the input FX screens."""
+    sym = man['symbols']
+    fde = man['guards']['fde']
+    down, up, knob = (int(fde[n]['handler'], 16) for n in ('down', 'up', 'knob'))
+    close_fn = 0x8001F730
+
+    def machine(down_ret=0, **kw):
+        x = SyMachine(img, man, **kw)
+        x.stub(down, down_ret)
+        x.stub(up, 0)
+        x.stub(knob, 0)
+        x.stub(close_fn, 0)
+        x.start()
+        x.popups()
+        return x
+    # 1. EXT SOURCE off: the chord's press goes on (stock switches the input on), the picker opens; its release too.
+    a = machine(ext=0)
+    a.value(True)
+    r_down, r_up = a.press(KEY_EXT), a.release(KEY_EXT)
+    a.value(False)
+    sa = a.sy()
+    check(r_down == (0, []) and r_up == (0, [(up, EV)]) and sa['picker'] == 1 and sa['ext_taken'] == 0,
+          'EXT SOURCE off: VALUE + EXT SOURCE opens the picker and its press goes on to stock (the input on), FX deep '
+          'edit not asked; the release goes on too')
+    # 2. EXIT closes it (taken, its release too): stock paints the pads again, the picker's popup closed if it is up.
+    b = machine()
+    b.chord()
+    b.put(base.POPUP_SHOWN, 0x1234, '<I')
+    b.uc.mem_write(LED_REFRESH, b'\0\0')
+    ex, ex_up = b.press(KEY_EXIT), b.release(KEY_EXIT)
+    sb = b.sy()
+    check(ex[0] == 1 and [x for x, _ in ex[1]] == [close_fn] and ex_up == (1, []) and sb['picker'] == 0 and
+          sb['lit'] == 0 and b.get(LED_REFRESH, '<H') & 2,
+          'EXIT closes the picker: taken with its release, its popup closed, stock asked to paint the pads again')
+    # 3. Untouched for 4 s: the UI tick closes it, the pads painted every tick until then; the pick is written at the
+    #    next key release (never from the tick).
+    c = machine()
+    c.chord()
+    c.press(5)
+    c.release(5)
+    c.leds.clear()
+    c.call(sym['sy_ui'])
+    painted = list(c.leds)
+    c.cyc += 2_400_000_000 - 1_000
+    c.call(sym['sy_ui'])
+    still = c.sy()['picker']
+    c.cyc += 2_000
+    c.call(sym['sy_ui'])
+    sc = c.sy()
+    w0 = len(c.files.writes)
+    c.release(9)
+    check(len(painted) == 16 and painted[5] == (5, 1, PAD_PLAYING) and painted[0] == (0, 1, PAD_SOUND) and
+          still == 1 and sc['picker'] == 0 and sc['dirty'] == 1 and w0 == 0 and len(c.files.writes) == 1 and
+          c.sy()['dirty'] == 0,
+          'untouched 4 s: the UI tick closes the picker (it repaints its 16 pads every tick before); the pick waits '
+          'for the next key release to be written')
+    # 4. Another page closes it; 5. another key closes it and goes on; 6. the chord again closes it.
+    d = machine()
+    d.chord()
+    d.page(5)
+    d.call(sym['sy_ui'])
+    e = machine()
+    e.chord()
+    roll = e.press(0x21)
+    e2 = machine()
+    e2.chord()
+    plain_ext = e2.press(KEY_EXT)
+    f = machine()
+    f.chord()
+    f.value(True)
+    again, again_up = f.press(KEY_EXT), f.release(KEY_EXT)
+    f.value(False)
+    check(d.sy()['picker'] == 0 and roll == (0, [(down, EV)]) and e.sy()['picker'] == 0 and again == (1, []) and
+          again_up == (1, []) and f.sy()['picker'] == 0 and plain_ext == (0, [(down, EV)]) and
+          e2.sy()['picker'] == 0 and e2.sy()['ext_taken'] == 0,
+          'another page closes the picker; another key (ROLL, or EXT SOURCE without VALUE: the input switched as '
+          'usual) closes it and goes on to FX deep edit; the chord again closes it (the press and release taken)')
+    # 7. VALUE in the picker: closed; FX deep edit's handler then sees VALUE's press, an EXT SOURCE press (its chord:
+    #    the input FX's extra screens) and that press's release; VALUE's release goes to it too, then is taken.
+    g = machine(down_ret=1)
+    g.chord()
+    hv = g.press(KEY_VALUE)
+    calls = [(x, struct.unpack('<2h', g.bytes(r0, 4))) for x, r0 in hv[1]]
+    hv_up = g.release(KEY_VALUE)
+    sg = g.sy()
+    check(hv[0] == 1 and calls == [(down, (5, KEY_VALUE)), (down, (5, KEY_EXT)), (up, (6, KEY_EXT))] and
+          sg['picker'] == 0 and sg['handoffs'] == 1 and hv_up == (1, [(up, EV)]) and sg['value_taken'] == 0,
+          f'VALUE in the picker: it closes, and FX deep edit\'s handler gets VALUE\'s press, then EXT SOURCE pressed '
+          f'and let go (its chord: the input FX\'s extra screens) ({calls}); VALUE\'s release reaches it, taken')
+    report['sy']['picker'] = dict(close_after_s=4, pads=dict(playing=hex(PAD_PLAYING), sound=hex(PAD_SOUND),
+                                                             off=hex(PAD_OFF), off_now=hex(PAD_OFF_NOW)))
+
+
+def sy_route_checks(img, man):
+    """SY test 4: ROUTING held on ExtIn while a synth listens, and what the recorder feed is given meanwhile."""
+    sym = man['symbols']
+    bmc = 0x80592500
+    rng = random.Random(44)
+    g = [rng.randint(-12000, 12000) for _ in range(64)]                  # the guitar alone (pair 0 on ExtIn)
+    mx = [rng.randint(-20000, 20000) for _ in range(64)]                 # the mix before BUS 3/4, half level (pair 1)
+
+    def sat(v):
+        return max(-32768, min(32767, v))
+    # 1. ROUTING Mix: the recorder's pair 0 := pair 1 x 2 (saturated), pair 1 left; the tracker had the guitar first.
+    m = SyMachine(img, man, routing=0)
+    m.start()
+    m.call(sym['sy_feed'], m.packet(g, mx), 0x800)
+    fed = m.feeds[-1][2]
+    t = m.tt()
+    check([x[0] for x in fed] == [sat(2 * v) for v in mx] and [x[1] for x in fed] == [sat(2 * v) for v in mx] and
+          [x[2] for x in fed] == mx and t['in'] == g and t['rec_blocks'] == 1 and any(abs(2 * v) > 32767 for v in mx),
+          'ROUTING Mix, held: the feed copies pair 1 x 2 as pair 0 (the mix before BUS 3/4, saturated at 16 bits), '
+          'pair 1 left; the tracker read the guitar before')
+    # 2. The feed taking pair 1 itself (settings + 0x64) or another pair (the byte): the packet left as it is.
+    kept = []
+    for addr, fmt in ((FEED_PAIR1, '<I'), (FEED_PAIR, '<B')):
+        m.put(addr, 1, fmt)
+        m.call(sym['sy_feed'], m.packet(g, mx), 0x800)
+        kept.append([x[0] for x in m.feeds[-1][2]] == g)
+        m.put(addr, 0, fmt)
+    check(all(kept) and m.tt()['rec_other'] == 2 and m.tt()['rec_blocks'] == 1,
+          'the feed taking pair 1 itself or another pair: the packet left as stock has it')
+    # 3. ROUTING ExtIn: the synth's newest block, as sy_tx added it to TX, added to the input once.
+    e = SyMachine(img, man)
+    e.start()
+    sig = ref.to_blocks(sy_strum('G')[0])
+    for b in range(200):
+        e.step(sig[b])
+    out = e.sy()['out']
+    e.uc.mem_write(TXBUF, bytes(4096))
+    e.uc.mem_write(base.ARGS, struct.pack('<3I', TXBUF, TXBUF + 0x1000, TXBUF + 0x2000))
+    e.call(sym['sy_tx'], base.ARGS, 1000)
+    se = e.sy()
+    e.call(sym['sy_feed'], e.packet(g, mx), 0x800)
+    fed = e.feeds[-1][2]
+    e.call(sym['sy_feed'], e.packet(g, mx), 0x800)
+    fed2 = e.feeds[-1][2]
+    check(any(out) and se['rec'] == [sat(v) for v in out] and se['rec_fresh'] == 1 and
+          [x[0] for x in fed] == [sat(a + r) for a, r in zip(g, se['rec'])] and [x[2] for x in fed] == mx and
+          [x[0] for x in fed2] == g and e.tt()['rec_adds'] == 1 and e.sy()['rec_fresh'] == 0 and
+          e.tt()['rec_mix'] == 0,
+          'ROUTING ExtIn, held: the feed copies the input with the synth\'s newest block added (as sy_tx added it to '
+          'TX), once per block')
+    # 4. The synth off (pad 16) on the main screen: the hold lets go, ROUTING (Mix) sent back, after 30 ms the packet
+    #    is the feed's own.
+    o = SyMachine(img, man, routing=0)
+    o.start()
+    o.put(sym['sy'] + 4 * SY_HEAD.index('muted'), 1, '<I')
+    o.ui(0)
+    during = o.tt()['rec_mix']
+    o.cyc += REC_GRACE
+    o.call(sym['tune_ui'])
+    o.call(sym['sy_feed'], o.packet(g, mx), 0x800)
+    check(o.routing_dt1() == [1, 0] and during == 1 and o.tt()['hold'] == 0 and o.tt()['rec_mix'] == 0 and
+          [x[0] for x in o.feeds[-1][2]] == g,
+          'the synth off (pad 16) on the main screen: the hold lets go and Mix goes back to the chip; the recorder '
+          'keeps the mix 30 ms, then takes pair 0 as stock')
+    # 5. A ROUTING DT1 the firmware sends while held goes out as ExtIn; other IDs untouched, on the caller's stack;
+    #    with nothing listening, as sent.
+    h = SyMachine(img, man, routing=0)
+    h.start()
+    h.dt1.clear()
+    h.dt1_sp.clear()
+    h.call(0x800D8119, bmc, 0x5C, 0, 0)
+    h.call(0x800D8119, bmc, 0x2B, 0, 5)
+    th = h.tt()
+    q = SyMachine(img, man, ext=0, routing=0)
+    q.start()
+    q.dt1.clear()
+    q.call(0x800D8119, bmc, 0x5C, 0, 0)
+    check(h.dt1 == [(bmc, 0x5C, 0, 1), (bmc, 0x2B, 0, 5)] and h.dt1_sp[1] == STACK and th['route_sends'] == 2 and
+          th['route_held'] == 2 and th['route_last'] == 1 and q.dt1 == [(bmc, 0x5C, 0, 0)] and
+          q.tt()['route_held'] == 0,
+          f'held: a ROUTING DT1 from the firmware (RECORD SETTING, the looper, a chip reset) goes to FX deep edit\'s '
+          f'fde_dt1 as ExtIn; another ID untouched, the stack as the caller left it; nothing listening: as sent')
+    report['sy']['routing'] = dict(recorder_mix='pair 1 x 2', recorder_extin='input + synth', grace_ms=30, settle_ms=20)
 
 
 def entry_checks(parent_img, img, sym):

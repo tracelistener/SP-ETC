@@ -13,7 +13,9 @@ SY synth test 1 (sy-synth-test1) is built by the same builder on top of synth te
 BOSS's SY pedals work, on every page but the Sound Generator's, with synth test 6 unchanged on that page. See
 `SY_TEST.md`. Its readout's line 3 shows the SY engine in place of the last pluck's times. SY synth test 2
 (sy-synth-test2) adds 15 tones picked with VALUE + pad; SY synth test 3 (sy-synth-test3) knob editing (VALUE +
-CTRL 1-3), saved.
+CTRL 1-3), saved. SY synth test 4 (sy-synth-test4) moves picking and editing to a picker (VALUE + EXT SOURCE) and
+lifts the ROUTING ExtIn rule for both synths: while one listens the chip is held on ExtIn, and the recorder is given
+what ROUTING asks for (test 5's popup is gone).
 
 ## Guitar synth test 1 (gtr-synth-test1)
 

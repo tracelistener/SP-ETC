@@ -1,26 +1,29 @@
-/* SY synth test 3, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
+/* SY synth test 4, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
  * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
  * BOSS's SY pedals work: 49 semitone bands, each with its own oscillators, from RX pair 0, added to the DRY pair of
- * TX line 3 one block later, on every page but the Sound Generator's while EXT SOURCE is on and ROUTING on ExtIn.
- * Test 2: 15 tones and OFF. Hold VALUE and press pad 1-16 (where the synth can play): that tone, a popup with its
- * name, and the pad's press and release go no further (no sample plays). The UI dispatcher's key handlers come here
- * through FX deep edit's bridges (their call to fde_key_down / fde_key_up, re-pointed by the builder to sy_key_down /
- * sy_key_up, which hand every key on to them first / unless the pick took it). The UI reads the SP's tempo every
- * 0.1 s for the SEQ tone's steps.
- * Test 3: hold VALUE and turn CTRL 1-3 (where the synth can play): the tone playing's BRIGHT, its own setting and LEVEL
- * (sy.knob, the knob's position; a popup names the tone, the setting and the position), and the bus effect never sees
- * the turn. The knob events come through FX deep edit's knob bridge as the keys do (its call to fde_knob, re-pointed
- * to sy_knob). The picks and the knobs are kept in B:/_sy_tones.bin beside FX deep edit's file, read at the first key
- * or knob event after the boot and written when VALUE is let go after a change, never while an FX screen is up (as FX
- * deep edit learned on the unit).
+ * TX line 3 one block later, on every page but the Sound Generator's while EXT SOURCE is on.
+ * Test 2: 15 tones and OFF; the UI reads the SP's tempo every 0.1 s for the SEQ tone's steps. Test 3: CTRL 1-3 set the
+ * tone playing's BRIGHT, its own setting and LEVEL (sy.knob); picks and knobs are kept in B:/_sy_tones.bin beside FX
+ * deep edit's file, read at the first key or knob event after the boot, never written while an FX screen is up.
+ * Test 4: hold VALUE and press EXT SOURCE (any page but the Sound Generator's) to open the picker: the pads light (the
+ * sound playing white, pad 16 red), a pad picks, pad 16 puts the synth off, CTRL 1-3 edit without VALUE held; EXIT, the
+ * chord again, 4 s untouched, another page or any other key closes it; VALUE closes it and goes on to FX deep edit's
+ * input FX screens (which the chord opened before). VALUE + pad and VALUE + CTRL are stock's again. The UI
+ * dispatcher's key and knob handlers come here through FX deep edit's bridges (their calls to fde_key_down /
+ * fde_key_up / fde_knob, re-pointed by the builder to sy_key_down / sy_key_up / sy_knob, which hand on to them).
+ * Test 4 also lifts the ExtIn rule: while a synth listens (EXT SOURCE on), every ROUTING DT1 goes to the effects chip
+ * as ExtIn (route_hold, sy_dt1), so pair 0 is the input alone whatever ROUTING says, and the recorder feed is given what
+ * ROUTING asks for: on Mix the chip's pair 1 x 2 (the mix before BUS 3/4, the synth in it), on ExtIn the input with the
+ * synth added (sy_feed, before the feed).
  * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
- * ExtIn the input alone, on Mix the mix as heard, the synth's own note included, so test 5 plays only on ExtIn.
+ * ExtIn the input alone, on Mix the mix as heard, the synth's own note included, so test 5 played only on ExtIn;
+ * SY test 4 holds the chip on ExtIn while a synth listens.
  *
  * The tracker runs while the meter's readout is shown (hold EXIT a second on the main screen), and on the Sound
- * Generator page while EXT SOURCE is on and ROUTING on ExtIn: the audio task copies pair 0, (L + R) / 2, after every RX
- * block and runs one tracker step (tune_fp.c). It stops itself (SLOW) when one step takes over a whole block, or the
+ * Generator page while EXT SOURCE is on (and the hold): the audio task copies pair 0, (L + R) / 2, from every RX block
+ * (before the recorder feed) and runs one tracker step (tune_fp.c). It stops itself (SLOW) when one step takes over a whole block, or the
  * mixer and the tracker take over 9/10 of one twice in a row. On the Sound Generator page the UI tick (syn_ui) plays
  * its note there as MIDI IN on the page's channel would (the kits' note gate's SG route, arp_midi_event): one note at a
  * time, so ARP and drum mode take it as they take MIDI. Test 2: stray plucks (the level does not rise) and drum mode
@@ -47,8 +50,9 @@
  *   0x80005870  per-voice stub    -> meter_voice
  *   0x0001fd84  SG stub's pre call -> meter_sg_pre
  *   bounce's ui bridge: its bnc_ui call -> diag_ui (bnc_ui, the meter's UI step, tune_ui, syn_ui, sy_ui)
- *   bounce's rx bridge: its bnc_rx call -> diag_rx (the RX packet from the audio task's r9 and [r6 + 4], as its
- *                     RX site computed it; bnc_rx, the pairs, tune_rx, sy_rx)
+ *   bounce's rx bridge: its bnc_rx call -> diag_rx (bnc_rx, tune_rx, sy_rx)
+ *   bounce's rx bridge: its feed call -> sy_feed (test 4: the pairs, the recorder's pair 0, then the feed)
+ *   0x800d8118  the DT1 builder's jump to FX deep edit's fde_dt1 -> sy_dt1 (test 4: ROUTING held on ExtIn)
  *   the meter's mixer exit (meter_mix_end): sy_tx adds the engine's newest block to TX line 3's DRY pair
  *
  * The CPU meter, as T0 had it: the DWT cycle counter times every 64-frame block (800,000 cycles at 600 MHz); MIX
@@ -167,13 +171,14 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
     OFFSET(tt_t, tot_max_ever), OFFSET(tt_t, reset_ack), OFFSET(tt_t, rseq), OFFSET(tt_t, res), sizeof(tt_result),
     sizeof(tt_block_t), OFFSET(tt_block_t, ring), OFFSET(tt_block_t, span), OFFSET(tt_block_t, d6),
     OFFSET(tt_block_t, peaks), OFFSET(tt_block_t, z), OFFSET(tt_block_t, started), OFFSET(tt_block_t, stack),
-    OFFSET(tt_t, posted_rseq), OFFSET(tt_block_t, pick_peak), OFFSET(tt_block_t, env)};
+    OFFSET(tt_t, posted_rseq), OFFSET(tt_block_t, pick_peak), OFFSET(tt_block_t, env), OFFSET(tt_t, hold)};
 EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: the tests read these */
     sizeof(sy_t), OFFSET(sy_t, state), OFFSET(sy_t, out), OFFSET(sy_t, w_n), OFFSET(sy_t, pub),
     OFFSET(sy_t, tot_max_ever), sizeof(sy_block_t), OFFSET(sy_block_t, e), OFFSET(sy_block_t, per),
     OFFSET(sy_block_t, ph), OFFSET(sy_block_t, amp), OFFSET(sy_block_t, owned), OFFSET(sy_block_t, env),
     OFFSET(sy_block_t, started), OFFSET(sy_block_t, tone), OFFSET(sy_block_t, nper), OFFSET(sy_t, tone_req),
-    OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads)};
+    OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads), OFFSET(sy_t, picker),
+    OFFSET(sy_t, rec)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
@@ -219,6 +224,26 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define VIEWS 0x200
 #define DRY_MAX 0x7FFFF                                /* the packer clips every stem to 20 bits */
 #define DRY_MIN (-0x80000)
+
+/* ---- SY test 4: ROUTING Mix, the recorder, the picker ---- */
+/* The stock DT1 builder (context, ID, index, value): its entry jumps to sy_dt1, then FX deep edit's fde_dt1 and stock. */
+#define DT1_SEND ((u32 (*)(u32, s32, s32, s32))0x800D8119u)
+#define BMC 0x80592500u                                /* the effects chip's DT1 context, as the system setter passes */
+#define HOLD_SETTLE 12000000u                          /* 20 ms: the chip has the hold before a synth listens */
+#define REC_GRACE 18000000u                            /* 30 ms: the recorder keeps pair 1 while the chip goes back */
+/* The recorder feed (0x1ca80) copies pair 1 when settings + 0x64 is set, else the pair the byte at 0x82e0e974 names. */
+#define FEED_PAIR1 (*(volatile u32 *)0x82E011A8u)
+#define FEED_PAIR (*(volatile u8 *)0x82E0E974u)
+#define FEED_ENTRY ((u32 (*)(volatile s16 *, u32))0x0001CA81u)
+#define KEY_EXT_SOURCE 0x12
+#define PICKER_CYCLES 2400000000u                      /* 4 s: the picker closes this long after its last touch */
+#define PICKER_MS 4000
+#define F_LED ((void (*)(u32, u32, u32))0x800D4911u)   /* key light (key, 1 lit, a pad's colour): sends only changes */
+#define LED_REFRESH (*(volatile u16 *)0x802496F0u)     /* |= 2: stock paints the pads again */
+#define PAD_PLAYING 0xFFFFFFu                          /* the sound playing: white */
+#define PAD_SOUND 0x000080u                            /* the other sounds: blue */
+#define PAD_OFF 0x800000u                              /* pad 16: red, bright while the synth is off */
+#define PAD_OFF_NOW 0xFF0000u
 
 /* ---- the synth: the tracker's note on the Sound Generator ---- */
 #define SG_PAGE 0x1E                                   /* the Sound Generator page (the kits' and the arp's) */
@@ -369,8 +394,11 @@ static void publish(meter_t *m) {
 
 static s32 clip20(s32 v) { return v > DRY_MAX ? DRY_MAX : v < DRY_MIN ? DRY_MIN : v; }
 
+static s32 sat16(s32 v) { return v > 32767 ? 32767 : v < -32768 ? -32768 : v; }
+
 /* After the mixer: the SY engine's newest block, if TX has not added it yet, onto the DRY pair of the TX line 3 block
- * the mixer has just packed (as cabinet test 2's cab_tx). */
+ * the mixer has just packed (as cabinet test 2's cab_tx). Test 4: also kept for the recorder (sy_rec, this wake's RX)
+ * at the capture's scale, which is the stems'. */
 EXPORT void sy_tx(const volatile u32 *bufs, u32 mix) {
     sy_t *s = &sy;
     s->last_mix = mix;
@@ -380,7 +408,9 @@ EXPORT void sy_tx(const volatile u32 *bufs, u32 mix) {
         s32 e = s->out[f];
         p[0] = clip20(p[0] + e);
         p[1] = clip20(p[1] + e);
+        s->rec[f] = (s16)sat16(e);
     }
+    s->rec_fresh = 1;
     s->fresh = 0;
     s->tx++;
 }
@@ -936,24 +966,82 @@ UI_SMALL static void tune_start(tt_t *t) {
     t->req = 1;
 }
 
-/* The synth plays only with EXT SOURCE on and ROUTING on ExtIn: on Mix the effects chip hands back the mix as heard, so
- * the tracker would hear the synth's own note and hold it (synth tests 2-4 on the unit). */
-static inline u32 syn_live(const tt_t *t) { return t->ext && t->routing == ROUTING_EXTIN; }
+/* The synths need pair 0 to be the input alone (ROUTING ExtIn): on Mix the effects chip hands back the mix as heard, so
+ * the tracker would hear the synth's own note and hold it (synth tests 2-4 on the unit). SY test 4: they play with
+ * EXT SOURCE on once the chip has been held on ExtIn for 20 ms (route_hold), whatever ROUTING says. */
+static inline u32 syn_live(const tt_t *t) { return t->ext && t->hold && DWT_CYCCNT - t->hold_at >= HOLD_SETTLE; }
 
-/* Every UI tick: the tracker on while the readout is shown, or on the Sound Generator page with EXT SOURCE on and
- * ROUTING on ExtIn. Every 0.1 s: the input FX, EXT SOURCE and ROUTING. */
+/* SY test 4, every UI tick: hold the effects chip on ExtIn while a synth wants pair 0 (EXT SOURCE on, and the SY synth
+ * not off by pad 16, or the Sound Generator page's synth), and give the user's ROUTING back when nothing does. The hold
+ * sends ExtIn through the builder (sy_dt1 lets it pass); while it is on, sy_route_dt1 turns every ROUTING DT1 the
+ * firmware sends into ExtIn too (the RECORD SETTING and looper screens, its chip resets). The recorder meanwhile gets
+ * the mix (pair 1 x 2) on ROUTING Mix, the input and the synth on ExtIn (sy_rec). */
+UI_SMALL static void route_hold(tt_t *t, u32 now) {
+    u32 want = t->ext && (PAGE == SG_PAGE || !sy.muted);
+    if (want && !t->hold) {
+        t->hold = 1;
+        t->hold_at = now;
+        t->holds++;
+        BARRIER();
+        DT1_SEND(BMC, ROUTING, 0, ROUTING_EXTIN);
+    } else if (!want && t->hold) {
+        t->hold = 0;
+        t->grace = 1;
+        t->grace_at = now;
+        BARRIER();
+        DT1_SEND(BMC, ROUTING, 0, (s32)t->routing);
+    }
+    if (t->grace && now - t->grace_at >= REC_GRACE) t->grace = 0;
+    t->rec_mix = (t->hold || t->grace) && t->routing != ROUTING_EXTIN;
+    t->rec_ext = t->hold && t->routing == ROUTING_EXTIN;
+}
+
+/* Every UI tick: the tracker on while the readout is shown, or on the Sound Generator page with EXT SOURCE on (and the
+ * hold). Every 0.1 s: the input FX, EXT SOURCE and ROUTING. */
 EXPORT UI_SMALL void tune_ui(void) {
     tt_t *t = &tt;
+    u32 now = DWT_CYCCNT;
+    if (now - t->checked >= CHECK_CYCLES) {
+        t->checked = now;
+        t->checks++;
+        t->fx = (u32)SYS_GET(SYSPRM, BUS_EFFECT, 0);
+        t->ext = SET_GET(SETTINGS, EXT_SOURCE, 0) != 0;
+        t->routing = (u32)SYS_GET(SYSPRM, ROUTING, -1);
+    }
+    route_hold(t, now);
     u32 want = meter.shown || (PAGE == SG_PAGE && syn_live(t));
     if (!want) t->req = 0;
     if (want && !t->req && t->state == TT_OFF) tune_start(t);
-    u32 now = DWT_CYCCNT;
-    if (now - t->checked < CHECK_CYCLES) return;
-    t->checked = now;
-    t->checks++;
-    t->fx = (u32)SYS_GET(SYSPRM, BUS_EFFECT, 0);
-    t->ext = SET_GET(SETTINGS, EXT_SOURCE, 0) != 0;
-    t->routing = (u32)SYS_GET(SYSPRM, ROUTING, -1);
+}
+
+/* SY test 4: every DT1 the firmware sends for ROUTING (sy_dt1 calls this with its value): ExtIn while the hold is on. */
+EXPORT s32 sy_route_dt1(s32 value) {
+    tt_t *t = &tt;
+    t->route_sends++;
+    if (t->hold) {
+        value = ROUTING_EXTIN;
+        t->route_held++;
+    }
+    t->route_last = (u32)value;
+    return value;
+}
+
+/* The builder's entry (0x800d8118) jumps here in place of FX deep edit's fde_dt1: a DT1 for ROUTING (0x5c) has its value
+ * (r3) passed through sy_route_dt1; every DT1 then goes on to fde_dt1 with the caller's registers and, for all but
+ * ROUTING, its stack untouched (the builder makes some boot frames from leftover stack). */
+__attribute__((naked, used)) void sy_dt1(void) {
+    __asm__ volatile(
+        "cmp r1, #0x5c\n"
+        "bne 1f\n"
+        "push {r0, r1, r2, lr}\n"
+        "mov r0, r3\n"
+        "bl sy_route_dt1\n"
+        "mov r3, r0\n"
+        "pop {r0, r1, r2, lr}\n"
+        "1:\n"
+        "movw r12, #" XS(FDE_DT1_LO) "\n"
+        "movt r12, #" XS(FDE_DT1_HI) "\n"
+        "bx r12\n");
 }
 
 /* Clear the SY engine, then hand it to the audio task (only while it is off). */
@@ -965,15 +1053,18 @@ UI_SMALL static void sy_start(sy_t *s) {
 }
 
 /* Where the synth can play: every page but the Sound Generator's (guitar synth test 6 plays there), with EXT SOURCE on
- * and ROUTING on ExtIn (on Mix the effects chip hands back the mix as heard: the engine would hear its own sound on
- * DRY). */
+ * and the chip held on ExtIn (test 4; on Mix it hands back the mix as heard: the engine would hear its own sound). */
 static inline u32 sy_can_play(void) { return syn_live(&tt) && PAGE != SG_PAGE; }
 
+UI_SMALL static void sy_picker_tick(sy_t *s, u32 now);
+
 /* Every UI tick: the SY engine where it can play, unless pad 16 put it off (test 2). Leaving that lets it fade out
- * over 8 blocks. Every 0.1 s: the SP's tempo (test 2: the SEQ tone's steps), as the arp reads it. */
+ * over 8 blocks. Every 0.1 s: the SP's tempo (test 2: the SEQ tone's steps), as the arp reads it. Test 4: the picker's
+ * pads and its time. */
 EXPORT UI_SMALL void sy_ui(void) {
     sy_t *s = &sy;
     u32 now = DWT_CYCCNT;
+    if (s->picker) sy_picker_tick(s, now);
     if (now - s->tempo_checked >= CHECK_CYCLES) {
         s->tempo_checked = now;
         s32 bank = CUR_BANK;
@@ -1069,81 +1160,201 @@ UI_SMALL static void sy_save(void) {
     }
 }
 
-/* Test 2: VALUE + pad n picks tone n (pad 16: off), with a popup naming it. */
+/* Popups: one text buffer, so the picker can tell its own popup on the screen (and close it when it closes). */
+static char sy_text[40];
+
+UI_SMALL static void sy_say(const char *a, const char *b, int ms) {
+    char *p = put_str(sy_text, a);
+    if (b) {
+        *p++ = '\n';
+        p = put_str(p, b);
+    }
+    *p = 0;
+    POPUP_POST(sy_text, ms);
+}
+
+UI_SMALL static u32 sy_popup_ours(void) {
+    volatile const char *a = POPUP_TEXT;
+    if (!POPUP_SHOWN || !sy_text[0]) return 0;
+    for (u32 i = 0; i < sizeof sy_text; i++) {
+        if (a[i] != sy_text[i]) return 0;
+        if (!sy_text[i]) return 1;
+    }
+    return 0;
+}
+
+/* Test 2 (test 4: in the picker): pad n picks tone n, pad 16 puts the synth off, with a popup naming it. */
 UI_SMALL static void sy_pick(u32 pad) {
     sy_t *s = &sy;
     s->picks++;
     s->dirty = 1;
     if (pad == SY_OFF_PAD) {
         s->muted = 1;
+        sy_say(SY_POPUP[pad], 0, SY_POPUP_MS);
     } else {
         s->tone_req = pad;
         s->muted = 0;
+        sy_say(SY_POPUP[pad], 0, PICKER_MS);
     }
-    POPUP_POST(SY_POPUP[pad], SY_POPUP_MS);
 }
 
 static inline u32 key_held(u32 k) { return (KEYS[k >> 3] >> (k & 7u)) & 1u; }
 
-/* Every key press, on any page, before the dispatcher's own handling (FX deep edit's bridge calls this in place of
- * fde_key_down): FX deep edit's first; then, while VALUE is held where the synth can play, a pad picks a tone and
- * goes no further (1: taken, so no sample plays and its bit in the held-key bitmap stays clear). */
-EXPORT u32 sy_key_down(const s16 *ev) {
-    sy_ready();
-    if (FDE_KEY_DOWN(ev)) return 1;
-    s32 key = ev[1];
-    if ((u32)key < PADS && key_held(KEY_VALUE) && sy_can_play()) {
-        sy_pick((u32)key);
-        sy.taken |= 1u << key;
-        return 1;
+/* Test 4: the pads while the picker is open: the sound playing white, the others blue, pad 16 red (bright while the
+ * synth is off). Every UI tick, over whatever stock paints (the key light sends only changes). */
+UI_SMALL static void sy_picker_paint(sy_t *s) {
+    u32 cur = s->muted ? SY_OFF_PAD : s->tone_req < SY_TONE_COUNT ? s->tone_req : 0u;
+    for (u32 p = 0; p < PADS; p++) {
+        u32 c = p == SY_OFF_PAD ? (cur == p ? PAD_OFF_NOW : PAD_OFF) : cur == p ? PAD_PLAYING : PAD_SOUND;
+        F_LED(p, 1, c);
     }
-    return 0;
+    s->lit = 1;
 }
 
-/* Every key release (in place of fde_key_up): the release of a pad whose press the pick took is taken too; any other
- * goes to FX deep edit's. Test 3: VALUE let go after a pick or a knob writes the file (no FX screen up). */
+/* Test 4, VALUE + EXT SOURCE: the picker opens, and the synth comes on with the sound it had if pad 16 had put it off. */
+UI_SMALL static void sy_picker_open(sy_t *s) {
+    s->picker = 1;
+    s->opens++;
+    s->picker_at = DWT_CYCCNT;
+    s->picker_page = PAGE;
+    if (s->muted) {
+        s->muted = 0;
+        s->dirty = 1;
+    }
+    sy_say(SY_POPUP[s->tone_req < SY_TONE_COUNT ? s->tone_req : 0u], "TAP A PAD", PICKER_MS);
+    sy_picker_paint(s);
+}
+
+/* The picker closes: stock paints the pads again; its popup goes. The file is written at the key that closed it, or at
+ * the next key release (sy_key_up), never from the UI tick. */
+UI_SMALL static void sy_picker_close(sy_t *s) {
+    if (!s->picker) return;
+    s->picker = 0;
+    s->closes++;
+    if (s->lit) {
+        LED_REFRESH |= 2;
+        s->lit = 0;
+    }
+    if (sy_popup_ours()) POPUP_CLOSE();
+}
+
+UI_SMALL static void sy_picker_tick(sy_t *s, u32 now) {
+    if (PAGE != s->picker_page || PAGE == SG_PAGE || now - s->picker_at >= PICKER_CYCLES)
+        sy_picker_close(s);
+    else
+        sy_picker_paint(s);
+}
+
+UI_SMALL static void sy_flush(sy_t *s) {
+    if (s->dirty && !s->picker && !sy_fx_screen()) sy_save();
+}
+
+/* Test 4: VALUE pressed in the picker: on to FX deep edit's input FX screens, as its own VALUE + EXT SOURCE opened them
+ * before. Its handler sees VALUE's press (it notes VALUE held), then an EXT SOURCE press and release (its chord: the
+ * screens if the input FX has extra settings). */
+UI_SMALL static void sy_handoff(sy_t *s, const s16 *ev) {
+    static const s16 ext_down[4] = {5, KEY_EXT_SOURCE, 0, 0}, ext_up[4] = {6, KEY_EXT_SOURCE, 0, 0};
+    s->handoffs++;
+    FDE_KEY_DOWN(ev);
+    if (FDE_KEY_DOWN(ext_down)) FDE_KEY_UP(ext_up);
+}
+
+/* Every key press, on any page, before the dispatcher's own handling (FX deep edit's bridge calls this in place of
+ * fde_key_down); 1 takes it (its bit in the held-key bitmap stays clear, so no sample plays).
+ * Test 4: VALUE held + EXT SOURCE, on any page but the Sound Generator's, opens the picker: with EXT SOURCE on its press
+ * is taken (the input stays on); off, it goes on and switches the input on. In the picker a pad picks (pad 16: off, and
+ * the picker closes), EXIT or the chord again closes it, VALUE closes it and goes on to the input FX's extra screens;
+ * any other key closes it and goes on. Everything else is FX deep edit's (VALUE + pad and VALUE + CTRL are stock's
+ * again). */
+EXPORT u32 sy_key_down(const s16 *ev) {
+    sy_t *s = &sy;
+    sy_ready();
+    s32 key = ev[1];
+    if (s->picker) {
+        if ((u32)key < PADS) {
+            if ((u32)key == SY_OFF_PAD) sy_picker_close(s);   /* first: closing drops the picker's own popup */
+            sy_pick((u32)key);
+            s->taken |= 1u << key;
+            s->picker_at = DWT_CYCCNT;
+            sy_flush(s);
+            return 1;
+        }
+        if (key == KEY_EXIT || (key == KEY_EXT_SOURCE && key_held(KEY_VALUE)) || key == KEY_VALUE) {
+            sy_picker_close(s);
+            sy_flush(s);
+            if (key == KEY_EXIT) s->exit_taken = 1;
+            if (key == KEY_EXT_SOURCE) s->ext_taken = 1;
+            if (key == KEY_VALUE) {
+                sy_handoff(s, ev);
+                s->value_taken = 1;
+            }
+            return 1;
+        }
+        sy_picker_close(s);
+    } else if (key == KEY_EXT_SOURCE && key_held(KEY_VALUE) && PAGE != SG_PAGE) {
+        sy_picker_open(s);
+        if (SET_GET(SETTINGS, EXT_SOURCE, 0) == 0) return 0;
+        s->ext_taken = 1;
+        return 1;
+    }
+    return FDE_KEY_DOWN(ev);
+}
+
+/* Every key release (in place of fde_key_up): the releases of presses the picker took are taken too (VALUE's after FX
+ * deep edit has seen it); any other goes to FX deep edit's. Picks and knobs not in the file yet are written at a release
+ * once the picker is closed (no FX screen up). */
 EXPORT u32 sy_key_up(const s16 *ev) {
+    sy_t *s = &sy;
     s32 key = ev[1];
     sy_ready();
-    if (key == KEY_VALUE && sy.dirty && !sy_fx_screen()) sy_save();
-    if ((u32)key < PADS && ((sy.taken >> key) & 1u)) {
-        sy.taken &= ~(1u << key);
+    sy_flush(s);
+    if ((u32)key < PADS && ((s->taken >> key) & 1u)) {
+        s->taken &= ~(1u << key);
+        return 1;
+    }
+    if (key == KEY_EXT_SOURCE && s->ext_taken) {
+        s->ext_taken = 0;
+        return 1;
+    }
+    if (key == KEY_EXIT && s->exit_taken) {
+        s->exit_taken = 0;
+        return 1;
+    }
+    if (key == KEY_VALUE && s->value_taken) {
+        s->value_taken = 0;
+        FDE_KEY_UP(ev);
         return 1;
     }
     return FDE_KEY_UP(ev);
 }
 
 /* Test 3: a knob's popup: the tone, then the setting and the knob's position ("SY 4 SUPERSAW", "DETUNE 75"). */
-static char sy_text[40];
-
 UI_SMALL static void sy_knob_popup(u32 tone, u32 k, u32 pos) {
-    char *p = put_str(sy_text, SY_POPUP[tone]);
-    *p++ = '\n';
-    p = put_str(p, k == 1u ? SY_P2_NAMES[tone] : SY_KNOB_NAMES[k]);
+    char line[24];
+    char *p = put_str(line, k == 1u ? SY_P2_NAMES[tone] : SY_KNOB_NAMES[k]);
     *p++ = ' ';
     p = put_u(p, pos);
     *p = 0;
-    POPUP_POST(sy_text, SY_POPUP_MS);
+    sy_say(SY_POPUP[tone], line, PICKER_MS);
 }
 
-/* Every knob turn, on any page (FX deep edit's knob bridge calls this in place of fde_knob): FX deep edit's first
- * (its input FX screens); then, with VALUE held where the synth can play, CTRL 1-3 set the picked tone's BRIGHT, its
- * own setting and LEVEL to the knob's position (0..127; 64 is the tone as designed), and the bus effect never sees
- * the turn. */
+/* Every knob turn, on any page (FX deep edit's knob bridge calls this in place of fde_knob). Test 4: in the picker,
+ * CTRL 1-3 set the picked tone's BRIGHT, its own setting and LEVEL to the knob's position (0..127; 64 is the tone as
+ * designed), and the bus effect never sees the turn; otherwise FX deep edit's (its input FX screens), then stock. */
 EXPORT u32 sy_knob(const s16 *ev) {
+    sy_t *s = &sy;
     sy_ready();
-    if (FDE_KNOB_TURN(ev)) return 1;
     s32 k = ev[1] - 1, pos = ev[2];
-    if ((u32)k < 3u && key_held(KEY_VALUE) && sy_can_play()) {
-        sy_t *s = &sy;
+    if (s->picker && (u32)k < 3u) {
         u32 tone = s->tone_req < SY_TONE_COUNT ? s->tone_req : 0u;
         pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
         s->knob[tone][k] = (s8)(pos - 64);
         s->dirty = 1;
+        s->picker_at = DWT_CYCCNT;
         sy_knob_popup(tone, (u32)k, (u32)pos);
         return 1;
     }
-    return 0;
+    return FDE_KNOB_TURN(ev);
 }
 
 /* Every UI tick, on the Sound Generator page: the tracker's note there, through the entry MIDI IN on the page's
@@ -1154,23 +1365,13 @@ EXPORT u32 sy_knob(const s16 *ev) {
  * fade (v9.5's stealing), as it does for MIDI, which the audio task must never do.
  * Test 4: the word's velocity (the pick's); the note plus OCT octaves (drum mode: the guitar's note, the pad it
  * strikes), played only within MIDI 12..127.
- * Test 5: silent unless EXT SOURCE is on and ROUTING on ExtIn (the readout can run the tracker on the page on Mix: its
- * notes are not played). On the page with EXT SOURCE on and ROUTING Mix, a popup says so, once each time that
- * starts, when no other popup is showing or waiting (never over a stock message). SY test 1: on every stock page
- * (the SY engine needs ExtIn too). */
+ * Test 5: silent unless EXT SOURCE is on and pair 0 is the input alone (the readout can run the tracker on the page on
+ * Mix: its notes are not played). SY test 4: the hold (route_hold) makes pair 0 the input alone whatever ROUTING says,
+ * so test 5's "SYNTH NEEDS ROUTING ExtIn" popup is gone. */
 EXPORT UI_SMALL void syn_ui(void) {
     gsyn_t *s = &gsyn;
     u32 drum = KIT_MODE_ON;
     tt.drum = drum;                                     /* the tracker plays only plucks in drum mode */
-    u32 mix = (u32)PAGE < STOCK_PAGES && tt.ext && tt.routing != ROUTING_EXTIN;
-    if (mix && !s->mix) s->hint_due = 1;
-    s->mix = mix;
-    if (!mix) s->hint_due = 0;
-    if (s->hint_due && POPUP_PENDING < 0 && !POPUP_SHOWN) {
-        POPUP_POST(SYN_HINT, HINT_MS);
-        s->hint_due = 0;
-        s->hints++;
-    }
     u32 w = tt.syn, seq = w >> 16;
     s32 note = (s32)(w & 0xFFu) - 1, vel = (s32)((w >> 8) & 0x7Fu);
     if (PAGE != SG_PAGE) {
@@ -1237,10 +1438,50 @@ EXPORT void tune_pairs(const volatile s16 *packet) {
     t->peak[1] = p1;
 }
 
-/* Bounce's rx bridge (after the recorder feed, audio task) calls this in place of bnc_rx. */
-EXPORT void diag_rx_c(const volatile s16 *packet) {
-    ((void (*)(void))BNC_RX)();
+/* SY test 4: what the recorder feed copies from pair 0 (sampling, resampling, the looper, skip-back all take the copy):
+ * on ROUTING Mix while the chip is held on ExtIn, pair 1 x 2 (the mix before BUS 3/4: pads, input, synth, BUS 1/2's
+ * effects; it comes back at half pair 0's level); on ExtIn, the input with the synth's newest block added. Only when the
+ * feed takes pair 0 (else it takes pair 1 or another pair: as stock). The tracker has had pair 0 already. */
+static void sy_rec(volatile s16 *packet) {
+    tt_t *t = &tt;
+    sy_t *s = &sy;
+    u32 fresh = s->rec_fresh;
+    s->rec_fresh = 0;
+    if (!t->rec_mix && !t->rec_ext) return;
+    if (FEED_PAIR1 || FEED_PAIR) {
+        t->rec_other++;
+        return;
+    }
+    if (t->rec_mix) {
+        for (u32 f = 0; f < FRAMES; f++) {
+            volatile s16 *q = packet + f * 16u;
+            q[0] = (s16)sat16(2 * q[2]);
+            q[1] = (s16)sat16(2 * q[3]);
+        }
+        t->rec_blocks++;
+    } else if (fresh) {
+        for (u32 f = 0; f < FRAMES; f++) {
+            volatile s16 *q = packet + f * 16u;
+            q[0] = (s16)sat16(q[0] + s->rec[f]);
+            q[1] = (s16)sat16(q[1] + s->rec[f]);
+        }
+        t->rec_adds++;
+    }
+}
+
+/* SY test 4: bounce's rx bridge calls this in place of the recorder feed (r0 the RX packet, r1 0x800, as the audio
+ * task's RX site passes them): pair 0 for the tracker and the peaks first, then the recorder's pair 0, then the feed. */
+EXPORT u32 sy_feed(volatile s16 *packet, u32 n) {
     tune_pairs(packet);
+    sy_rec(packet);
+    return FEED_ENTRY(packet, n);
+}
+
+/* Bounce's rx bridge (after the recorder feed, audio task) calls this in place of bnc_rx. Test 4: the pairs were read
+ * before the feed (sy_feed). */
+EXPORT void diag_rx_c(const volatile s16 *packet) {
+    (void)packet;
+    ((void (*)(void))BNC_RX)();
     tune_rx();
     sy_rx();
 }
