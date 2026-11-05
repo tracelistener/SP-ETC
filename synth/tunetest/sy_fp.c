@@ -1,8 +1,9 @@
-/* SY synth test 1, the FPU side: a polyphonic guitar synth in the way Roland's patent US 9,542,923 describes BOSS's
- * SY pedals. No notes are found: the guitar is split into 49 bands a semitone apart (E2..E6), each band's pitch
- * comes from its zero crossings and its level from its energy, and each drives an oscillator of its own, so the
- * strings of a chord play together. Everything here runs on the audio task through sy_fp_call (the module's own
- * 2 KB stack, FPSCR and d0-d15 saved, round to nearest, flush to zero, default NaN), after the tracker's step.
+/* SY synth tests 1 and 2, the FPU side: a polyphonic guitar synth in the way Roland's patent US 9,542,923 describes
+ * BOSS's SY pedals. No notes are found: the guitar is split into 49 bands a semitone apart (E2..E6), each band's pitch
+ * comes from its zero crossings and its level from its energy, and each drives oscillators of its own, so the
+ * strings of a chord play together. Everything here runs on the audio task through sy_fp_call (the tracker's 2 KB
+ * stack, used one after the other; FPSCR and d0-d15 saved, round to nearest, flush to zero, default NaN), after the
+ * tracker's step.
  *
  * One step per RX block (sy_rx in tune_test.c decides when), from pair 0's (L + R) / 2 (tt.in):
  *   - a 4th-order Butterworth low-pass at 2 kHz, every 4th sample (12 kHz, 16 a block); the block's peak drives a
@@ -17,20 +18,32 @@
  *   - a band sounds when it has counted two periods, its energy tops both neighbours' and its period is within 80
  *     cents of its centre: a partial sounds from one band (its neighbours read the same pitch weaker), and the bands
  *     between two partials, whose crossings follow neither, stay silent. A band that starts to sound while its
- *     neighbour stops, on the same pitch within 1%, takes the neighbour's phase (a bend moving on: no gap);
- *   - each sounding band's oscillator: a saw at its pitch (a ramp -1..1, a polyBLEP at the wrap), its amplitude
- *     (level - floor) x 1.2, ramped over the block;
- *   - the sum through a resonant state-variable low-pass (Q 2) whose cutoff follows the level, 300 Hz quiet to 5 kHz
- *     at a hard pick (the square root of the level over 0.25, an exponential sweep), a soft clip (1.5x - 0.5x^3,
- *     +-1 beyond), x 16384 for the DRY pair (-6 dBFS at the clip, as the cabinet's). A stop (sy.stopping) fades it out
- *     over 8 blocks.
+ *     neighbour stops, on the same pitch within 1%, takes the neighbour's phases and amplitude (test 2: and the
+ *     neighbour stops at once), so a bend hands its voice on without a gap or a new attack;
+ *   - the sum through a resonant state-variable filter, a soft clip (1.5x - 0.5x^3, +-1 beyond), x 16384 for the DRY
+ *     pair (-6 dBFS at the clip, as the cabinet's). A stop (sy.stopping) fades it out over 8 blocks.
+ *
+ * Test 2: the tone (SY_TONE, from sy_ref.py; sy.tone_req, picked on the unit) sets
+ *   - each sounding band's oscillators: wave A (a saw or a pulse with a polyBLEP at each jump, a triangle, a sine) at
+ *     the band's pitch, and optionally wave B at a ratio of it, added at a level or phase-modulating A (FM, its index
+ *     raised at a pick); the band's amplitude (level - floor) x 1.2 reached through the tone's attack and release. A
+ *     band that sounded under 32 ms (ownership flickering between neighbours, not a note) stops at once: with every
+ *     such flicker releasing, a chord kept 18-26 bands running instead of 9-12. Each wave is its own loop (one pass
+ *     for A, one for B), so no sample tests which wave it is;
+ *   - breath noise, at a part of the bands' summed amplitude;
+ *   - the filter: low-, band- or high-pass, its cutoff from the level (an exponential sweep over the tone's range),
+ *     a pick envelope (a pick: the block's peak twice the highest of blocks 3-18 back, as the tracker's test 2 rule)
+ *     and an LFO, its resonance;
+ *   - the LFO's vibrato and tremolo, a 16-step gate at 1/16 of the SP's tempo (sy.bpm100), the output gain.
+ *   A new tone fades the output out over 8 blocks, switches (the filter, LFO, pick envelope and gate from rest), and
+ *   fades it in again.
  *
  * Single precision throughout, no contraction (the pragma below): every fused multiply-add is an explicit fmaf, so
  * tunetest/sy_ref.py computes the same numbers; test_tune_test.py runs both on the same input.
  */
 #pragma STDC FP_CONTRACT OFF
 #include "tune_test.h"
-#include "sy_tables.h"     /* from the builder (sy_ref.py's tables): SY_DEC, SY_BAND, the constants */
+#include "sy_tables.h"     /* from the builder (sy_ref.py's tables): SY_DEC, SY_BAND, SY_TONE, the constants */
 
 #define FMA(a, b, c) __builtin_fmaf((a), (b), (c))
 
@@ -55,12 +68,15 @@ __attribute__((naked, used)) u32 sy_fp_call(u32 (*fn)(sy_t *), sy_t *arg, void *
         "bx lr\n");
 }
 
-static void sy_init(sy_block_t *b) {
+static void sy_init(sy_block_t *b, const sy_t *s) {
     for (u32 k = 0; k < SY_BANDS; k++) {
         b->per[k] = SY_BAND[k].pc;
         b->tl[k] = SY_TL_MIN;
     }
     b->mg = 1.0f;
+    b->gate = 1.0f;
+    b->last_pick = -1000;
+    b->tone = s->tone_req < SY_TONES ? s->tone_req : 0u;
     b->started = 1;
 }
 
@@ -165,71 +181,112 @@ static u32 sy_bands(sy_block_t *b, const float *dx) {
     return crossings;
 }
 
-/* A band's oscillator over a block: a saw (a ramp -1..1) at its pitch, the polyBLEP within a sample of the wrap
- * (|ph| > 1 - inc: its two sides, ph < inc - 1 and ph > 1 - inc), the amplitude ramped to the band's target. */
-typedef struct {
-    float ph, a, da, inc, rinc, hi;
-} sy_osc_t;
+/* sin(pi ph) for ph in [-1, 1): a parabola, then one correction (error about 0.001). */
+static inline __attribute__((always_inline)) float sy_sine(float ph) {
+    float s = (ph * (1.0f - __builtin_fabsf(ph))) * 4.0f;
+    float c = s * __builtin_fabsf(s);
+    return FMA(0.225f, c - s, s);
+}
 
-static inline __attribute__((always_inline)) void sy_osc_begin(const sy_block_t *b, u32 k, float tg, sy_osc_t *o) {
+/* The polyBLEP's two halves: x in [0, 1) just after a jump, in (-1, 0) just before. */
+static inline __attribute__((always_inline)) float sy_after(float x) { return ((x + x) - x * x) - 1.0f; }
+static inline __attribute__((always_inline)) float sy_before(float x) { return (x * x + (x + x)) + 1.0f; }
+
+/* One sample of a wave from its ramp ph (-1..1): 0 saw, 1 pulse (high below pw), 2 triangle, 3 sine. The saw falls
+ * and the pulse rises at the wrap (|ph| > 1 - inc: within a sample of it), the pulse falls at pw (|ph - pw| < inc). */
+static inline __attribute__((always_inline)) float sy_wave(u32 kind, float ph, float pw, float inc, float rinc,
+                                                           float hi) {
+    if (kind == 0u) {
+        if (__builtin_fabsf(ph) > hi)
+            return ph - (ph < 0.0f ? sy_after((ph + 1.0f) * rinc) : sy_before((ph - 1.0f) * rinc));
+        return ph;
+    }
+    if (kind == 1u) {
+        float v = ph < pw ? 1.0f : -1.0f;
+        if (__builtin_fabsf(ph) > hi)
+            v = v + (ph < 0.0f ? sy_after((ph + 1.0f) * rinc) : sy_before((ph - 1.0f) * rinc));
+        float q = ph - pw;
+        if (__builtin_fabsf(q) < inc)
+            v = v - (q >= 0.0f ? sy_after(q * rinc) : sy_before(q * rinc));
+        return v;
+    }
+    if (kind == 2u)
+        return FMA(-2.0f, __builtin_fabsf(ph), 1.0f);
+    return sy_sine(ph);
+}
+
+/* One wave over a block into acc: its ramp from *php by inc a sample, the amplitude from a by da. One loop per wave,
+ * so no sample tests which wave it is. */
+#define SY_PASS(NAME, KIND)                                                                                    \
+    static __attribute__((noinline)) void NAME(float *acc, float *php, float pw, float inc, float rinc, float a, \
+                                               float da) {                                                     \
+        float ph = *php, hi = 1.0f - inc;                                                                      \
+        for (u32 n = 0; n < FRAMES; n++) {                                                                     \
+            ph = ph + inc;                                                                                     \
+            if (ph >= 1.0f) ph = ph - 2.0f;                                                                    \
+            a = a + da;                                                                                        \
+            acc[n] = FMA(a, sy_wave(KIND, ph, pw, inc, rinc, hi), acc[n]);                                     \
+        }                                                                                                      \
+        *php = ph;                                                                                             \
+    }
+SY_PASS(sy_pass_saw, 0u)
+SY_PASS(sy_pass_pulse, 1u)
+SY_PASS(sy_pass_tri, 2u)
+SY_PASS(sy_pass_sine, 3u)
+
+static void sy_pass(u32 kind, float *acc, float *php, float pw, float inc, float rinc, float a, float da) {
+    if (kind == 0u)
+        sy_pass_saw(acc, php, pw, inc, rinc, a, da);
+    else if (kind == 1u)
+        sy_pass_pulse(acc, php, pw, inc, rinc, a, da);
+    else if (kind == 2u)
+        sy_pass_tri(acc, php, pw, inc, rinc, a, da);
+    else
+        sy_pass_sine(acc, php, pw, inc, rinc, a, da);
+}
+
+/* FM: B (a sine at incb) moves A's phase by fmi x its value; A a sine. */
+static __attribute__((noinline)) void sy_pass_fm(float *acc, float *php, float *phbp, float inc, float incb, float fmi,
+                                                float a, float da) {
+    float ph = *php, phb = *phbp;
+    for (u32 n = 0; n < FRAMES; n++) {
+        ph = ph + inc;
+        if (ph >= 1.0f) ph = ph - 2.0f;
+        a = a + da;
+        phb = phb + incb;
+        if (phb >= 1.0f) phb = phb - 2.0f;
+        float x = FMA(fmi, sy_sine(phb), ph);
+        while (x >= 1.0f)
+            x = x - 2.0f;
+        while (x < -1.0f)
+            x = x + 2.0f;
+        acc[n] = FMA(a, sy_sine(x), acc[n]);
+    }
+    *php = ph;
+    *phbp = phb;
+}
+
+/* A band's oscillators over a block, into acc: wave A at the band's pitch (x the vibrato), then wave B at rb x it at
+ * lb x the amplitude (or, for FM, B phase-modulating A with the index fmi), the amplitude ramped from a0 to a1. */
+static void sy_osc(sy_block_t *b, u32 k, const sy_tone_t *t, float a0, float a1, float vibr, float fmi, float *acc) {
     float per = b->per[k];
-    o->ph = b->ph[k];
-    o->a = b->amp[k];
-    o->inc = 0.5f / per;
-    o->rinc = per + per;
-    o->hi = 1.0f - o->inc;
-    o->da = (tg - o->a) * (1.0f / 64.0f);
-}
-
-static inline __attribute__((always_inline)) float sy_osc_next(sy_osc_t *o) {
-    float ph = o->ph + o->inc;
-    if (ph >= 1.0f) ph = ph - 2.0f;
-    o->ph = ph;
-    o->a = o->a + o->da;
-    if (__builtin_fabsf(ph) > o->hi) {
-        if (ph < 0.0f) {
-            float x = (ph + 1.0f) * o->rinc;
-            float bl = (x + x) - x * x;
-            return ph - (bl - 1.0f);
-        }
-        float x = (ph - 1.0f) * o->rinc;
-        float bl = x * x + (x + x);
-        return ph - (bl + 1.0f);
+    float inc = (0.5f / per) * vibr, rinc = (per + per) / vibr;
+    float da = (a1 - a0) * (1.0f / 64.0f);
+    float ph = b->ph[k], phb = b->phb[k];
+    if (t->fm) {
+        sy_pass_fm(acc, &ph, &phb, inc, inc * t->rb, fmi, a0, da);
+    } else {
+        sy_pass(t->wa, acc, &ph, t->pw, inc, rinc, a0, da);
+        if (t->wb) sy_pass(t->wb - 1u, acc, &phb, t->pw, inc * t->rb, rinc / t->rb, a0 * t->lb, da * t->lb);
     }
-    return ph;
+    b->amp[k] = a1;
+    b->ph[k] = ph;
+    b->phb[k] = phb;
 }
 
-static void sy_osc1(sy_block_t *b, u32 k, float tg, float *acc) {
-    sy_osc_t o;
-    sy_osc_begin(b, k, tg, &o);
-    for (u32 n = 0; n < FRAMES; n++) {
-        float w = sy_osc_next(&o);
-        acc[n] = FMA(o.a, w, acc[n]);
-    }
-    b->amp[k] = tg;
-    b->ph[k] = o.ph;
-}
-
-/* Two bands, k1 < k2, each added into acc in that order (as one band after the other would). */
-static void sy_osc2(sy_block_t *b, u32 k1, float tg1, u32 k2, float tg2, float *acc) {
-    sy_osc_t o1, o2;
-    sy_osc_begin(b, k1, tg1, &o1);
-    sy_osc_begin(b, k2, tg2, &o2);
-    for (u32 n = 0; n < FRAMES; n++) {
-        float w1 = sy_osc_next(&o1);
-        float w2 = sy_osc_next(&o2);
-        float v = FMA(o1.a, w1, acc[n]);
-        acc[n] = FMA(o2.a, w2, v);
-    }
-    b->amp[k1] = tg1;
-    b->ph[k1] = o1.ph;
-    b->amp[k2] = tg2;
-    b->ph[k2] = o2.ph;
-}
-
-/* The bands that sound, the phase a band taking over a neighbour's pitch takes, and every sounding (or fading)
- * band's oscillator added into acc. Returns the bands sounding. */
-static u32 sy_voices(sy_block_t *b, float *acc) {
+/* The bands that sound, the voice a band taking over a neighbour's pitch takes, and every sounding (or releasing)
+ * band's oscillators added into acc. Returns the bands sounding; *namp the bands' summed amplitude. */
+static u32 sy_voices(sy_block_t *b, const sy_tone_t *t, float vibr, float *acc, float *namp) {
     u8 own[SY_BANDS];
     for (u32 k = 0; k < SY_BANDS; k++) {
         float e = b->e[k], p = b->per[k];
@@ -239,17 +296,25 @@ static u32 sy_voices(sy_block_t *b, float *acc) {
     }
     for (u32 k = 0; k < SY_BANDS; k++) {
         if (!own[k] || b->owned[k]) continue;
+        b->age[k] = 0;
         for (u32 side = 0; side < 2u; side++) {
             s32 nb = side ? (s32)k + 1 : (s32)k - 1;
             if (nb < 0 || nb >= (s32)SY_BANDS || !b->owned[nb]) continue;
             if (__builtin_fabsf(b->per[nb] - b->per[k]) < 0.01f * b->per[k]) {
                 b->ph[k] = b->ph[nb];
+                b->phb[k] = b->phb[nb];
+                b->amp[k] = b->amp[nb];
+                b->age[k] = b->age[nb];
+                b->amp[nb] = 0.0f;
                 break;
             }
         }
     }
-    u32 on = 0, pend = 0, have = 0;
-    float tgp = 0.0f;
+    for (u32 k = 0; k < SY_BANDS; k++)              /* test 2: a band's age; kept while it releases */
+        if (own[k] && b->age[k] < 255u) b->age[k]++;
+    float fmi = FMA(t->fm_env, b->fe, t->lb);
+    u32 on = 0;
+    float sum = 0.0f;
     for (u32 k = 0; k < SY_BANDS; k++) {
         float tg = 0.0f;
         if (own[k]) {
@@ -257,39 +322,58 @@ static u32 sy_voices(sy_block_t *b, float *acc) {
             tg = (lev - SY_FLOOR) * SY_GAIN;
             if (!(tg > 0.0f)) tg = 0.0f;
         }
-        if (!(tg > 0.0f || b->amp[k] > 0.0f)) continue;
+        float a0 = b->amp[k];
+        /* a band that sounded under 32 ms (a neighbour's flicker, not a note) stops at once, never releasing */
+        float coef = tg > a0 ? t->att : b->age[k] >= SY_AGE_MIN ? t->rel : 1.0f;
+        float a1 = coef >= 1.0f ? tg : FMA(tg - a0, coef, a0);
+        if (!(tg > 0.0f) && a1 < SY_AMP_EPS) a1 = 0.0f;
+        if (!(a0 > 0.0f || a1 > 0.0f)) continue;
         on += tg > 0.0f;
-        if (!have) {                                    /* two oscillators a pass: acc is read and written once */
-            pend = k;
-            tgp = tg;
-            have = 1;
-            continue;
-        }
-        sy_osc2(b, pend, tgp, k, tg, acc);
-        have = 0;
+        sum = sum + a1;
+        sy_osc(b, k, t, a0, a1, vibr, fmi, acc);
     }
-    if (have) sy_osc1(b, pend, tgp, acc);
     for (u32 k = 0; k < SY_BANDS; k++)
         b->owned[k] = own[k];
+    *namp = sum;
     return on;
 }
 
-/* The output: the low-pass (cutoff from the level), the soft clip, the stop's fade, to s->out. Returns the fade. */
-static float sy_output(sy_t *s, sy_block_t *b, const float *acc) {
+/* The output: the filter (cutoff from the level, the pick envelope, the LFO), the gain, the tremolo and the step gate,
+ * the soft clip, the fade (a stop, or a tone req not yet the block's), to s->out. Returns the fade. */
+static float sy_output(sy_t *s, sy_block_t *b, const sy_tone_t *t, float lfo, u32 req, const float *acc) {
     float d = b->env * SY_RDYN;
     if (d > 1.0f) d = 1.0f;
-    float xo = __builtin_sqrtf(d) * SY_OCT;
-    s32 i = (s32)xo;
+    float xo = FMA(t->fenv, b->fe, t->lfo_oct * lfo);
+    xo = FMA(t->oct, __builtin_sqrtf(d), xo);
+    if (xo > t->xmax) xo = t->xmax;
+    if (xo < SY_X_MIN) xo = SY_X_MIN;
+    s32 i = (s32)(xo + 8.0f) - 8;
     float fr = xo - (float)i;
     float p2 = FMA(fr, FMA(fr, FMA(fr, SY_C3, SY_C2), SY_C1), 1.0f);
-    float fc = SY_FC_LO * p2 * SY_POW2[i];
+    union {
+        u32 u;
+        float f;
+    } q;
+    q.u = (u32)(i + 127) << 23;                         /* 2^i */
+    float fc = t->fc_lo * p2 * q.f;
     float wv = fc * SY_PI_FS;
     float w2 = wv * wv;
     float g = wv * FMA(w2, FMA(w2, SY_T5, SY_T3), 1.0f);
-    float nk1 = -(SY_R2 + g);
-    float hh = 1.0f / FMA(g, SY_R2 + g, 1.0f);
-    float s1 = b->s1, s2 = b->s2, mg = b->mg;
-    u32 stopping = s->stopping;
+    float k2 = t->r2;
+    float nk1 = -(k2 + g);
+    float hh = 1.0f / FMA(g, k2 + g, 1.0f);
+    float tm = FMA(-t->trem, FMA(0.5f, lfo, 0.5f), 1.0f);
+    float gb = t->gain * tm;
+    float gt = 1.0f;
+    if (t->seq) {
+        float sp = b->seq_ph + (float)s->bpm100 * SY_BEAT;
+        if (sp >= 4.0f) sp = sp - 4.0f;
+        b->seq_ph = sp;
+        gt = (t->seq >> ((u32)(s32)(sp * 4.0f) & 15u)) & 1u ? 1.0f : 0.0f;
+    }
+    float mgt = (s->stopping || req != b->tone) ? 0.0f : 1.0f;
+    float s1 = b->s1, s2 = b->s2, mg = b->mg, gate = b->gate;
+    u32 mode = t->fmode;
     for (u32 n = 0; n < FRAMES; n++) {
         float v = FMA(nk1, s1, acc[n]);
         v = v - s2;
@@ -298,7 +382,10 @@ static float sy_output(sy_t *s, sy_block_t *b, const float *acc) {
         s1 = FMA(g, hp, bp);
         float lp = FMA(g, bp, s2);
         s2 = FMA(g, bp, lp);
-        float yv = lp;
+        float yv = mode == 0u ? lp : mode == 1u ? bp * k2 : hp;
+        yv = yv * gb;
+        gate = FMA(gt - gate, SY_GATE_K, gate);
+        yv = yv * gate;
         if (yv > 1.0f) {
             yv = 1.0f;
         } else if (yv < -1.0f) {
@@ -306,9 +393,12 @@ static float sy_output(sy_t *s, sy_block_t *b, const float *acc) {
         } else {
             yv = yv * FMA(-0.5f, yv * yv, 1.5f);
         }
-        if (stopping) {
+        if (mg < mgt) {
+            mg = mg + SY_FADE;
+            if (mg > mgt) mg = mgt;
+        } else if (mg > mgt) {
             mg = mg - SY_FADE;
-            if (mg < 0.0f) mg = 0.0f;
+            if (mg < mgt) mg = mgt;
         }
         yv = yv * mg;
         s->out[n] = (s32)(yv * SY_OUT_SCALE);
@@ -316,21 +406,66 @@ static float sy_output(sy_t *s, sy_block_t *b, const float *acc) {
     b->s1 = s1;
     b->s2 = s2;
     b->mg = mg;
+    b->gate = gate;
     return mg;
 }
 
 u32 sy_fp_step(sy_t *s) {
     sy_block_t *b = &sy_block;
     float x12[SY_SUB], dx[SY_SUB], acc[FRAMES];
-    if (!b->started) sy_init(b);
+    if (!b->started) sy_init(b, s);
+    u32 req = s->tone_req;
+    if (req >= SY_TONES) req = b->tone;
+    const sy_tone_t *t = &SY_TONE[b->tone];
     float pk = sy_input(b, x12, dx);
     float ev = b->env * SY_ENV_K;
     b->env = pk > ev ? pk : ev;
+    /* test 2: a pick restarts the pick envelope (the filter's, FM's index) */
+    u32 blk = b->blocks, picked = 0;
+    b->peaks[blk & 31u] = pk;
+    if (blk >= SY_P_TO) {
+        float ref = 0.0f;
+        for (u32 kk = SY_P_FROM; kk <= SY_P_TO; kk++) {
+            float v = b->peaks[(blk - kk) & 31u];
+            ref = v > ref ? v : ref;
+        }
+        picked = pk >= SY_P_MIN && pk >= SY_P_RATIO * ref && (s32)blk - b->last_pick >= (s32)SY_REFRACTORY;
+    }
+    if (picked) {
+        b->fe = 1.0f;
+        b->last_pick = (s32)blk;
+    } else {
+        b->fe = b->fe * t->fdec;
+    }
+    float lph = b->lfo_ph + t->lfo_inc;
+    if (lph >= 1.0f) lph = lph - 2.0f;
+    b->lfo_ph = lph;
+    float lfo = sy_sine(lph);
+    float vibr = FMA(t->vib, lfo, 1.0f);
     b->crossings += sy_bands(b, dx);
     for (u32 n = 0; n < FRAMES; n++)
         acc[n] = 0.0f;
-    s->sounding = sy_voices(b, acc);
-    float mg = sy_output(s, b, acc);
+    float namp;
+    s->sounding = sy_voices(b, t, vibr, acc, &namp);
+    if (t->noise > 0.0f) {
+        float nl = namp * t->noise;
+        u32 ns = b->ns;
+        for (u32 n = 0; n < FRAMES; n++) {
+            ns = ns * 1664525u + 1013904223u;
+            acc[n] = FMA(nl, (float)(s32)ns * 0x1p-31f, acc[n]);
+        }
+        b->ns = ns;
+    }
+    float mg = sy_output(s, b, t, lfo, req, acc);
+    if (req != b->tone && mg <= 0.0f && !s->stopping) {     /* faded out: the new tone, from rest */
+        b->tone = req;
+        b->fe = 0.0f;
+        b->lfo_ph = 0.0f;
+        b->seq_ph = 0.0f;
+        b->gate = 1.0f;
+        b->s1 = 0.0f;
+        b->s2 = 0.0f;
+    }
     b->blocks++;
     return s->stopping && mg <= 0.0f ? SY_OFF : SY_RUN;
 }

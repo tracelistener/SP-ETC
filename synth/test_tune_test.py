@@ -1,4 +1,4 @@
-"""Checks for SY synth test 1 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
+"""Checks for SY synth test 2 with guitar synth test 6 (build_tune_test.py): the CPU meter as in cabinet test 2, the
 tracker (note tracker test 2's, with test 4's click and clean readings), the SY engine (12. below), and the synth: the tracker's note on the Sound Generator,
 the cases synth test 3 got wrong on the unit (picks at the ringing string's level, strings ringing together) and
 test 2's (a thump, a re-pick, vibrato, drum mode), the pick's velocity, OCT; test 5's ROUTING gate (silent on Mix,
@@ -37,7 +37,11 @@ image. On top of them:
    - the module's output = tunetest/sy_ref.py's, value for value, on open strings, a strummed and a picked chord, a
      bend, a clipped strum, hiss alone; the bands sounding are the strings' partials; silence after the strings stop;
    - s0-s31, FPSCR, r4-r11 kept; its own stack; sy_tx adds its block to the DRY pair once, clipped to 20 bits, and
-     the whole mixer is the parent's plus that block; the SLOW rules; the instructions a step takes.
+     the whole mixer is the parent's plus that block; the SLOW rules; the instructions a step takes;
+   - test 2: every tone value for value against sy_ref.py (the SEQ tone at the stub's tempo); VALUE + pad picks a
+     tone (popup, the pad's press and release taken, FX deep edit's handlers asked first / for every other key),
+     pad 16 stops the synth and another pad starts it again; a new tone fades out, switches and fades in, value for
+     value; the builder's two calls in FX deep edit's bridges; the popups fit the screen.
 
 Not a hardware test: no timing (instructions are counted as a proxy), no screen, synthetic strings.
 """
@@ -961,9 +965,11 @@ def synth_checks(img, man, kit_sym):
 
 
 # ---------------------------------------------------------------------------------------------
-# SY synth test 1: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx) and its twin (sy_ref.py).
+# SY synth tests 1 and 2: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx, sy_key_down,
+# sy_key_up) and its twin (sy_ref.py).
 SY_OFF, SY_RUN, SY_SLOW = range(3)
-SY_HEAD = 'req starts stops reset_req state rx steps tx fresh stopping sounding last_mix'.split()
+SY_HEAD = ('req starts stops reset_req tone_req muted picks taken bpm100 tempo_checked state rx steps tx fresh stopping '
+           'sounding last_mix').split()
 SY_TAIL = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack'.split()
 DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own screens)
 
@@ -971,13 +977,14 @@ DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own 
 class SyLayout:
     """sy_t and sy_block_t offsets, from the module's sy_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<16I', m.bytes(sym['sy_layout'], 64))
+        v = struct.unpack('<18I', m.bytes(sym['sy_layout'], 72))
         (self.sy_bytes, self.state, self.out, self.w_n, self.pub, self.tot_max_ever, self.block_bytes, self.e,
-         self.per, self.ph, self.amp, self.owned, self.env, self.started, self.stack, self.nper) = v
+         self.per, self.ph, self.amp, self.owned, self.env, self.started, self.tone, self.nper, self.tone_req,
+         self.fe) = v
         check(self.state == 4 * SY_HEAD.index('state') and self.out == 4 * len(SY_HEAD) and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
-              self.sy_bytes == self.tot_max_ever + 20 and self.stack + 2048 <= self.block_bytes and
-              self.block_bytes - self.stack - 2048 < 32,
+              self.sy_bytes == self.tot_max_ever + 20 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
+              self.started + 12 <= self.block_bytes,
               'sy_t and sy_block_t layout as the test reads it')
 
 
@@ -1056,12 +1063,12 @@ def sy_checks(parent_img, img, man, kit_sym):
     # 1. When it plays: every page but the Sound Generator's, with EXT SOURCE on and ROUTING on ExtIn.
     m = SyMachine(img, man)
     lay = m.sl
-    m.uc.mem_write(sym['sy_block'], b'\xA5' * lay.stack)               # leftovers of an earlier run
+    m.uc.mem_write(sym['sy_block'], b'\xA5' * lay.block_bytes)         # leftovers of an earlier run
     m.call(sym['sy_ui'])
     check(m.sy()['req'] == 0, 'before the UI has read EXT SOURCE and ROUTING: the engine not started')
     m.start()
     st = m.sy()
-    check(st['req'] == 1 and st['starts'] == 1 and not any(m.bytes(sym['sy_block'], lay.stack)),
+    check(st['req'] == 1 and st['starts'] == 1 and not any(m.bytes(sym['sy_block'], lay.block_bytes)),
           'main screen, EXT SOURCE on, ROUTING ExtIn: the engine cleared and handed over')
     st = m.step()
     check(st['state'] == SY_RUN and st['steps'] == 1 and st['fresh'] == 1 and
@@ -1173,9 +1180,9 @@ def sy_checks(parent_img, img, man, kit_sym):
                           f'cycle; the bands {", ".join(f"{k}: {r["bands"]}" for k, r in results.items())})')
     report['sy']['signals'] = results
     report['sy']['worst_step_instructions'] = worst
-    # 3. Registers and stacks: the engine on its own stack, every FPU register and FPSCR as they were. One step first:
-    #    the model's first FPU instruction opens the task's FPU context and loads FPSCR from FPDSCR (0), as the
-    #    audio task's own first one did long before (the tracker's check has its earlier steps for this).
+    # 3. Registers and stacks: the engine on the tracker's stack (test 2), every FPU register and FPSCR as they were.
+    #    One step first: the model's first FPU instruction opens the task's FPU context and loads FPSCR from FPDSCR
+    #    (0), as the audio task's own first one did long before (the tracker's check has its earlier steps for this).
     mr = SyMachine(img, man)
     mr.start()
     mr.step()
@@ -1191,20 +1198,20 @@ def sy_checks(parent_img, img, man, kit_sym):
         gpr = [rng.getrandbits(32) for _ in range(8)]
         for k, v in enumerate(gpr):
             mr.uc.reg_write(getattr(ar, f'UC_ARM_REG_R{k + 4}'), v)
-        mr.uc.mem_write(sym['sy_block'] + lay.stack, b'\xEE' * 2048)
+        mr.uc.mem_write(mr.block + mr.lay.b_stack, b'\xEE' * 2048)
         mr.uc.mem_write(STACK - 0x800, b'\xEE' * 0x800)
         mr.feed(sig[40 + b])
         mr.call(sym['sy_rx'])
         fpu_ok &= [mr.uc.reg_read(getattr(ar, f'UC_ARM_REG_S{k}')) for k in range(32)] == pattern and \
             mr.uc.reg_read(ar.UC_ARM_REG_FPSCR) & 0xF7C0009F == fpscr & 0xF7C0009F
         regs_ok &= [mr.uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k + 4}')) for k in range(8)] == gpr
-        stk = mr.bytes(sym['sy_block'] + lay.stack, 2048)
+        stk = mr.bytes(mr.block + mr.lay.b_stack, 2048)
         stack_depth = max(stack_depth, 2048 - next(i for i in range(2048) if stk[i] != 0xEE))
         tsk = mr.bytes(STACK - 0x800, 0x800)
         task_depth = max(task_depth, 0x800 - next((i for i in range(0x800) if tsk[i] != 0xEE), 0x800))
     check(fpu_ok and regs_ok, 'SY: s0-s31, FPSCR and r4-r11 as they were after every step')
     check(0 < stack_depth <= 1536 and task_depth <= 96,
-          f'SY: the step runs on the engine\'s own stack ({stack_depth} of 2,048 bytes); the task\'s stack sees '
+          f'SY: the step runs on the tracker\'s stack ({stack_depth} of 2,048 bytes); the task\'s stack sees '
           f'{task_depth} bytes (sy_rx\'s frame)')
     report['sy'].update(private_stack_bytes=stack_depth, task_stack_bytes=task_depth)
     # 4. TX: the block onto TX line 3's DRY pair (words 0/1 of each 16-word frame), clipped to 20 bits, once.
@@ -1283,6 +1290,212 @@ def sy_checks(parent_img, img, man, kit_sym):
           'left and back: started afresh; one step over the whole 800,000-cycle block: SLOW at once, the window so '
           'far published')
     report['sy']['tables'] = {k: round(float(v), 9) for k, v in sy_ref.G.items()}
+    sy_tone_checks(img, man)
+
+
+def sy_signal():
+    """A strummed G chord (0.6 s) and a bent E4, over hiss and hum, ending in silence."""
+    import numpy as np
+    notes = [ref.OPEN[s] + f for s, f in ref.CHORDS['G']]
+    x = np.zeros(int(0.5 * 48000))
+    for k, n in enumerate(notes):
+        at = int((0.05 + k * 0.03) * 48000)
+        sg = ref.guitar(ref._hz(n), 0.45, amp=0.3, seed=k, B=ref._stiff(n))
+        x[at:at + len(sg)] += sg[:len(x) - at]
+    bend = ref.guitar(ref._hz(64), 0.35, bend=(0.08, 0.25, 200))
+    return ref.hiss(np.concatenate([x, bend, np.zeros(4800)]), 3)
+
+
+def sy_tone_checks(img, man):
+    """SY test 2: the tones, the pick, a tone change."""
+    import sy_ref
+    sym = man['symbols']
+    fde = man['guards']['fde']
+    # 1. Every tone (picked before the start: the engine starts on it) against sy_ref.py, value for value.
+    counter = [0]
+
+    def every(uc, a_, s_, _):
+        counter[0] += 1
+    blocks = ref.to_blocks(sy_signal())
+    mism, worst, peaks = [], {}, {}
+    for tone in range(len(sy_ref.TONES)):
+        mt = SyMachine(img, man)
+        mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
+        mt.start()
+        eng = sy_ref.Engine(tone)
+        top = pk = 0
+        for b, values in enumerate(blocks):
+            mt.feed(values)
+            if 40 <= b < 160 and b % 4 == 0:                           # counted where the chord rings fullest
+                h = mt.uc.hook_add(UC_HOOK_CODE, every)
+                counter[0] = 0
+                mt.call(sym['sy_rx'])
+                mt.uc.hook_del(h)
+                top = max(top, counter[0])
+            else:
+                mt.call(sym['sy_rx'])
+            got = list(struct.unpack('<64i', mt.bytes(sym['sy'] + mt.sl.out, 256)))
+            want, _ = eng.step(values, bpm100=mt.sy()['bpm100'])
+            pk = max(pk, max(abs(v) for v in want))
+            if got != want:
+                mism.append((tone, b))
+        worst[sy_ref.TONES[tone]['name']] = top
+        peaks[sy_ref.TONES[tone]['name']] = pk
+    check(not mism and all(v > 1000 for v in peaks.values()),
+          f'every tone: the module\'s output = sy_ref.py\'s, value for value ({len(sy_ref.TONES)} tones x '
+          f'{len(blocks)} blocks; first differences {mism[:3]})')
+    check(max(worst.values()) <= 100000,
+          f'the most instructions a step takes, by tone: {worst} (the most is {max(worst.values()) / 8000:.1f}% of a '
+          f'block at one a cycle)')
+    report['sy']['tones'] = dict(worst_step_instructions=worst, peaks=peaks,
+                                 names=[t['name'] for t in sy_ref.TONES])
+    # 2. The pick: VALUE held + a pad, where the synth can play. FX deep edit's handlers (stubbed: they record the
+    #    call and return 0) are asked first on a press, and on every release the pick did not take.
+    down, up = int(fde['down']['handler'], 16), int(fde['up']['handler'], 16)
+    mk = SyMachine(img, man)
+    mk.stub(down, 0)
+    mk.stub(up, 0)
+    mk.start()
+    width, line = base.font_widths(img)
+
+    def key(fn, k):
+        mk.uc.mem_write(SCRATCH + 0x200, struct.pack('<4h', 5, k, 0, 0))
+        mk.log.clear()
+        r = mk.call(sym[fn], SCRATCH + 0x200)
+        return r, [(a, r0) for a, r0, *_ in mk.log]
+
+    def value(held):
+        b = mk.get(base.KEYS + 6, '<B')
+        mk.put(base.KEYS + 6, (b | 2) if held else (b & ~2), '<B')
+
+    mk.popups()
+    value(False)
+    plain = key('sy_key_down', 3)
+    plain_up = key('sy_key_up', 3)
+    value(True)
+    mk.popups()
+    took = key('sy_key_down', 3)
+    text = mk.posted()
+    st = mk.sy()
+    released = key('sy_key_up', 3)
+    st2 = mk.sy()
+    other = key('sy_key_down', 0x22)                                   # EXIT with VALUE held: not a pad
+    check(plain == (0, [(down, SCRATCH + 0x200)]) and plain_up == (0, [(up, SCRATCH + 0x200)]) and
+          took == (1, [(down, SCRATCH + 0x200)]) and text == sy_ref.popup_name(3) and st['tone_req'] == 3 and
+          st['taken'] == 8 and st['picks'] == 1 and released == (1, []) and st2['taken'] == 0 and
+          other == (0, [(down, SCRATCH + 0x200)]),
+          f'VALUE + pad 4: FX deep edit asked first, then tone 4 picked ({text!r}), the press and its release taken '
+          f'(the release never reaches FX deep edit); a pad without VALUE, and VALUE + another key, go on as before')
+    mk.popups()
+    off = key('sy_key_down', 15)
+    off_text = mk.posted()
+    key('sy_key_up', 15)
+    sig = ref.to_blocks(sy_strum('G')[0])
+    states = [mk.step(sig[k])['state'] for k in range(12)]
+    st = mk.sy()
+    mk.popups()
+    key('sy_key_down', 6)
+    key('sy_key_up', 6)
+    mk.step(sig[12])
+    st3 = mk.step(sig[13])
+    check(off[0] == 1 and off_text == 'SY OFF' and st['muted'] == 1 and states[-1] == SY_OFF and
+          SY_RUN in states and st3['state'] == SY_RUN and st3['muted'] == 0 and st3['tone_req'] == 6 and
+          st3['starts'] == 2 and mk.get(sym['sy_block'] + mk.sl.tone, '<I') == 6,
+          f'VALUE + pad 16: SY OFF, the synth fades out and stops ({states}); VALUE + pad 7: on again, started '
+          f'afresh on tone 7')
+    quiet = []
+    for label, kw, page in (('ROUTING Mix', dict(routing=0), 1), ('Sound Generator page', dict(), SG_PAGE)):
+        q = SyMachine(img, man, page=page, **kw)
+        q.stub(down, 0)
+        q.start()
+        q.put(base.KEYS + 6, 2, '<B')
+        q.uc.mem_write(SCRATCH + 0x200, struct.pack('<4h', 5, 2, 0, 0))
+        quiet.append((label, q.call(sym['sy_key_down'], SCRATCH + 0x200), q.sy()['tone_req']))
+    check(all(r == 0 and t == 0 for _, r, t in quiet),
+          f'where the synth cannot play (ROUTING Mix, the Sound Generator page) VALUE + pad goes on to the page '
+          f'({quiet})')
+    texts = [sy_ref.popup_name(p) for p in range(16)]
+    widest = max(sum(width(c) for c in t) for t in texts)
+    check(widest - 1 + 18 <= 128, f'every pick\'s popup fits the screen: widest {widest} px ({max(texts, key=len)!r})')
+    # 3. A tone change while playing: out over 8 blocks, the new tone from rest, in over 8, value for value.
+    mc = SyMachine(img, man)
+    mc.stub(down, 0)
+    mc.start()
+    eng = sy_ref.Engine(0)
+    blocks = ref.to_blocks(sy_strum('Am')[0])
+    mism, fade = [], []
+    for b, values in enumerate(blocks[:420]):
+        if b == 200:
+            mc.put(base.KEYS + 6, 2, '<B')
+            mc.uc.mem_write(SCRATCH + 0x200, struct.pack('<4h', 5, 8, 0, 0))
+            mc.call(sym['sy_key_down'], SCRATCH + 0x200)
+        mc.feed(values)
+        mc.call(sym['sy_rx'])
+        got = list(struct.unpack('<64i', mc.bytes(sym['sy'] + mc.sl.out, 256)))
+        want, _ = eng.step(values, tone_req=8 if b >= 200 else 0, bpm100=mc.sy()['bpm100'])
+        if got != want:
+            mism.append(b)
+        if 198 <= b <= 218:
+            fade.append((b, mc.get(sym['sy_block'] + mc.sl.tone, '<I'), max(abs(v) for v in got)))
+    switched = next(b for b, t, _ in fade if t == 8)
+    check(not mism and switched == 207 and fade[2][2] > 0 and fade[9][2] < fade[2][2],
+          f'VALUE + pad 9 while playing: the output fades out over 8 blocks, tone 9 from block {switched}, fades in; '
+          f'the module = sy_ref.py value for value across it (first differences {mism[:3]})')
+    # 4. The builder's two calls: FX deep edit's bridges now call sy_key_down / sy_key_up.
+    calls = {}
+    for name, fn in (('down', 'sy_key_down'), ('up', 'sy_key_up')):
+        site = int(fde[name]['call'], 16)
+        code = mk.bytes(site, 4)
+        calls[name] = (code.hex(), fn)
+    patched = [p for p in man['patches'] if 'FX deep edit' in p.get('what', '')]
+    check(len(patched) == 2 and all(p['target'] == sym[fn] & ~1 and p['original_target'] == int(fde[n]['handler'], 16)
+                                    for p, (n, fn) in zip(patched, (('down', 'sy_key_down'), ('up', 'sy_key_up')))) and
+          all(mk.bytes(p['address'], 4).hex() == p['replacement_hex'] for p in patched),
+          f'FX deep edit\'s bridges call sy_key_down and sy_key_up (bl), in place of its handlers {calls}')
+
+
+def entry_checks(parent_img, img, sym):
+    """test_nam_test.entry_checks, but at the popup tick's resume point LR is not compared (SY test 2). Bounce's ui
+    bridge runs the stock prologue's push {r4, r5, r6, lr} before it calls diag_ui (checked here), and the stock
+    body ends with pop {r4, r5, r6, pc}: LR is dead there. diag_ui's last call (since test 2 the tempo function's,
+    from sy_ui) leaves its own return address in it; test 1's LR matched the parent's only because no call came
+    last."""
+    out = {}
+    for name, start, resume, entry_regs in (
+            ('mixer', base.MIXER, 0x1C2DC, {'R0': base.ARGS, 'R1': 0x11, 'R2': 0x22, 'R3': 0x33}),
+            ('popup tick', base.UI_TICK, 0x8006B95C, {'R0': 1, 'R1': 0x11, 'R2': 0x22, 'R3': 0x33})):
+        res = []
+        for image in (parent_img, img):
+            m = Machine(image)
+            m.put(0x80245880, 0, '<h')                        # not the main screen: the UI step stays idle
+            regs = dict(entry_regs, R4=0x44, R5=0x55, R6=0x66, R7=0x77, R8=0x88, R9=0x99, R10=0xAA, R11=0xBB,
+                        LR=0x1D09B if name == 'mixer' else 0x8003A9F5, SP=STACK)
+            for r, v in regs.items():
+                m.uc.reg_write(getattr(ar, 'UC_ARM_REG_' + r), v)
+            m.uc.emu_start(start | 1, resume, count=200000)
+            got = {r: m.uc.reg_read(getattr(ar, 'UC_ARM_REG_' + r)) for r in
+                   ('R0', 'R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'SP', 'LR', 'PC')}
+            sp = got['SP']
+            res.append((got, m.bytes(sp, STACK - sp), m))
+        (gp, fp, mp), (gm, fm, mm) = res
+        if name == 'mixer':
+            st = base.meter_state(mm, sym['meter'])
+            exit_ = sym['meter_mix_exit'] | 1
+            same = all(gp[r] == gm[r] for r in ('R0', 'R1', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'SP', 'PC'))
+            frame_ok = len(fp) == len(fm) and fp[:-4] == fm[:-4] and struct.unpack('<I', fm[-4:])[0] == exit_ and \
+                struct.unpack('<I', fp[-4:])[0] == 0x1D09B
+            check(same and frame_ok and st['mix_ret'] == 0x1D09B,
+                  'mixer entry: registers and frame as stock, return routed through meter_mix_exit')
+        else:
+            import capstone
+            same = all(gp[r] == gm[r] for r in ('R0', 'R1', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'SP', 'PC'))
+            md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
+            head = [f'{i.mnemonic} {i.op_str}' for i in md.disasm(mm.bytes(0x83FE8080, 8), 0x83FE8080)]
+            check(same and fp == fm and head[:1] == ['push {r4, r5, r6, lr}'],
+                  "popup tick entry through bounce's ui bridge (diag_ui): registers (but the dead LR) and frame as "
+                  "the parent's (bnc_ui alone); the bridge saves LR before the call")
+        out[name] = dict(stock_sp=hex(gp['SP']), meter_sp=hex(gm['SP']))
+    report['entries'] = out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1315,7 +1528,7 @@ def main():
     if 'sy' in only:
         sy_checks(parent_img, img, man, kit_sym)
     if 'meter' in only:
-        base.entry_checks(parent_img, img, sym)
+        entry_checks(parent_img, img, sym)
         base.arithmetic(img, man)
         readout(img, man)
         base.ui(img, man, head='--')

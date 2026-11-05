@@ -114,7 +114,7 @@ extern tt_block_t tt_block;
 u32 tune_fp_call(u32 (*fn)(tt_t *), tt_t *arg, void *stack_top);
 u32 tune_fp_step(tt_t *t);
 
-/* ---- SY synth test 1 (sy_fp.c): 49 semitone bands, an oscillator each, to the DRY pair ---- */
+/* ---- SY synth tests 1 and 2 (sy_fp.c): 49 semitone bands, oscillators each, to the DRY pair ---- */
 #define SY_BANDS 49u
 #define SY_SUB 16u                          /* 12 kHz samples a block */
 
@@ -123,6 +123,21 @@ u32 tune_fp_step(tt_t *t);
 typedef struct {
     float b0, na1, na2, lc, pc, plo, phi, olo, ohi;
 } sy_band_t;
+
+/* Test 2: a tone (sy_tables.h, from sy_ref.py's TONES). */
+typedef struct {
+    u32 wa, wb, fm, fmode;                  /* wave A (0 saw, 1 pulse, 2 triangle, 3 sine); wave B (0 none, else 1 +
+                                               its wave); B modulates A's phase; the filter (0 LP, 1 BP, 2 HP) */
+    u32 seq;                                /* the 16-step gate (bit n: step n sounds), 0 none */
+    float pw, rb, lb, fm_env;               /* the pulse's edge (ramp units); B's frequency ratio; B's level (FM: the
+                                               index); the index a pick adds */
+    float att, rel;                         /* the band amplitude's step per block, rising and falling (1: at once) */
+    float fc_lo, oct, xmax, r2;             /* the cutoff quiet, octaves at full level, at most (octaves), 1/Q */
+    float fenv, fdec;                       /* octaves the pick envelope adds; its decay per block */
+    float lfo_inc, vib, trem, lfo_oct;      /* the LFO's step per block (ramp units); vibrato (ratio), tremolo, cutoff
+                                               (octaves) */
+    float noise, gain;                      /* breath noise (x the bands' summed amplitude); the output gain */
+} sy_tone_t;
 
 /* sy.state, written by the audio task only */
 enum {
@@ -140,6 +155,11 @@ typedef struct {
     volatile u32 req;                       /* 1: run; 0: fade out and stop */
     u32 starts, stops;
     u32 reset_req;
+    volatile u32 tone_req;                  /* test 2: the tone picked (VALUE + pad 1-15: 0..14) */
+    volatile u32 muted;                     /* test 2: VALUE + pad 16: the synth off */
+    u32 picks, taken;                       /* tones picked; the pads whose press the pick took (their releases too) */
+    volatile u32 bpm100;                    /* the SP's tempo for the step gate (BPM x 100), every 0.1 s */
+    u32 tempo_checked;
     /* written by the audio task */
     volatile u32 state;
     u32 rx, steps, tx, fresh;               /* fresh: out[] holds a block TX has not added yet */
@@ -153,7 +173,8 @@ typedef struct {
     u32 tot_max_ever, over, slow_cycles, hot, reset_ack;
 } sy_t;
 
-/* The engine's memory, in the module. The UI clears it before a start. */
+/* The engine's memory, in the module. The UI clears it before a start. Test 2: no stack of its own: the engine runs
+ * on the tracker's (tt_block.stack), after the tracker's step in the same wake. */
 typedef struct __attribute__((aligned(32))) {
     float dz[2][2];                         /* the 48 -> 12 kHz low-pass's two biquads */
     float xh[2];                            /* the block before's last two 12 kHz samples */
@@ -163,15 +184,18 @@ typedef struct __attribute__((aligned(32))) {
     float tl[SY_BANDS];                     /* its last positive crossing, from this block's start (12 kHz samples) */
     float per[SY_BANDS], trend[SY_BANDS];   /* its period (alpha-beta tracked) and the period's trend */
     float ph[SY_BANDS], amp[SY_BANDS];      /* its oscillator: the ramp (-1..1) and the amplitude */
+    float phb[SY_BANDS];                    /* test 2: wave B's ramp */
+    float peaks[32];                        /* test 2: the blocks' peaks, for the pick */
     u8 armed[SY_BANDS];                     /* went below -ARM x its level since the last crossing */
     u8 nper[SY_BANDS];                      /* periods counted since it woke (to 255) */
     u8 owned[SY_BANDS];                     /* sounding in the last block */
-    u8 pad[5];                              /* the stack 8-byte aligned */
-    float env, s1, s2, mg;                  /* the input's peak follower, the output filter, the stop's fade */
-    u32 started, blocks, crossings, pad2;
-    u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
+    u8 age[SY_BANDS];                       /* test 2: blocks it has sounded (to 255; kept while it releases) */
+    float env, s1, s2, mg;                  /* the input's peak follower, the output filter, the fade */
+    float fe, lfo_ph, seq_ph, gate;         /* test 2: the pick envelope, the LFO's ramp, the steps' beats, the gate */
+    s32 last_pick;                          /* test 2: the block of the last pick */
+    u32 ns, tone;                           /* test 2: the noise's LCG; the tone playing */
+    u32 started, blocks, crossings;
 } sy_block_t;
-_Static_assert((__builtin_offsetof(sy_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");
 
 extern sy_t sy;
 extern sy_block_t sy_block;

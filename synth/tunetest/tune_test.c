@@ -1,7 +1,12 @@
-/* SY synth test 1, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
+/* SY synth test 2, with guitar synth test 6 (note tracker 3): on v9.52 (combined-test17) with the CPU meter of IR
  * diagnostic test 3 and note tracker test 2's readout. SY synth test 1 (sy_fp.c) is a polyphonic synth in the way
- * BOSS's SY pedals work: 49 semitone bands, each with its own oscillator, from RX pair 0, added to the DRY pair of
+ * BOSS's SY pedals work: 49 semitone bands, each with its own oscillators, from RX pair 0, added to the DRY pair of
  * TX line 3 one block later, on every page but the Sound Generator's while EXT SOURCE is on and ROUTING on ExtIn.
+ * Test 2: 15 tones and OFF. Hold VALUE and press pad 1-16 (where the synth can play): that tone, a popup with its
+ * name, and the pad's press and release go no further (no sample plays). The UI dispatcher's key handlers come here
+ * through FX deep edit's bridges (their call to fde_key_down / fde_key_up, re-pointed by the builder to sy_key_down /
+ * sy_key_up, which hand every key on to them first / unless the pick took it). The UI reads the SP's tempo every
+ * 0.1 s for the SEQ tone's steps.
  * On the Sound Generator page guitar synth test 6 plays as before: The SP's main
  * processor follows the note from the input the effects chip hands back (RX pair 0, after the input FX: cabinet
  * test 2 on the unit found the input only in pairs 0 and 1). INPUT SETTING's ROUTING picks what pair 0 holds: on
@@ -44,8 +49,9 @@
  * the whole mixer 0x1c2d0, entry to return; PAD and SG are still kept (the readout does not show them). This file is
  * the integer side: the builder checks that none of its functions has an FPU instruction.
  */
-#include "tune_test_links.h"   /* from the builder: SG_PRE_TARGET, BNC_UI, BNC_RX */
+#include "tune_test_links.h"   /* from the builder: SG_PRE_TARGET, BNC_UI, BNC_RX, SG_MIDI, KIT_MODE, FDE_DOWN, FDE_UP */
 #include "tune_test.h"
+#include "sy_names.h"          /* from the builder (sy_ref.py): SY_POPUP, SY_OFF_PAD */
 
 #define EXPORT __attribute__((used))
 #define S_(x) #x
@@ -71,6 +77,8 @@
 
 #define KEY_EXIT 0x22
 #define KEY_SHIFT 0x2A
+#define KEY_VALUE 0x31             /* the VALUE knob's push */
+#define PADS 16u                   /* key IDs 0..15 are the pads */
 #define KEY_BYTES 11
 #define MAIN_PAGE 1
 #define STOCK_PAGES 95             /* pages 0..94 are stock; DOOM OS adds its own screens above */
@@ -151,11 +159,12 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
     sizeof(tt_block_t), OFFSET(tt_block_t, ring), OFFSET(tt_block_t, span), OFFSET(tt_block_t, d6),
     OFFSET(tt_block_t, peaks), OFFSET(tt_block_t, z), OFFSET(tt_block_t, started), OFFSET(tt_block_t, stack),
     OFFSET(tt_t, posted_rseq), OFFSET(tt_block_t, pick_peak), OFFSET(tt_block_t, env)};
-EXPORT const u32 sy_layout[] = {                          /* SY test 1: the tests read these */
+EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: the tests read these */
     sizeof(sy_t), OFFSET(sy_t, state), OFFSET(sy_t, out), OFFSET(sy_t, w_n), OFFSET(sy_t, pub),
     OFFSET(sy_t, tot_max_ever), sizeof(sy_block_t), OFFSET(sy_block_t, e), OFFSET(sy_block_t, per),
     OFFSET(sy_block_t, ph), OFFSET(sy_block_t, amp), OFFSET(sy_block_t, owned), OFFSET(sy_block_t, env),
-    OFFSET(sy_block_t, started), OFFSET(sy_block_t, stack), OFFSET(sy_block_t, nper)};
+    OFFSET(sy_block_t, started), OFFSET(sy_block_t, tone), OFFSET(sy_block_t, nper), OFFSET(sy_t, tone_req),
+    OFFSET(sy_block_t, fe)};
 
 /* ---- the tracker: what the UI and the audio task reach ---- */
 #define SYSPRM 0x82DFEED0u                             /* the system parameter object */
@@ -174,6 +183,15 @@ EXPORT const u32 sy_layout[] = {                          /* SY test 1: the test
 #define CUR_TASK (*(volatile u32 *)0x202BBBFCu)        /* the kernel's running task (its TCB) */
 #define TCB_ATTR 0x10
 #define TX_WORDS 16u                                   /* TX line 3: 16 words a frame, DRY = words 0/1 */
+/* Test 2: the SP's tempo, as the arp reads it: the stock sample-tempo function for the first pad of the bank on the
+ * pads (BPM x 100). */
+#define PAD_TEMPO ((s32 (*)(s32))0x80047DD1u)
+#define CUR_BANK (*(volatile s32 *)0x82DFFF44u)
+#define BANKS 10
+/* FX deep edit's key handlers (the builder reads them from its bridges' calls): 1 takes the key. */
+#define FDE_KEY_DOWN ((u32 (*)(const s16 *))FDE_DOWN)
+#define FDE_KEY_UP ((u32 (*)(const s16 *))FDE_UP)
+#define SY_POPUP_MS 1500
 #define DRY_MAX 0x7FFFF                                /* the packer clips every stem to 20 bits */
 #define DRY_MIN (-0x80000)
 
@@ -493,7 +511,7 @@ EXPORT void sy_rx(void) {
     }
     u32 budget = meter.budget ? meter.budget : NOMINAL;
     u32 t0 = DWT_CYCCNT;
-    u32 next = sy_fp_call(sy_fp_step, s, &sy_block.stack[STACK_BYTES / 4]);
+    u32 next = sy_fp_call(sy_fp_step, s, &tt_block.stack[STACK_BYTES / 4]);   /* test 2: the tracker's stack */
     u32 dt = DWT_CYCCNT - t0;
     s->steps++;
     s->fresh = 1;
@@ -921,12 +939,25 @@ UI_SMALL static void sy_start(sy_t *s) {
     s->req = 1;
 }
 
-/* Every UI tick: the SY engine on every page but the Sound Generator's (guitar synth test 6 plays there), with EXT
- * SOURCE on and ROUTING on ExtIn (on Mix the effects chip hands back the mix as heard: the engine would hear its own
- * sound on DRY). Leaving that lets it fade out over 8 blocks. */
+/* Where the synth can play: every page but the Sound Generator's (guitar synth test 6 plays there), with EXT SOURCE on
+ * and ROUTING on ExtIn (on Mix the effects chip hands back the mix as heard: the engine would hear its own sound on
+ * DRY). */
+static inline u32 sy_can_play(void) { return syn_live(&tt) && PAGE != SG_PAGE; }
+
+/* Every UI tick: the SY engine where it can play, unless pad 16 put it off (test 2). Leaving that lets it fade out
+ * over 8 blocks. Every 0.1 s: the SP's tempo (test 2: the SEQ tone's steps), as the arp reads it. */
 EXPORT UI_SMALL void sy_ui(void) {
     sy_t *s = &sy;
-    u32 want = syn_live(&tt) && PAGE != SG_PAGE;
+    u32 now = DWT_CYCCNT;
+    if (now - s->tempo_checked >= CHECK_CYCLES) {
+        s->tempo_checked = now;
+        s32 bank = CUR_BANK;
+        if ((u32)bank < BANKS) {
+            s32 t = PAD_TEMPO(bank * 16);
+            if (t >= 2000 && t <= 30000) s->bpm100 = (u32)t;
+        }
+    }
+    u32 want = sy_can_play() && !s->muted;
     if (!want) {
         if (s->req) {
             s->req = 0;
@@ -935,6 +966,46 @@ EXPORT UI_SMALL void sy_ui(void) {
         return;
     }
     if (!s->req && s->state == SY_OFF) sy_start(s);
+}
+
+/* Test 2: VALUE + pad n picks tone n (pad 16: off), with a popup naming it. */
+UI_SMALL static void sy_pick(u32 pad) {
+    sy_t *s = &sy;
+    s->picks++;
+    if (pad == SY_OFF_PAD) {
+        s->muted = 1;
+    } else {
+        s->tone_req = pad;
+        s->muted = 0;
+    }
+    POPUP_POST(SY_POPUP[pad], SY_POPUP_MS);
+}
+
+static inline u32 key_held(u32 k) { return (KEYS[k >> 3] >> (k & 7u)) & 1u; }
+
+/* Every key press, on any page, before the dispatcher's own handling (FX deep edit's bridge calls this in place of
+ * fde_key_down): FX deep edit's first; then, while VALUE is held where the synth can play, a pad picks a tone and
+ * goes no further (1: taken, so no sample plays and its bit in the held-key bitmap stays clear). */
+EXPORT u32 sy_key_down(const s16 *ev) {
+    if (FDE_KEY_DOWN(ev)) return 1;
+    s32 key = ev[1];
+    if ((u32)key < PADS && key_held(KEY_VALUE) && sy_can_play()) {
+        sy_pick((u32)key);
+        sy.taken |= 1u << key;
+        return 1;
+    }
+    return 0;
+}
+
+/* Every key release (in place of fde_key_up): the release of a pad whose press the pick took is taken too; any other
+ * goes to FX deep edit's. */
+EXPORT u32 sy_key_up(const s16 *ev) {
+    s32 key = ev[1];
+    if ((u32)key < PADS && ((sy.taken >> key) & 1u)) {
+        sy.taken &= ~(1u << key);
+        return 1;
+    }
+    return FDE_KEY_UP(ev);
 }
 
 /* Every UI tick, on the Sound Generator page: the tracker's note there, through the entry MIDI IN on the page's

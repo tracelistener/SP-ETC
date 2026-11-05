@@ -1,4 +1,4 @@
-# SY synth test 1: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 and 2: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -130,10 +130,93 @@ the chain.
 "OMG IT works really well!" So the method carries over from the model guitar to a real one: the real partials,
 pick noise and hum gave no trouble the user mentioned. No details yet on chords, low notes or the readout's numbers.
 
+## SY synth test 2 (sy-synth-test2): 15 tones
+
+The user asked how the synth could make many sounds without the Sound Generator, and what BOSS's pedals offer (the
+SY-1's 121 sounds in 11 types, the SY-200's 170 in 12 groups, the SY-300's three oscillators, filters, LFOs and step
+sequencer), then said "Build it".
+
+- **Picking:** push the VALUE knob in, keep it held, and press pad 1-16, where the synth can play. A popup names the
+  tone, for example `SY 4 SUPERSAW`. The pad's press and release go no further, so no sample plays. Pad 16 is
+  `SY OFF`: the synth fades out and stops, and any other pad starts it again on that tone. A new tone fades the
+  output out over 8 blocks, switches, and fades it in again. The filter, the LFO, the pick envelope and the gate
+  start from rest; the bands' analysis goes on.
+- **How the keys arrive:** v9.52's FX deep edit already hooks the UI dispatcher's key press and release handlers
+  (0x8003abd0, 0x8003ada0). Each jumps to a bridge in its module, which calls its handler with `bl`. The builder
+  re-points those two calls to `sy_key_down` / `sy_key_up`.
+  - A press goes to FX deep edit's handler first. If FX deep edit doesn't take it, VALUE + pad picks a tone.
+  - A release of a pad whose press the pick took is taken too. Any other release goes to FX deep edit's handler.
+  - Where the synth can't play (ROUTING Mix, the Sound Generator page), VALUE + pad goes on as before.
+- **The tones** (`sy_ref.TONES`, written into `sy_tables.h`):
+
+  | Pad | Tone | Recipe |
+  | --- | --- | --- |
+  | 1 | SAW LEAD | test 1's sound |
+  | 2 | SQUARE | a square through a low-pass, 400 Hz-4 kHz, Q 1.5 |
+  | 3 | PULSE | a 25% pulse, 500 Hz-6 kHz |
+  | 4 | SUPERSAW | two saws 12 cents apart; 20 ms attack, 150 ms release |
+  | 5 | PAD | two saws 9 cents apart; 350 ms attack, 900 ms release; a dark filter swept by a 0.25 Hz LFO |
+  | 6 | STRINGS | a saw; 160 ms attack, 450 ms release; 5.5 Hz vibrato |
+  | 7 | ORGAN | a sine plus a sine an octave up; a rotary-like 6.5 Hz vibrato and tremolo |
+  | 8 | FLUTE | a sine with breath noise; 60 ms attack, vibrato |
+  | 9 | BELL | FM: a sine whose phase a sine at 3.5 x moves, the index raised at each pick; 900 ms release |
+  | 10 | BRASS | a saw; 35 ms attack; a filter envelope at each pick (+1.6 octaves, 260 ms) |
+  | 11 | BASS | a square plus a triangle an octave down; a low filter, 150 Hz-1.5 kHz |
+  | 12 | SWEEP | a saw through a resonant low-pass (Q 5) swept by a 0.35 Hz LFO |
+  | 13 | WAH | a saw through a band-pass (Q 4) that the playing and each pick open |
+  | 14 | SEQ | a saw plus a triangle an octave down, gated by a 16-step pattern at 1/16 of the SP's tempo |
+  | 15 | WARM | a triangle plus a sine an octave down; a soft filter |
+
+  The gains bring each tone's level on a strummed chord to within about 1 dB of the saw lead's. Exceptions: the
+  bass is 1.7 dB louder, the gated SEQ and the wah somewhat quieter.
+- **The engine's additions** (each in sy_fp.c and the same in sy_ref.py):
+  - two waves a band, with polyBLEPs on the saw and the pulse;
+  - attack and release per band;
+  - a pick detector (the tracker's test 2 rule) driving a filter envelope and the FM index;
+  - an LFO for vibrato, tremolo and cutoff;
+  - breath noise;
+  - band-pass and high-pass;
+  - the step gate. The SP's tempo is read every 0.1 s as the arp reads it (the stock sample tempo 0x80047dd0 for
+    the first pad of the bank on the pads).
+- **Releases cost bands:** with releases, every brief owner left a tail when ownership flickered between
+  neighbours, so a strummed chord kept 18-26 bands running instead of 9-12, at worst 36. Now:
+  - a band that sounded under 32 ms stops at once;
+  - a band taking over its neighbour's partial takes the neighbour's phases, amplitude and age, and the neighbour
+    stops;
+  - a release ends at 1e-3 of full scale.
+- **Cost:**
+  - The first build of the tones took up to 161,582 instructions a step (the bass) with one oscillator loop for
+    every wave.
+  - Each wave now has its own loop, one pass for wave A and one for B, and the bass and SEQ sub-octaves are
+    triangles.
+  - The most a step takes is now 80,008 (the FM bell, 10% of a block at one a cycle). Others: supersaw, pad and organ
+    about 71,000, bass 72,840, square and pulse 58,500, saw lead about 51,000.
+  - The module is 43,104 bytes of 45,056; `sy_block` is 2,560 bytes, with no stack of its own: the engine runs on
+    the tracker's.
+- **Demos:** `release/sy-synth-test2/demos/sy2-NN-name.wav` holds each tone on the model guitar, through the twin:
+  single notes, a strummed G, a picked C, a bend.
+- **Emulator checks:** 250 pass on `release/sy-synth-test2` (APP1 `8f0f9f08…5942c`, 3,200,768 bytes). The SY
+  section has 94 of them, 16 for test 2:
+  - every tone equals `sy_ref.py` value for value on a strummed chord and a bend (15 x 712 blocks; the SEQ tone at
+    the stub's 120 BPM);
+  - VALUE + pad 4 picks SUPERSAW: FX deep edit's handler is asked first, the popup reads `SY 4 SUPERSAW`, and the
+    press and its release are taken;
+  - a pad without VALUE, and VALUE + another key, go on to FX deep edit;
+  - pad 16 fades the synth out and stops it, and pad 7 starts it again on tone 7;
+  - on ROUTING Mix or the Sound Generator page, VALUE + pad goes on to the page;
+  - the popups fit the screen (widest 94 px);
+  - a tone change mid-chord fades out over 8 blocks, switches and fades in, equal to the twin throughout;
+  - the builder's two calls are in FX deep edit's bridges.
+  - The meter's popup-tick entry check no longer compares LR at the resume point. Bounce's bridge saves LR before
+    calling diag_ui, so LR is dead there, and since test 2 diag_ui's last call (the tempo read) leaves its own.
+
 ## Still not known
 
+- How each test 2 tone sounds on a real guitar, and which are worth keeping.
+- The heavier tones' cycles at SDRAM speed (the readout's SY line): the FM bell, supersaw, pad, organ and bass take
+  about 1.4-1.6 times the saw lead's instructions.
+- Whether anything on the unit uses VALUE + pad (nothing in v9.52's modules does; stock is not known to).
 - How the low notes' 20-30 ms feel in longer playing (nothing was reported against them).
-- The engine's cycles at SDRAM speed (the readout's SY line).
 - Whether the synth's level against the dry guitar is right. There is no level control yet; the test's output peaks
   near -6 dBFS.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth

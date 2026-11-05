@@ -11,7 +11,8 @@ a chord's notes picked string by string not playing (the sections after).
 
 SY synth test 1 (sy-synth-test1) is built by the same builder on top of synth test 6: a polyphonic synth in the way
 BOSS's SY pedals work, on every page but the Sound Generator's, with synth test 6 unchanged on that page. See
-`SY_TEST.md`. Its readout's line 3 shows the SY engine in place of the last pluck's times.
+`SY_TEST.md`. Its readout's line 3 shows the SY engine in place of the last pluck's times. SY synth test 2
+(sy-synth-test2) adds 15 tones picked with VALUE + pad.
 
 ## Guitar synth test 1 (gtr-synth-test1)
 

@@ -1,4 +1,4 @@
-"""SY synth test 1, with guitar synth test 6 (note tracker 3), on v9.52 (test only).
+"""SY synth test 2, with guitar synth test 6 (note tracker 3), on v9.52 (test only).
 
 SY synth test 1: a polyphonic guitar synth in the way BOSS's SY pedals work (Roland's patent US 9,542,923). The
 input the effects chip hands back (RX pair 0) is split into 49 bands a semitone apart, E2..E6; each band's pitch
@@ -6,6 +6,12 @@ input the effects chip hands back (RX pair 0) is split into 49 bands a semitone 
 the playing, and the result is added to the DRY pair of TX line 3 one block later. It plays on every page but the
 Sound Generator's while EXT SOURCE is on and ROUTING on ExtIn. tunetest/sy_fp.c is the engine, tunetest/sy_ref.py
 the same in Python and the tables (written into sy_tables.h at build time). See synth/SY_TEST.md.
+
+SY synth test 2: 15 tones and OFF (tunetest/sy_ref.py's TONES), picked with VALUE held + pad 1-16 where the synth can
+play (a popup names it; the pad's press and release go no further). The key presses come through FX deep edit's
+bridges in v9.52: the UI dispatcher's key press and release handlers (0x8003abd0, 0x8003ada0) jump to them, and each
+calls its handler (bl); the builder re-points those two calls to sy_key_down / sy_key_up, which hand every key to
+FX deep edit's handlers first / unless the pick took it. The engine now runs on the tracker's stack.
 
 On the Sound Generator page, guitar synth test 6 as before:
 The input the effects chip hands back (RX pair 0, after the input FX) goes through a note tracker on the main
@@ -60,7 +66,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test1'
+REVISION = 'sy-synth-test2'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -75,12 +81,19 @@ UI_TICK, UI_CALLER = 0x8006B950, 0x8006F6FA
 POPUP_POST, POPUP_CLOSE, KEY_QUERY, PAGE_QUERY = 0x800D3FF0, 0x8001F730, 0x800D9F20, 0x800D6380
 PENDSV, CUR_TASK = 0x0000DD3C, 0x202BBBFC
 ROUTING_GETTER = 0x80081158         # a stock getter of system 0x5c (INPUT SETTING's ROUTING), guarded below
+# SY test 2: FX deep edit's key bridges (v9.52): the dispatcher's key press / release handler sites, where each bridge
+# goes on in stock code, and FX deep edit's slot.
+FDE_HOOKS = ((0x8003ABD0, 'down', 0x8003ABDD, ['push {r4, r5, r6, r7, lr}', 'sub sp, #4', 'ldrsh.w r4, [r0, #2]',
+                                               'movw r0, #0xd314']),
+             (0x8003ADA0, 'up', 0x8003ADAB, ['push {r4, r5, r7, lr}', 'ldrsh.w r4, [r0, #2]', 'movw r0, #0xd314']))
+FDE_SLOT = (0x83FE2000, 0x83FE6000)
+PAD_TEMPO = 0x80047DD0              # the stock sample tempo (BPM x 100) for a pad, as the arp asks it
 
 EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', 'meter_sg_end',
            'meter_mix_begin', 'meter_mix_end', 'meter_ui_tick', 'tune_format', 'diag_ui', 'diag_rx',
            'tune_rx', 'tune_ui', 'tune_pairs', 'diag_rx_c', 'tune_fp_call', 'tune_fp_step', 'syn_ui', 'memset',
            'memcpy', 'meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy_rx', 'sy_tx', 'sy_ui', 'sy_fp_call',
-           'sy_fp_step', 'sy', 'sy_block', 'sy_layout')
+           'sy_fp_step', 'sy', 'sy_block', 'sy_layout', 'sy_key_down', 'sy_key_up')
 DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout')
 
 # Exact instructions at and around every site (capstone text).
@@ -140,6 +153,9 @@ GUARDS = [
      'PendSV: r4 = &running task (literal 0x202bbbfc, checked)'),
     (PENDSV + 0x62, 8, ['ldr.w r0, [r8, #0x10]', 'ands r0, r0, #0x1000'],
      'PendSV: the incoming task\'s attribute; 0x1000 switches its FPU registers s16-s31'),
+    # SY test 2: the SP's tempo as the arp reads it (arp.c refresh_tempo: PAD_TEMPO(bank x 16), bank 0x82dfff44)
+    (PAD_TEMPO, 0x0C, ['push {r4, r5, r6, lr}', 'movw r4, #0x9d0', 'movt r4, #0x82e0', 'ldr r1, [r4, #0x50]'],
+     'the sample tempo for a pad (r0 pad; BPM x 100), the function the arp calls for the tempo'),
 ]
 
 MD = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
@@ -371,6 +387,34 @@ def kit_mode_flag(img, entry):
     return addr, text[:8]
 
 
+def fde_bridges(img):
+    """SY test 2: FX deep edit's key press and release bridges in the input: the dispatcher's handler jumps to each
+    (movw/movt ip, bx ip), and each bridge is push {r0, lr}; bl <its handler>; mov ip, r0; pop {r0, lr}; cmp ip, #0;
+    it ne; bxne lr, then the handler's displaced instructions and on in stock code. Returns each bridge's call
+    (address) and handler."""
+    out = {}
+    for site, name, resume, displaced in FDE_HOOKS:
+        jump_code = read(img, site, 10)
+        target = movw_movt(jump_code, site)
+        if not target or target[1] != 'ip' or listing(jump_code, site)[2] != 'bx ip':
+            raise ValueError(f'{site:#x}: expected FX deep edit\'s jump (movw ip / movt ip / bx ip)')
+        bridge = target[0]
+        if not (bridge & 1 and FDE_SLOT[0] <= bridge < FDE_SLOT[1]):
+            raise ValueError(f'{site:#x}: jump to {bridge:#x}, not into FX deep edit\'s slot')
+        bridge &= ~1
+        t = listing(read(img, bridge, 0x2C), bridge)
+        want_head = ['push {r0, lr}', None, 'mov ip, r0', 'pop.w {r0, lr}', 'cmp.w ip, #0', 'it ne', 'bxne lr']
+        tail = displaced + [f'movw ip, #{resume & 0xFFFF:#x}', f'movt ip, #{resume >> 16:#x}', 'bx ip']
+        if any(w is not None and t[i] != w for i, w in enumerate(want_head)) or not t[1].startswith('bl #') or \
+                t[7:7 + len(tail)] != tail:
+            raise ValueError(f'FX deep edit {name} bridge {bridge:#x}: unexpected {t[:12]}')
+        handler = int(t[1].split('#')[1], 16)
+        if not FDE_SLOT[0] <= handler < FDE_SLOT[1]:
+            raise ValueError(f'FX deep edit {name} handler {handler:#x} outside its slot')
+        out[name] = dict(bridge=bridge, call=bridge + 2, handler=handler, listing=t[:7 + len(tail)])
+    return out
+
+
 def check_guards(img):
     found = {}
     for addr, size, expect, why in GUARDS:
@@ -427,7 +471,10 @@ def check_guards(img):
     sg_midi, found['sg_midi'] = sg_midi_entry(img)
     kit_mode, start = kit_mode_flag(img, sg_midi)
     found['kit_mode'] = dict(address=hex(kit_mode), entry_listing=start)
-    return found, pre_target, bridges, sg_midi, kit_mode
+    fde = fde_bridges(img)
+    found['fde'] = {k: dict(bridge=hex(v['bridge']), call=hex(v['call']), handler=hex(v['handler']),
+                            listing=v['listing']) for k, v in fde.items()}
+    return found, pre_target, bridges, sg_midi, kit_mode, fde
 
 
 # ---- the cabinet IR: a stand-in, not a measured cabinet --------------------------------------------------------
@@ -493,7 +540,7 @@ def integer_spans(map_text, obj):
     return spans
 
 
-def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode):
+def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fde):
     folder.mkdir(parents=True, exist_ok=True)
     inc = folder / 'include'
     inc.mkdir(exist_ok=True)
@@ -505,8 +552,10 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode):
     (folder / 'tune_test_links.h').write_text(
         f'#define SG_PRE_TARGET {pre_target:#010x}\n#define BNC_UI {bridges["bnc_ui"]:#010x}u\n'
         f'#define BNC_RX {bridges["bnc_rx"]:#010x}u\n#define SG_MIDI {sg_midi:#010x}u\n'
-        f'#define KIT_MODE {kit_mode:#010x}u\n', encoding='ascii', newline='\n')
+        f'#define KIT_MODE {kit_mode:#010x}u\n#define FDE_DOWN {fde["down"]["handler"] | 1:#010x}u\n'
+        f'#define FDE_UP {fde["up"]["handler"] | 1:#010x}u\n', encoding='ascii', newline='\n')
     (folder / 'sy_tables.h').write_text(sy_ref.c_header(), encoding='ascii', newline='\n')
+    (folder / 'sy_names.h').write_text(sy_ref.c_names(), encoding='ascii', newline='\n')
     # The integer side (tune_test.o) first, from the base to tt_integer_end; then the FPU side. Unused sections go
     # (--gc-sections: Zig links its compiler_rt, of which only what something calls may stay).
     fp_keep = ' '.join(f'KEEP(*(.text.{n}))' for n in EXPORTS if n not in DATA and not n.startswith(('meter', 'diag')))
@@ -622,7 +671,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
             raise ValueError(f'refusing to overwrite {out / name}')
     if not (BASE <= base and (base & 0xFFF) == 0 and base < LIMIT):
         raise ValueError(f'base {base:#x} outside {BASE:#x}..{LIMIT:#x}')
-    guards, pre_target, bridges, sg_midi, kit_mode = check_guards(img)
+    guards, pre_target, bridges, sg_midi, kit_mode, fde = check_guards(img)
     rows = scatter(img)
     for load, dst, n, fn in rows:
         if max(dst, base) < min(dst + n, LIMIT):
@@ -631,7 +680,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     if hits:
         raise ValueError(f'input refers to the module area: {hits[:4]}')
     code, syms, funcs, text, integer = compile_module(zig, (build_dir or out / 'build').resolve(), base, pre_target,
-                                                      bridges, sg_midi, kit_mode)
+                                                      bridges, sg_midi, kit_mode, fde)
     end = base + len(code)
     if end > LIMIT or end > GAP_END:
         raise ValueError(f'module {base:#x}+{len(code):#x} passes {LIMIT:#x}')
@@ -668,6 +717,17 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
         patches.append(dict(address=site, size=8, original_hex=bytes(img[off:off + 8]).hex(), replacement_hex=new.hex(),
                             target=t & ~1, original_target=original & ~1, what=f"bounce's bridge call -> {name}"))
         img[off:off + 8] = new
+    # SY test 2: FX deep edit's bridges call sy_key_down / sy_key_up in place of its handlers (one bl each)
+    for name, ours in (('down', 'sy_key_down'), ('up', 'sy_key_up')):
+        site, t = fde[name]['call'], syms[ours] & ~1
+        off = file_offset(img, site, 4)
+        new = bytes(KS.asm(f'bl #{t:#x}', site)[0])
+        if listing(new, site) != [f'bl #{t:#x}'] or len(new) != 4:
+            raise ValueError(f'bad {ours} call encoding')
+        patches.append(dict(address=site, size=4, original_hex=bytes(img[off:off + 4]).hex(), replacement_hex=new.hex(),
+                            target=t, original_target=fde[name]['handler'],
+                            what=f"FX deep edit's key {name} bridge: bl -> {ours} (which calls its handler)"))
+        img[off:off + 4] = new
     file_at = append(img, code, 16)
     table = append(img, b'', 16)
     for row in rows + [[FLASH + file_at, base, len(code), COPY]]:
@@ -682,7 +742,13 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 1: a polyphonic synth in the way BOSS\'s SY pedals work (Roland\'s patent US '
+        description='SY synth test 2: 15 tones and OFF (sy_ref.py TONES: saw lead, square, pulse, supersaw, pad, '
+                    'strings, organ, flute, FM bell, brass, bass, sweep, wah, a 16-step gate at the SP\'s tempo, '
+                    'warm; each band\'s waves A/B, FM, attack and release, the filter mode, range, pick envelope and '
+                    'LFO, noise, gain), picked with VALUE held + pad 1-16 where the synth can play (popup; the pad\'s '
+                    'press and release taken), through FX deep edit\'s key bridges (their handler calls re-pointed); '
+                    'a new tone fades out and in over 8 blocks; the engine on the tracker\'s stack. '
+                    'SY synth test 1: a polyphonic synth in the way BOSS\'s SY pedals work (Roland\'s patent US '
                     '9,542,923): RX pair 0 at 12 kHz through 49 fourth-order band-passes a semitone apart (E2..E6); '
                     'each band\'s zero-crossing periods (an alpha-beta tracker) and energy; a band sounds when its '
                     'energy tops both neighbours\' and its pitch is within 80 cents of its centre, a saw at its pitch '
@@ -734,13 +800,16 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
                        'it (SLOW); the 75-block window is published then',
                   fpu='tune_fp_call: the module\'s own 2 KB stack, FPSCR and d0-d15 saved, FPSCR = nearest, FZ, DN'),
         sy=dict(memory='sy_block in the module (sy_block_bytes): the bands\' filters, energies, periods and '
-                       'oscillators, a 2 KB stack; the tables (sy_tables.h, from tunetest/sy_ref.py) in .rodata',
+                       'oscillators (test 2: no stack: the tracker\'s); the tables and tones (sy_tables.h, from '
+                       'tunetest/sy_ref.py) in .rodata',
+                tones=[t['name'] for t in sy_ref.TONES],
+                pick='VALUE held + pad 1-16 where the synth can play: tone 1-15, pad 16 off; popup',
                 steps='every RX block, after the tracker: pair 0 (L + R) / 2 -> 4th-order low-pass 2 kHz -> 12 kHz '
                       '-> 49 bands x 16 samples; the sounding bands\' saws x 64 samples; the output filter; 64 '
                       'values for TX\'s DRY pair',
                 slow='a step over the whole block, or mixer + tracker + engine over 9/10 of it in two wakes in a '
                      'row, stops it (SLOW)',
-                fpu='sy_fp_call: the module\'s own 2 KB stack (sy_block), FPSCR and d0-d15 saved, FPSCR = nearest, FZ, '
+                fpu='sy_fp_call: the tracker\'s 2 KB stack (tt_block), FPSCR and d0-d15 saved, FPSCR = nearest, FZ, '
                     'DN; no contraction (fmaf only where written), as tunetest/sy_ref.py computes it'),
         readout='main screen: hold EXIT alone for 1 s to show or hide; stock popup 0x800d3ff0, every 0.1 s while '
                 'the tracker runs',
