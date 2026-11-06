@@ -1,4 +1,4 @@
-# SY synth tests 1 to 12: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 13: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -760,6 +760,44 @@ ring along. Each of those became a synth note with an attack, and the notes stol
 **Demos:** `release\..\demos\sy-voice-demos3` has the recording through test 11 and test 12, rendered by each
 test's own engine.
 
+## SY synth test 13 (sy-synth-test13): test 11's tones with test 10's tracking
+
+The user on test 12: "awful. response is not good and lacks character especially with chords", and then: "I just want
+test 11 tones with clean accurate response as heard in test 10 tracking". Test 12's v4 waited for every note (its pitch
+measured over SKIP_P + 2 periods: 30-40 ms on the low strings) and held back every band within a band of a sounding
+note's overtones, besides FUND's exact multiples: a chord's major sevenths (11 semitones), minor ninths (13) and the
+like. (On test 11 the user had also said the extra notes "sound really cool": they were asked about, not reported as a
+fault.)
+
+- **What tests 10 and 11 did.** The analysis (sy_fp.c, unchanged since test 10) decides which bands sound: a band owns,
+  the gate, the hold, FUND. Test 10 gave each sounding band an oscillator at the band's level. Test 11 gave each band
+  that began to sound a voice at once, young voices at the band's level, so it kept test 10's speed; but a synth voice
+  for each of the pick's blips made them heard, and with 4 voices the blips took held strings' voices.
+- **The note manager v5** (`sy_voice.c` notes()) takes the analysis's sounding bands and holds none back:
+  - a band that has sounded HOLD_N (6) blocks in a row (8 ms) is a note; HOLD_H (12) when it is +-1 band from a whole
+    multiple of a sounding note, HOLD_M (10) on a mono tone. On the user's clean recording 64% of the bands that start
+    from E4 up are gone within 6 blocks, against 9% of the played notes' own band starts;
+  - test 10's moves keep a note's voice, with no new attack: a band starting next to a note's band and reading its pitch
+    within 17 cents (test 10's 1%); a young note's band going quiet as a band a whole multiple below sounds (FUND: the
+    pick's overtone came first); a note's band back within 20 blocks of its end, no louder than 1.6x. A bend crossing
+    bands still follows the note (test 11's follow());
+  - a new note takes a free voice, else the quietest young note's if quieter, else the quietest note's if 1.5x louder:
+    a blip never takes a held string's voice. Young notes sound at their band's level (test 11's confidence) on poly
+    tones; a mono tone's voice keeps its level, as test 11's did;
+  - mono: the newest band unless weaker than the note (weighed again for 15 blocks, so it takes over as the note
+    fades); a band taking over a note younger than 20 blocks moves it (no second attack);
+  - re-picks: test 11's rule again (test 12's was stricter).
+- **On the recording**, scored from what each engine tells its voices:
+  - POLY PAD, runs: 766 attacks (test 11: 2084, test 12: 144), 556 under 60 ms (test 11: 1840), notes 6.7 ms after
+    test 10's bands (test 11: at once; test 12: 11-32 ms later by register). Chords: 295 attacks (test 11: 1226), 3.0
+    voices sounding on average (test 11: 2.7);
+  - mono (LADDER LEAD, FAT BASS): 279 attacks (test 11: 339), 109 under 60 ms (149), 78 in the chords (225), notes
+    12 ms after test 10's bands (test 11: 13.3 ms).
+
+**Emulator checks:** 352 pass on `release/sy-synth-test13`.
+
+**Demos:** `release\..\demos\sy-voice-demos4` has the recording through test 11 and test 13, on five tones.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -777,6 +815,7 @@ test's own engine.
   the shared knob positions (the bus effect jumping after an edit) get in the way.
 - Test 10: whether a looper take made from the guitar synth screen has the synth in it.
 - Test 11: which tones sound good on a real guitar; whether the pick's blips or settling notes are heard; the engine's real cycles on the unit (the readout's SY line), and whether SLOW ever stops it.
-- Test 12: whether the glitches and extra notes are gone on the unit, and whether notes are missed or late (on the recording, 16 of the runs' 136 notes were not found within 80 ms).
+- Test 12 on the unit: "awful" (late notes, chords without character); replaced by test 13.
+- Test 13: whether it responds like test 10 on the unit, whether chords sound full, and how many of the pick's blips are still heard (8 ms of hold on every new note).
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

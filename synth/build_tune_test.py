@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test12'
+REVISION = 'sy-synth-test13'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1093,7 +1093,16 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 12: the note manager v4 (sy_voice.c notes(); test 11 gave every flicker of the '
+        description='SY synth test 13: the note manager v5 (sy_voice.c notes()), test 10\'s tracking for '
+                    'test 11\'s voices (test 12 waited for every note and dropped chord notes near overtones: on the '
+                    'unit "response is not good and lacks character especially with chords"): every band the analysis '
+                    'sounds (test 10\'s) is a note after 8 ms (16 ms near a sounding note\'s overtones, 13 ms mono), '
+                    'nothing held back; a partial moving to a neighbour band, a pick\'s overtone giving way to its '
+                    'fundamental and a band back after a dip keep their note (no new attack); young notes at their '
+                    'band\'s level; a blip never takes a held string\'s voice (on the user\'s recording: 766 attacks '
+                    'in the runs against test 11\'s 2084, 295 in the chords against 1226, notes 6.7 ms after test '
+                    '10\'s bands). '
+                    'SY synth test 12: the note manager v4 (sy_voice.c notes(); test 11 gave every flicker of the '
                     'bands a voice: on the user\'s clean recording 2084 attacks for 136 notes): a band is a note once '
                     'it holds, its pitch measured (the bands\' period counts now passed down), loud enough against the '
                     'held peak, no fundamental building up or sounding below it, not a note\'s quieter neighbour or '

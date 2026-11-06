@@ -60,12 +60,12 @@ typedef struct {
     syv_u8 astg, fstg, active, fast;
 } syv_voice_t;
 
-typedef struct {                     /* a note (SY test 12: v4) */
-    float peak, c, r, lev, last, elast, hist[9];   /* its peak, pitch (smoothed / now, cents), level / peak, its
-                                                       band's last level and energy */
+typedef struct {                     /* a note (SY test 13: v5) */
+    float peak, c, r, lev, last, cf, hist[9];   /* its peak, pitch (smoothed / now, cents), level / peak, its band's
+                                                    last level, its confidence while young, its last nine levels */
     syv_s32 start, born, rel, rp;    /* its last attack, its first, its release, its last re-pick (blocks) */
     syv_s8 band;
-    syv_u8 gate, off, nh, trig, pad[3];
+    syv_u8 gate, off, nh, trig, young, fast, pad[1];
 } syv_note_t;
 
 typedef struct {                     /* the note manager's word to the voices, per block */
@@ -76,15 +76,12 @@ typedef struct {                     /* the note manager's word to the voices, p
 typedef struct {
     syv_voice_t v[SYV_NV];
     syv_note_t n[SYV_NV];
-    float pk[SYV_BANDS];             /* each band's run (SY test 12): its peak level */
-    syv_s32 b0[SYV_BANDS];           /*   the block it began (-1: none) */
     float rc_prev[4][SYV_BANDS];     /* the readings of the last four blocks, in cents (settling) */
-    float e_prev[4][SYV_BANDS];      /* the energies of the last four blocks (a fundamental building up) */
-    syv_u8 gap[SYV_BANDS];           /*   the blocks it has been off (up to C_GAP keep it) */
-    syv_u8 used[SYV_BANDS];          /*   1 once it became a note or was ruled out */
+    syv_u8 run[SYV_BANDS];           /* SY test 13: the blocks each band has sounded in a row */
+    syv_u8 seen[SYV_BANDS];          /*   1 once this run of it was a note's or was weighed as a new one */
     syv_u8 started, pad[2];
     syv_s32 blk;
-    float dcx, dcy, pkh;             /* pkh: the held peak level (SY test 12) */
+    float dcx, dcy;
     syv_u32 cost;                    /* voices rendered in the last block */
     syv_patch_t eff;                 /* the tone with its settings, this block */
     float pre[14];                   /* its ENV preset with SUSTAIN (flt 6) */

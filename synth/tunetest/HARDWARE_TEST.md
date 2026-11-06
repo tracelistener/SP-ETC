@@ -1,7 +1,7 @@
-# SY synth test 12: clean note tracking for the guitar synth
+# SY synth test 13: test 11's tones with test 10's tracking
 
 A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, and the quieter Sound Generator and kits) plus the
-guitar synth with test 11's tones and new note tracking. Not for sharing. To go back, patch v9.52 again.
+guitar synth with test 11's tones and test 10's tracking. Not for sharing. To go back, patch v9.52 again.
 
 | File | SHA-256 |
 | --- | --- |
@@ -10,14 +10,14 @@ guitar synth with test 11's tones and new note tracking. Not for sharing. To go 
 
 What's new:
 
-- **No more glitches and extra notes.** Test 11 gave a synth note to every flicker the guitar made. On your clean
-  recording that was about 2,000 notes for the 136 you played, most of them under 60 ms. Test 12 starts a note only
-  once a string's pitch is clear. It ignores a note's overtones and the open strings ringing along, and it doesn't
-  restart a note that only dips. On the same recording: 144 notes, none under 60 ms.
-- **Same feel.** Notes start about as fast as in Sound Generator mode.
+- **Test 10's tracking.** Every note the bands find plays straight away, as in test 10 and test 11, and nothing in a
+  chord is held back (test 12 dropped sevenths, ninths and other notes near overtones, and waited on every note).
+- **Fewer glitches than test 11.** A band now has to sound for 8 ms before it gets a voice, and most of the pick's
+  blips are gone by then. A note moving between bands, a pick's overtone giving way to the real note, and a string
+  coming back after a dip keep their voice without a new attack. A blip can't cut off a string you're holding.
 - The tones, knobs and screen are the same as test 11, and your tone settings carry over.
 
 1. Volume low. On the guitar synth screen, play single notes, a bend, then chords, on a few tones.
 2. Try a lead (pad 7 or 8) and a bass (pads 9-11) too.
 
-Tell me: are the glitches and extra notes gone? Does any note you play get missed or come in late?
+Tell me: does it respond like test 10? Do chords sound full? Are there still glitches or extra notes?
