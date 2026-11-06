@@ -1,4 +1,4 @@
-# SY synth tests 1 to 16: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 17: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -884,6 +884,41 @@ The user on test 15: it "works better but seems to be subtle clicking (using cho
 
 **Emulator checks:** 360 pass on `release/sy-synth-test16`.
 
+## SY synth test 17 (sy-synth-test17): BOSS SY's way, test 10's tracking with test 11's voices
+
+The user on test 16: "also trackign still bad. why can't it be as good as test 10:(", then "yeah whole point was to
+emulate how boss sy pedals track". Test 10 decided no notes (each of 49 bands an oscillator of its own at its own level,
+the filter's pick envelope over all of them); test 11's tones were synth voices per note, which need a note manager and
+its decisions (start, end, which of 4 voices), and every one could go wrong. Test 17 keeps test 11's voices and drops
+the notes:
+
+- **The bands are the voices** (`sy_voice.c` bands_poly / bands_mono in place of notes_poly / notes_mono; SYV_NV 6).
+  Every band the analysis sounds (unchanged since test 10: a band owns, the gate, the hold, FUND) has a voice from the
+  block it begins (WAIT, SENS as on the TRACK page), at its own tracked pitch block by block (no smoothing: test 11's
+  steady() and glide flattened vibrato) and its level (test 11's young confidence, then the tone's FOLLOW). A band
+  beginning next to a voice's band at its pitch (17 cents, test 10's 1%) takes that voice on; a voice whose band stops
+  follows a neighbour at its pitch, rides 3 blocks, or ends (a fast release under 24 blocks, test 10's AGE_MIN). A new
+  band takes a free voice, else the quietest one's if louder (GUARD: 1.5x).
+- **The pick's envelopes:** one amp and one filter envelope for every voice (the tone's ADSRs, the SG presets'),
+  started at each input pick (test 10's pick rule, sy_fp.c), released once no band sounds and no pick came within
+  B_WIN (45) blocks. Each voice sounds inside them with a gate of its own: a quick rise as its band begins (1 ms), a
+  gentle one without a pick within B_WIN (20 ms: a ring, an open string, a flicker comes in softly), the tone's release
+  as its band stops. The FM strike at each pick.
+- **Mono:** every block, the loudest band begun within M_YOUNG (60) blocks may become the note: from silence on a pick
+  (one at most B_WIN blocks before the band began) or at half the held peak (a pick unseen); over a sounding note with
+  a pick at its level, without one at 1.5x (GUARD 2x; PICK: never); a young note (G_FIX, 45 blocks) moves, and one whose
+  band dies moves to the band begun after it (the pick's blip gone), with no second attack; legato tones glide, and
+  glide only between notes.
+- **SHIFT:** a tap steps the page without showing the held page first (a knob turned with SHIFT held still does).
+- **On the recording:** PUNCH BASS heard 135 of 136 notes, starts with test 10's bands (test 11's mono confirmed for
+  13 ms), 130 attacks in the runs (test 11: 339), 4 under 60 ms (149; SENS 20 + GUARD: 0). Poly: notes start with
+  test 10's bands, chords 3.5 voices sounding (test 11: 2.7). The demos (sy-voice-demos5) sound as much as test 11's
+  but for SG PLUCK, whose pluck now comes once a pick (test 11 plucked again on every flicker).
+- **The cost:** 6 voices take up to 105k instructions a step (FM PIANO; 13% of a block at one a cycle); the suite's
+  limit is now 120k.
+
+**Emulator checks:** 360 pass on `release/sy-synth-test17`.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -905,6 +940,7 @@ The user on test 15: it "works better but seems to be subtle clicking (using cho
 - Test 13 on the unit: "still too much latency"; replaced by test 14.
 - Test 14 on the unit: "no better"; replaced by test 15.
 - Test 15 on the unit: "works better", subtle clicks in chords, extra notes on release; replaced by test 16.
-- Test 16: whether the clicks are gone on the unit, and whether PICK and SENS stop the release notes.
+- Test 16 on the unit: a SHIFT flash, a freeze (cause unknown, not reproduced), "trackign still bad"; replaced by test 17.
+- Test 17: whether it tracks like test 10 on the unit, and how the tones compare with test 11's.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

@@ -1,27 +1,29 @@
-# SY synth test 16: fewer clicks, and no extra notes when you let go
+# SY synth test 17: BOSS SY-style tracking with test 11's tones
 
 A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, and the quieter Sound Generator and kits) plus the
-guitar synth of test 11 (its tones and tracking) with the TRACK page. Not for sharing. To go back, patch v9.52 again.
+guitar synth rebuilt the way BOSS's SY pedals track. Not for sharing. To go back, patch v9.52 again.
 
 | File | SHA-256 |
 | --- | --- |
 | SP404MKII_APP1.bin ({{APP1_SIZE}} bytes) | `{{APP1_SHA256}}` |
 | SP404MKII_APP0.bin (stock 5.52) | `{{APP0_SHA256}}` |
 
-What's new since test 15:
+What's new:
 
-- **Fewer clicks in chords.** A short stray note now fades over 10 ms instead of being cut in 3 ms, and a quiet voice
-  no longer drops in and out. With GUARD on, a blip can't take the voice of a chord string that has just started.
-- **Extra notes when you let go of a note:**
-  - **SENS** now also compares a new note with what you just played (fading over about half a second), so the quiet
-    sounds after a note stops stay out. Try 15-25.
-  - **GUARD ON** on leads and basses: a weaker sound can't take over the note, and a note that drops out for a moment
-    carries on instead of restarting.
-  - **GUARD PICK** (CTRL 3 turned all the way up), for leads and basses: a new note needs a pick. What rings on after
-    you let go (an open string, harmonics, the mute) can't start one. On chord tones PICK works as ON.
-- The tones, knobs and screen are test 11's, and your settings carry over.
+- **Tracks like test 10.** No more deciding what a note is: every string's band drives a voice of its own (up to 6, a
+  full chord) from the moment the string sounds, at its exact pitch (bends and vibrato as you play them) and level.
+- **Test 11's tones on top.** Each voice has test 11's waves and filters. The attack and the filter sweep come from
+  your pick, shared by every string the way the SY pedals do it, so a string that starts ringing without a pick (an
+  open string, a flicker) comes in softly instead of with an attack of its own.
+- **Leads and basses:** a note starts on a pick; a hammer-on or slide moves the pitch with no new attack; glide only
+  slides between notes now, not over bends and vibrato.
+- **SHIFT:** a tap goes straight to the next page (no flash of the main page).
+- The TRACK page still works: WAIT and SENS as before; GUARD ON makes it harder for a new string to take a sounding
+  voice; PICK (leads and basses) lets only a pick change the note.
 
-1. Volume low. Chords on the first pads with GUARD ON: are the clicks gone?
-2. PUNCH BASS: single notes, letting each one go. Try GUARD PICK, then SENS 20 with it.
+1. Volume low. Single notes, a bend, vibrato and chords on a few tones, including a lead (pad 7 or 8) and a bass
+   (pads 9-11).
+2. Compare it with how test 10 felt.
 
-Tell me: any clicks left, and on which pad? Do the extra notes on release stop?
+Tell me: does it track like test 10 now? How do the tones compare with test 11? If it freezes again, what were you
+doing just before?

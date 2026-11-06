@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test16'
+REVISION = 'sy-synth-test17'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1093,7 +1093,15 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 16: test 15 on the unit: "subtle clicking" in chords, and on PUNCH BASS '
+        description='SY synth test 17: BOSS SY\'s way, test 10\'s tracking with test 11\'s voices (the user: "whole '
+                    'point was to emulate how boss sy pedals track"): no notes; every band the analysis sounds drives '
+                    'a voice of its own (up to 6) from the block it begins, at its own tracked pitch and level; the '
+                    'amp and filter envelopes are the pick\'s, one for every voice (started at each input pick, '
+                    'released once no band sounds), a voice inside them with a gate of its own (a band beginning '
+                    'without a pick rises softly); mono: a note starts on a pick, legato moves without an attack, a '
+                    'young note moves to the band begun after the pick\'s blip; glide only between notes; SHIFT\'s '
+                    'tap no longer flashes the main page. '
+                    'SY synth test 16: test 15 on the unit: "subtle clicking" in chords, and on PUNCH BASS '
                     '"on note release triggers multiple extra notes no matter settings". The clicks: a young note '
                     'ends over 10 ms (was 3), a faint voice once rendered stays rendered, and GUARD gives a sounding '
                     'note\'s voice (young or not) only to a band 1.5x louder. The release notes: SENS weighs a new '

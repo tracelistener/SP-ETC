@@ -17,7 +17,7 @@ typedef unsigned char syv_u8;
 typedef signed char syv_s8;
 #endif
 
-#define SYV_NV 4                     /* voices (the Sound Generator's 4; a tone may cap them lower) */
+#define SYV_NV 6                     /* voices (SY test 17: one a band, 6: a chord; a tone may cap them) */
 #define SYV_BANDS 49
 #define SYV_FRAMES 64
 
@@ -60,34 +60,35 @@ typedef struct {
     float ph[3], phs, phm, phm2, uph[7], phl;
     float f, aenv, fenv, y[4], ic1, ic2, g, c1, c2, c3, t, vel, lev, conf, m1, m2, rnd, sgprev;
     syv_u32 ns, tick;
-    syv_u8 astg, fstg, active, fast, lit, pad[3];   /* lit: SY test 16, rendered since its start */
+    syv_u8 astg, fstg, active, fast, lit, soft, gl, pad;   /* lit: SY test 16, rendered since its start; soft,
+                                                       gl: test 17, a start without a pick, gliding to a new note */
 } syv_voice_t;
 
 typedef struct {
     float peak, c, r, lev, hist[9];
     float last;                      /* SY test 15: its band's last level (GUARD) */
     float elast;                     /* SY test 16: its band's last energy (mono's ride) */
-    syv_s32 start, rel, rp;
+    float cf;                        /* SY test 17: its confidence while young */
+    syv_s32 start, rel, rp, born;    /* born: SY test 17, the block its band began */
     syv_s8 band;
-    syv_u8 gate, off, young, fast, nh, trig, pad;
+    syv_u8 gate, off, young, fast, nh, trig, soft, glide;   /* soft, glide: SY test 17 */
 } syv_note_t;
 
 typedef struct {                     /* the note manager's word to the voices, per block */
     float gate[SYV_NV], freq[SYV_NV], vel[SYV_NV], lev[SYV_NV], conf[SYV_NV];
-    syv_u8 trig[SYV_NV], fast[SYV_NV];
+    syv_u8 trig[SYV_NV], fast[SYV_NV], soft[SYV_NV], glide[SYV_NV];   /* soft, glide: SY test 17 */
 } syv_ctl_t;
 
 typedef struct {
     syv_voice_t v[SYV_NV];
     syv_note_t n[SYV_NV];
-    float pend_pk[SYV_BANDS];
-    syv_s32 pend_b0[SYV_BANDS];      /* mono: a band waiting to be a note since this block (-1: none) */
     float rc_prev[4][SYV_BANDS];     /* the readings of the last four blocks, in cents (settling) */
-    float e_prev[4][SYV_BANDS];      /* the energies of the last four blocks (a fundamental building up) */
-    syv_u8 prev[SYV_BANDS];
     syv_u8 run[SYV_BANDS];           /* SY test 15: the blocks each band has sounded in a row (WAIT) */
     syv_u8 started, guard, pad;      /* guard: GUARD, this block (the voices' resume) */
     float pkh;                       /* SY test 16: the held peak of the loudest band (-20 dB in 0.6 s): SENS's level */
+    float ga, gf;                    /* SY test 17: the pick's amp and filter envelopes (every voice's) */
+    syv_u8 gastg, gfstg, pick, anygate;   /*   their stages; a pick this block; a voice's band sounding */
+    syv_u8 since, gpad[3];           /*   blocks since the input's pick (255: long ago) */
     syv_s32 blk;
     float dcx, dcy;
     syv_u32 cost;                    /* voices rendered in the last block */
@@ -95,6 +96,7 @@ typedef struct {
     float pre[14];                   /* its ENV preset with SUSTAIN (flt 6) */
     /* the block's work (here, not on the tracker's 2 KB stack) */
     float acc[SYV_FRAMES], buf[SYV_FRAMES], rc[SYV_BANDS];
+    float gab[SYV_FRAMES], gfb[SYV_FRAMES];   /* SY test 17: the pick's envelopes over the block */
     syv_ctl_t ctl;
 } syv_state_t;
 

@@ -1391,17 +1391,18 @@ UI_SMALL SCREEN static void sy_sound_set(sy_t *s, u32 n) {
  * then counts as used: its release keeps the page). */
 UI_SMALL SCREEN static u32 sy_pad_sound(sy_t *s, u32 pad) {
     if (key_held(KEY_SHIFT) && pad < SY_SHIFT_TONES) {
-        s->shift_used = 1;
+        s->shift_used |= 1u;                            /* SY test 17: bit 0 a pad, bit 1 a knob */
         return 16u + pad;
     }
     return pad == SY_OFF_PAD ? 0u : pad + 1u;
 }
 
-/* SY test 15: the page shown: 0 the main one, 1 OTHERS, 2 TRACK (SHIFT tapped steps them); SHIFT held shows OTHERS,
- * or the main page from OTHERS. */
+/* SY test 15: the page shown: 0 the main one, 1 OTHERS, 2 TRACK (SHIFT tapped steps them). SHIFT held with a knob
+ * turned shows (and edits) OTHERS, or the main page from OTHERS. SY test 17: only once a knob has turned (test 15-16
+ * showed it from SHIFT's press, so a tap from OTHERS flashed the main page's names before TRACK). */
 UI_SMALL SCREEN static u32 sy_page(const sy_t *s) {
     u32 p = s->shift_page <= 2u ? s->shift_page : 0u;
-    return s->shift_down ? (p == 1u ? 0u : 1u) : p;
+    return s->shift_down && (s->shift_used & 2u) ? (p == 1u ? 0u : 1u) : p;
 }
 
 /* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): test 6: the tone's own setting, TONE and LEVEL (knob -
@@ -1410,8 +1411,8 @@ UI_SMALL SCREEN static u32 sy_page(const sy_t *s) {
  * (0..50 %), GUARD (the upper half on). */
 UI_SMALL SCREEN static void sy_screen_knob(sy_t *s, u32 k, s32 pos) {
     pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
+    if (s->shift_down) s->shift_used |= 2u;            /* SY test 17: before the page (a held SHIFT's turn peeks) */
     u32 tone = sy_tone(s), page = sy_page(s);
-    if (s->shift_down) s->shift_used = 1;
     s->turns++;
     if (page == 2u)
         s->trk[k] = (u8)(k == 0 ? (pos * (s32)(SY_WAIT_MAX + 1u)) >> 7 : k == 1u ? (pos * (s32)(SY_SENS_MAX + 1u)) >> 7 :

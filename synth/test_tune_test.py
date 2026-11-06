@@ -1048,7 +1048,8 @@ def synth_checks(img, man, kit_sym):
 SY_OFF, SY_RUN, SY_SLOW = range(3)
 SY_PLAIN = 10                      # SY test 11: PUNCH BASS, mono with a short release (the engine's own checks run on it)
 SY_NT = 20                         # SY test 11: the tones (sy_voices.py's VOICES)
-SY_STEP_MAX = 100000               # SY test 11: instructions a step may take (measured 44-91k; tests 1-10: 60000 / 100000)
+SY_STEP_MAX = 120000               # SY test 17: instructions a step may take (6 voices: measured 44-105k, 13% of a block;
+#                                    test 11: 100000 for 44-91k with 4; tests 1-10: 60000 / 100000)
 SY_HEAD = 'req starts stops reset_req tone_req muted picks taken bpm100 tempo_checked'.split()
 SY_FILE = 'loads saves save_errors bad_files'.split()
 SY_RUNF = 'state rx steps tx fresh stopping sounding last_mix'.split()
