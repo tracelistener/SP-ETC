@@ -1501,7 +1501,9 @@ def sy_checks(parent_img, img, man, kit_sym):
     fpu_ok = regs_ok = True
     stack_depth = task_depth = 0
     sig = ref.to_blocks(sy_strum('Am')[0])
-    for b in range(60):
+    for b in range(60):                                                # SY test 12: blocks 110-169, the strum's notes
+        #                                                                sounding (a note starts once it holds: block
+        #                                                                122 here, the low string at 75)
         pattern = [rng.getrandbits(32) for _ in range(32)]
         for k in range(32):
             mr.uc.reg_write(getattr(ar, f'UC_ARM_REG_S{k}'), pattern[k])
@@ -1512,7 +1514,7 @@ def sy_checks(parent_img, img, man, kit_sym):
             mr.uc.reg_write(getattr(ar, f'UC_ARM_REG_R{k + 4}'), v)
         mr.uc.mem_write(mr.block + mr.lay.b_stack, b'\xEE' * 2048)
         mr.uc.mem_write(STACK - 0x800, b'\xEE' * 0x800)
-        mr.feed(sig[40 + b])
+        mr.feed(sig[110 + b])
         mr.call(sym['sy_rx'])
         fpu_ok &= [mr.uc.reg_read(getattr(ar, f'UC_ARM_REG_S{k}')) for k in range(32)] == pattern and \
             mr.uc.reg_read(ar.UC_ARM_REG_FPSCR) & 0xF7C0009F == fpscr & 0xF7C0009F
@@ -2161,7 +2163,7 @@ def sy_screen_checks(img, man):
     g.put(sym['sy'] + g.sl.mode, 1, '<I')
     g.start()
     sig = ref.to_blocks(sy_strum('G')[0])
-    for k in range(120):
+    for k in range(200):                                               # SY test 12: the first note at block 128
         sg = g.step(sig[k])
     t6 = g.tt()
     check(sg['state'] == SY_RUN and any(sg['out']) and t6['req'] == 0 and g.gsyn()['ons'] == 0,

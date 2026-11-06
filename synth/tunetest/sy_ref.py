@@ -599,7 +599,7 @@ class Engine:
         h = self.host()
         h.set_knobs(*[int(v) for v in self.knobs[t]], int(self.octs[t]), int(self.suss[t]), int(self.dyns[t]))
         mgt = F32(0) if stopping or tone_req != self.tone else F32(1)
-        res, mg = h.block(t, tg, per, e, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
+        res, mg = h.block(t, tg, per, e, nper, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
                           scale=float(G['OUT_SCALE']))
         self.mg = F32(mg)
         mg = self.mg

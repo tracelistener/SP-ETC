@@ -241,11 +241,12 @@ def build_host(out_dir, zig, gains=None):
 #include <xmmintrin.h>
 #include "{(HERE / 'sy_voice.c').as_posix()}"
 __declspec(dllexport) float syv_block_host(syv_state_t *s, const syv_patch_t *p, const syv_knobs_t *k,
-                                           const float *tg, const float *per, const float *e, float vref, float mg,
-                                           float mgt, float fade, float scale, int *out) {{
+                                           const float *tg, const float *per, const float *e,
+                                           const unsigned char *nper, float vref, float mg, float mgt, float fade,
+                                           float scale, int *out) {{
     unsigned int old = _mm_getcsr();
     _mm_setcsr((old & ~0x6000u) | 0x8040u);
-    float r = syv_block(s, p, k, tg, per, e, vref, mg, mgt, fade, scale, out);
+    float r = syv_block(s, p, k, tg, per, e, nper, vref, mg, mgt, fade, scale, out);
     _mm_setcsr(old);
     return r;
 }}
@@ -296,12 +297,14 @@ class Host:
         self.knobs.tone, self.knobs.p2, self.knobs.level = tone, p2, level
         self.knobs.oct, self.knobs.sus, self.knobs.dyn = oct, sus, dyn
 
-    def block(self, tone_index, tg, per, e, vref=None, mg=1.0, mgt=1.0, fade=1.0, scale=1.0):
-        """One block from the bands' levels, periods (12 kHz samples) and energies: (64 ints, the fade after it)."""
+    def block(self, tone_index, tg, per, e, nper, vref=None, mg=1.0, mgt=1.0, fade=1.0, scale=1.0):
+        """One block from the bands' levels, periods (12 kHz samples), energies and periods counted since each woke
+        (SY test 12): (64 ints, the fade after it)."""
         a = (ctypes.c_float * 49)(*map(float, tg))
         f = (ctypes.c_float * 49)(*map(float, per))
         g = (ctypes.c_float * 49)(*map(float, e))
-        mg = self.lib.syv_block_host(self.state, self.tone(tone_index), ctypes.byref(self.knobs), a, f, g,
+        n8 = (ctypes.c_uint8 * 49)(*[min(int(v), 255) for v in nper])
+        mg = self.lib.syv_block_host(self.state, self.tone(tone_index), ctypes.byref(self.knobs), a, f, g, n8,
                                      ctypes.c_float(VREF if vref is None else vref), ctypes.c_float(mg),
                                      ctypes.c_float(mgt), ctypes.c_float(fade), ctypes.c_float(scale), self.out)
         return list(self.out), mg

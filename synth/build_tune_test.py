@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test11'
+REVISION = 'sy-synth-test12'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1093,7 +1093,14 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 11: a synth voice per note (sy_voice.c): the SY bands found as notes (young voices at '
+        description='SY synth test 12: the note manager v4 (sy_voice.c notes(); test 11 gave every flicker of the '
+                    'bands a voice: on the user\'s clean recording 2084 attacks for 136 notes): a band is a note once '
+                    'it holds, its pitch measured (the bands\' period counts now passed down), loud enough against the '
+                    'held peak, no fundamental building up or sounding below it, not a note\'s quieter neighbour or '
+                    'overtone (+-1 band); notes ride gaps and resume; re-picks need a real drop and return; only '
+                    'confirmed notes take voices (on that recording: 144 attacks, 120 of 136 notes found, none under '
+                    '60 ms). '
+                    'SY synth test 11: a synth voice per note (sy_voice.c): the SY bands found as notes (young voices at '
                     'the band\'s level until they hold, mono leads confirmed), each with oscillators (BLEP saw/pulse, '
                     'SG waves, supersaw, FM), a filter and envelopes of its own, 20 tones in the styles of the SG and '
                     'classic synths, no effects (the SP\'s bus FX); CTRL 1 the tone\'s own setting (SG tones: the ENV '

@@ -60,11 +60,12 @@ typedef struct {
     syv_u8 astg, fstg, active, fast;
 } syv_voice_t;
 
-typedef struct {
-    float peak, c, r, lev, hist[9];
-    syv_s32 start, rel, rp;
+typedef struct {                     /* a note (SY test 12: v4) */
+    float peak, c, r, lev, last, elast, hist[9];   /* its peak, pitch (smoothed / now, cents), level / peak, its
+                                                       band's last level and energy */
+    syv_s32 start, born, rel, rp;    /* its last attack, its first, its release, its last re-pick (blocks) */
     syv_s8 band;
-    syv_u8 gate, off, young, fast, nh, trig, pad;
+    syv_u8 gate, off, nh, trig, pad[3];
 } syv_note_t;
 
 typedef struct {                     /* the note manager's word to the voices, per block */
@@ -75,14 +76,15 @@ typedef struct {                     /* the note manager's word to the voices, p
 typedef struct {
     syv_voice_t v[SYV_NV];
     syv_note_t n[SYV_NV];
-    float pend_pk[SYV_BANDS];
-    syv_s32 pend_b0[SYV_BANDS];      /* mono: a band waiting to be a note since this block (-1: none) */
+    float pk[SYV_BANDS];             /* each band's run (SY test 12): its peak level */
+    syv_s32 b0[SYV_BANDS];           /*   the block it began (-1: none) */
     float rc_prev[4][SYV_BANDS];     /* the readings of the last four blocks, in cents (settling) */
     float e_prev[4][SYV_BANDS];      /* the energies of the last four blocks (a fundamental building up) */
-    syv_u8 prev[SYV_BANDS];
+    syv_u8 gap[SYV_BANDS];           /*   the blocks it has been off (up to C_GAP keep it) */
+    syv_u8 used[SYV_BANDS];          /*   1 once it became a note or was ruled out */
     syv_u8 started, pad[2];
     syv_s32 blk;
-    float dcx, dcy;
+    float dcx, dcy, pkh;             /* pkh: the held peak level (SY test 12) */
     syv_u32 cost;                    /* voices rendered in the last block */
     syv_patch_t eff;                 /* the tone with its settings, this block */
     float pre[14];                   /* its ENV preset with SUSTAIN (flt 6) */
@@ -91,11 +93,13 @@ typedef struct {
     syv_ctl_t ctl;
 } syv_state_t;
 
-/* One block: the bands' levels (tg, 0 = not sounding), periods (12 kHz samples) and energies; vref the level a full
- * pick reads. The output stage (as sy_fp.c's before): the soft clip (1.5x - 0.5x^3, +-1 beyond), the fade (mg towards
- * mgt by `fade` a sample) and x `scale` to out (truncated). Returns the fade. */
+/* One block: the bands' levels (tg, 0 = not sounding), periods (12 kHz samples), energies and periods counted since
+ * each woke (nper; SY test 12); vref the level a full pick reads. The output stage (as sy_fp.c's before): the soft
+ * clip (1.5x - 0.5x^3, +-1 beyond), the fade (mg towards mgt by `fade` a sample) and x `scale` to out (truncated).
+ * Returns the fade. */
 float syv_block(syv_state_t *s, const syv_patch_t *tone, const syv_knobs_t *k, const float *tg, const float *per,
-                const float *e, float vref, float mg, float mgt, float fade, float scale, syv_s32 *out);
+                const float *e, const syv_u8 *nper, float vref, float mg, float mgt, float fade, float scale,
+                syv_s32 *out);
 void syv_reset(syv_state_t *s);
 
 #endif

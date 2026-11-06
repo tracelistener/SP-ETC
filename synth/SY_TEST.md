@@ -1,4 +1,4 @@
-# SY synth tests 1 to 11: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 12: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -711,6 +711,55 @@ and a version 3 file's bus.
 
 **Demos:** `release\..\demos\sy-voice-demos2` is rendered by the engine itself, so it is what the unit plays.
 
+## SY synth test 12 (sy-synth-test12): clean note tracking
+
+The user on test 11: the tones "sound amazing", but guitar synth mode has "weird glitches/artifacts/extra notes"
+(Sound Generator mode's tracking "is really good now"). The cause was test 11's note manager. It gave every band that
+switched on a voice at once, at the band's level. A pick lights 7-9 bands for 20-35 ms: the string's overtones come
+before a low note's own band, and the band-passes ring. A real string also flickers between bands, and open strings
+ring along. Each of those became a synth note with an attack, and the notes stole voices from the real ones.
+
+- **The evidence.** The twin was run on real guitar: the user's own takes (Documents\SP404) and a clean recording
+  they made for this through the SP's input (testdry.wav, 107 s: chromatic runs, chords, an arpeggio). Both stayed
+  local and are not in the repo. The Sound Generator tracker (tune_ref.Tracker) gave the reference notes. On the clean
+  recording, test 11's poly tones made 2084 attacks for the 136 notes of the runs, 1840 of them under 60 ms, plus 1235
+  in the chords. Its mono tones made 339 attacks, 149 of them short. The suite's simulated guitar showed the same at
+  15x (91 notes for 6 open strings).
+- **The note manager v4** (`sy_voice.c` notes(), replacing notes_poly and notes_mono; tuned on the recording with a
+  prototype). A band becomes a note only once it holds:
+  - 8 blocks (10.7 ms) on, with gaps of 2 allowed;
+  - its pitch measured: the bands' period counts (nper) are now passed to syv_block, and the first SY_SKIP periods
+    read the band's centre, not the string;
+  - settled (15 cents over 4 blocks), within 45 cents of its band's centre, half its run's peak, a quarter of the
+    loudest band, and 0.12 of a held peak (-20 dB in 0.6 s), which keeps strings ringing along out;
+  - no lower band that could be its fundamental (2x..8x, +-1 band, since overtones run sharp) building up or
+    sounding, unless it has waited 80 blocks;
+  - not a note's quieter neighbour, not an overtone of a note (or of a note that can still resume) or of a lower
+    candidate, and not a louder candidate's neighbour.
+
+  A candidate below a young note at an overtone interval, or a louder neighbour, moves that note there (no new
+  attack). A note follows a bend and rides gaps of 45 blocks while its band's energy stays above 0.1 of its last
+  (a string stopped or muted releases after 4 blocks). It resumes without an attack when its band returns within
+  100 blocks, no louder than 1.6x. A re-pick needs a drop below half the peak and a return above 0.6. Only
+  confirmed notes take voices, the quietest note older than 30 blocks giving way to a louder new one. Mono plays the
+  newest note unless it is weaker than the current note's level.
+- **The voices:** a note that goes on after a gap returns its envelope to decay/sustain (no attack); a gated note
+  whose voice died restarts it. With no voice sounding, the output's DC blocker lets its tail go in about 5 ms
+  (0.99 a sample, not 0.9995), so the output is exact silence soon after the last voice ends.
+- **The cost:** low notes start once 6 of their periods are measured. That puts them 30-40 ms after the Sound
+  Generator tracker on E2-C3, level with it from D3 up, and the suite's strums sound 63-71 ms after their low
+  string. Measuring fewer periods on the low bands found 115-117 of the notes with 27-30 extras, so it was left as
+  is. The suite's TX and screen checks now wait for the first note.
+- **On the recording** (the same scoring for both): the runs give 144 attacks, 120 of the 136 notes found, 24 extras
+  and none under 60 ms, with the median attack 2 ms after the Sound Generator tracker's (90%: 19 ms). The chords give
+  40 attacks, none short. Mono: 145 attacks, 121 found, 12 short. On the user's processed takes, short notes fell from
+  about 25,000 to 66.
+
+**Emulator checks:** 352 (168 distinct) pass on `release/sy-synth-test12`.
+
+**Demos:** `release\..\demos\sy-voice-demos3` has the recording through test 11 and test 12, rendered by each
+test's own engine.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -728,5 +777,6 @@ and a version 3 file's bus.
   the shared knob positions (the bus effect jumping after an edit) get in the way.
 - Test 10: whether a looper take made from the guitar synth screen has the synth in it.
 - Test 11: which tones sound good on a real guitar; whether the pick's blips or settling notes are heard; the engine's real cycles on the unit (the readout's SY line), and whether SLOW ever stops it.
+- Test 12: whether the glitches and extra notes are gone on the unit, and whether notes are missed or late (on the recording, 16 of the runs' 136 notes were not found within 80 ms).
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

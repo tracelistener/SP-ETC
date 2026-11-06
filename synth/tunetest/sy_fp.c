@@ -263,8 +263,8 @@ u32 sy_fp_step(sy_t *s) {
     kn.dyn = s->dynk[t];
     kn.pad[0] = kn.pad[1] = 0;
     float mgt = (s->stopping || req != b->tone) ? 0.0f : 1.0f;
-    float mg = syv_block(&syv_state, &SYV_TONE[t], &kn, b->amp, b->per, b->e, SYV_VREF, b->mg, mgt, SY_FADE,
-                         SY_OUT_SCALE, s->out);
+    float mg = syv_block(&syv_state, &SYV_TONE[t], &kn, b->amp, b->per, b->e, b->nper, SYV_VREF, b->mg, mgt,
+                         SY_FADE, SY_OUT_SCALE, s->out);
     b->mg = mg;
     if (req != b->tone && mg <= 0.0f && !s->stopping) {     /* faded out: the new tone, from rest */
         b->tone = req;
