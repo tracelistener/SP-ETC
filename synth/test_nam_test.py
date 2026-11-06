@@ -412,6 +412,9 @@ def skip_spans(man):
     spans += [(p['address'], p['address'] + p['size']) for p in man['patches']]
     if man.get('sytext'):                                # SY synth test 5: the screen's code, a copy row of its own
         spans.append((man['sytext']['address'], man['sytext']['address'] + man['sytext']['size']))
+    for k in ('text', 'notes', 'data'):                  # SY synth test 11: the voice engine's code slots
+        if man.get('syv', {}).get(k):
+            spans.append(tuple(man['syv'][k]['slot']))
     return spans
 
 

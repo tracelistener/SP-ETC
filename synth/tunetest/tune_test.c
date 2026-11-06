@@ -90,8 +90,8 @@
 #include "tune_test_links.h"   /* from the builder: SG_PRE_TARGET, BNC_UI, BNC_RX, SG_MIDI, KIT_MODE, FDE_DT1_LO/HI,
                                   NR_EVENT_C, KIT_COL_DRAW, KIT_FOOT_DRAW, KS_SG_POLL, ARP_NAME/TEXT/POLL_LO/HI */
 #include "tune_test.h"
-#include "sy_names.h"          /* from the builder (sy_ref.py): SY_NAME, SY_P2_NAMES, SY_OCT_DESIGN, SY_SUS_DESIGN,
-                                  SY_OFF_PAD, SY_OCT_ZERO, SY_OCTAVES */
+#include "syv_names.h"         /* from the builder (sy_voices.py): SYV_NAME, SYV_P2NAME, SYV_P2KIND, SYV_DYN_DESIGN,
+                                  SYV_PRESET_OF, SYV_PRESET_NAME, SY_OFF_PAD, SY_OCT_ZERO, SY_OCTAVES */
 
 #define EXPORT __attribute__((used))
 #define S_(x) #x
@@ -216,9 +216,9 @@ EXPORT const u32 tt_layout[] = {                          /* the tests read thes
 EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: the tests read these */
     sizeof(sy_t), OFFSET(sy_t, state), OFFSET(sy_t, out), OFFSET(sy_t, w_n), OFFSET(sy_t, pub),
     OFFSET(sy_t, tot_max_ever), sizeof(sy_block_t), OFFSET(sy_block_t, e), OFFSET(sy_block_t, per),
-    OFFSET(sy_block_t, ph), OFFSET(sy_block_t, amp), OFFSET(sy_block_t, owned), OFFSET(sy_block_t, env),
+    OFFSET(sy_block_t, amp), OFFSET(sy_block_t, amp), OFFSET(sy_block_t, owned), OFFSET(sy_block_t, env),
     OFFSET(sy_block_t, started), OFFSET(sy_block_t, tone), OFFSET(sy_block_t, nper), OFFSET(sy_t, tone_req),
-    OFFSET(sy_block_t, fe), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads), OFFSET(sy_t, mode),
+    OFFSET(sy_block_t, mg), OFFSET(sy_t, knob), OFFSET(sy_t, dirty), OFFSET(sy_t, loads), OFFSET(sy_t, mode),
     OFFSET(sy_t, rec), OFFSET(sy_t, oct), OFFSET(sy_t, susk), OFFSET(sy_block_t, fund_cut), OFFSET(sy_t, dynk),
     OFFSET(sy_t, rem_down), OFFSET(sy_block_t, hold), OFFSET(sy_t, out_bus), OFFSET(sy_t, armed)};
 
@@ -244,20 +244,26 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define PAD_TEMPO ((s32 (*)(s32))0x80047DD1u)
 #define CUR_BANK (*(volatile s32 *)0x82DFFF44u)
 #define BANKS 10
-#define SY_TONE_COUNT 15u
+#define SY_TONE_COUNT SY_NTONES                        /* SY test 11: 20 */
 /* Test 3: the file, with the stock calls FX deep edit's file uses (the builder checks their code). */
 #define FILE_OPEN ((s32 (*)(const char *, s32))0x800DEC61u)    /* 0 read, 0x601 write (create, truncate); < 0 fails */
 #define FILE_READ ((s32 (*)(s32, void *, s32))0x800DEC49u)
 #define FILE_WRITE ((s32 (*)(s32, const void *, s32))0x800DD9B9u)
 #define FILE_CLOSE ((s32 (*)(s32))0x800DEBD9u)
 #define SY_FILE_MAGIC 0x4E545953u                              /* "SYTN" */
-#define SY_FILE_VERSION 3u                                     /* test 6: DYNAMICS (a version 2 file is read too) */
-/* magic, version, tone, muted, 15; 45 knob positions, 15 OCTAVE, 15 SUSTAIN, 15 DYNAMICS, 2 zero; FNV-1a of the first
- * 100. Version 2 (test 5): 88 bytes, no DYNAMICS, one zero, the sum of the first 84 at 84. */
-#define SY_FILE_BYTES 104
-#define SY_FILE_SUM 100
-#define SY_FILE2_BYTES 88
-#define SY_FILE2_SUM 84
+#define SY_FILE_VERSION 4u                                     /* SY test 11: the 20 tones */
+/* Version 4: magic, version, tone, muted, 20; 60 knob positions, 20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, 3 zero;
+ * FNV-1a of the first 132. Version 3 (tests 6-10, 104 bytes, the sum of the first 100 at 100: the old 15 tones): only
+ * its bus (byte 98) and SOUND OFF are kept, the new tones start as designed. */
+#define SY_FILE_BYTES 136
+#define SY_FILE_SUM 132
+#define SY_FILE_KNOB 8
+#define SY_FILE_OCT (SY_FILE_KNOB + 3 * SY_NTONES)
+#define SY_FILE_SUS (SY_FILE_OCT + SY_NTONES)
+#define SY_FILE_DYN (SY_FILE_SUS + SY_NTONES)
+#define SY_FILE_BUS (SY_FILE_DYN + SY_NTONES)
+#define SY_FILE3_BYTES 104
+#define SY_FILE3_SUM 100
 #define FNV 2166136261u
 /* Test 3: an FX screen up (as FX deep edit finds it: the view on TOP's list whose vtable is the FX screen's). */
 #define TOP_OBJECT (*(u8 *const volatile *)0x80CFD350u)
@@ -309,7 +315,8 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define FONT_BIG 2                                     /* the value big at +15 (DM-404 renders them so) */
 #define COL_BASE 0x7B                                  /* the SG knob columns' parameter IDs (SHIFT: 0x7e..0x80) */
 #define SG_CHILDREN 0x1A6C                             /* the SG page's three knob columns */
-#define SY_SOUNDS 16u                                  /* SOUND: OFF, then the 15 tones */
+#define SY_SOUNDS (SY_NTONES + 1u)                     /* SOUND: OFF, then the tones (test 11: 20) */
+#define SY_SHIFT_TONES (SY_NTONES - 15u)               /* SY test 11: SHIFT + pads 1-5: tones 16-20 */
 
 /* ---- the synth: the tracker's note on the Sound Generator ---- */
 #define SG_PAGE 0x1E                                   /* the Sound Generator page (the kits' and the arp's) */
@@ -1199,26 +1206,33 @@ UI_SMALL static void sy_ready(void) {
     s32 fd = FILE_OPEN(sy_path, 0);
     if (fd < 0) return;
     s32 n = FILE_READ(fd, sy_file, SY_FILE_BYTES);
-    u32 v2 = n == SY_FILE2_BYTES && sy_file[4] == 2u;   /* test 6: test 5's file (no DYNAMICS) */
-    u32 sum = v2 ? SY_FILE2_SUM : SY_FILE_SUM;
     FILE_CLOSE(fd);
-    if ((n != SY_FILE_BYTES && !v2) || get32(sy_file) != SY_FILE_MAGIC || (sy_file[4] != SY_FILE_VERSION && !v2) ||
-        sy_file[7] != SY_TONE_COUNT || get32(sy_file + sum) != sy_fnv(sy_file, sum)) {
+    if (n == SY_FILE3_BYTES && get32(sy_file) == SY_FILE_MAGIC && sy_file[4] == 3u &&
+        get32(sy_file + SY_FILE3_SUM) == sy_fnv(sy_file, SY_FILE3_SUM)) {   /* SY test 11: tests 6-10's file */
+        u32 bus = sy_file[98];
+        s->out_bus = (u8)(bus <= 3u ? bus : 0u);
+        s->muted = sy_file[6] & 1u;
+        s->dirty = 1;                                   /* written as version 4 at the next save */
+        s->loads++;
+        return;
+    }
+    if (n != SY_FILE_BYTES || get32(sy_file) != SY_FILE_MAGIC || sy_file[4] != SY_FILE_VERSION ||
+        sy_file[7] != SY_TONE_COUNT || get32(sy_file + SY_FILE_SUM) != sy_fnv(sy_file, SY_FILE_SUM)) {
         s->bad_files++;
         return;
     }
     for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) {
-        u32 v = sy_file[8 + i];
+        u32 v = sy_file[SY_FILE_KNOB + i];
         s->knob[i / 3u][i % 3u] = (s8)((v > 127u ? 127u : v) - 64u);
     }
     for (u32 i = 0; i < SY_TONE_COUNT; i++) {
-        u32 o = sy_file[53 + i], su = sy_file[68 + i], dk = v2 ? 0u : sy_file[83 + i];
+        u32 o = sy_file[SY_FILE_OCT + i], su = sy_file[SY_FILE_SUS + i], dk = sy_file[SY_FILE_DYN + i];
         s->oct[i] = (s8)(o <= SY_OCTAVES ? o : 0u);
         s->susk[i] = (u8)(su <= 101u ? su : 0u);
         s->dynk[i] = (u8)(dk <= 101u ? dk : 0u);
     }
     {
-        u32 bus = v2 ? 0u : sy_file[98];                /* SY test 7: the synth's bus (test 6's files: 0, DRY) */
+        u32 bus = sy_file[SY_FILE_BUS];                 /* SY test 7: the synth's bus */
         s->out_bus = (u8)(bus <= 3u ? bus : 0u);
     }
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
@@ -1249,14 +1263,14 @@ UI_SMALL static void sy_save(void) {
     sy_file[5] = (u8)s->tone_req;
     sy_file[6] = (u8)s->muted;
     sy_file[7] = SY_TONE_COUNT;
-    for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) sy_file[8 + i] = (u8)(s->knob[i / 3u][i % 3u] + 64);
+    for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) sy_file[SY_FILE_KNOB + i] = (u8)(s->knob[i / 3u][i % 3u] + 64);
     for (u32 i = 0; i < SY_TONE_COUNT; i++) {
-        sy_file[53 + i] = (u8)s->oct[i];
-        sy_file[68 + i] = s->susk[i];
-        sy_file[83 + i] = s->dynk[i];
+        sy_file[SY_FILE_OCT + i] = (u8)s->oct[i];
+        sy_file[SY_FILE_SUS + i] = s->susk[i];
+        sy_file[SY_FILE_DYN + i] = s->dynk[i];
     }
-    sy_file[98] = s->out_bus;                           /* SY test 7 */
-    sy_file[99] = 0;
+    sy_file[SY_FILE_BUS] = s->out_bus;                  /* SY test 7 */
+    for (u32 i = SY_FILE_BUS + 1u; i < SY_FILE_SUM; i++) sy_file[i] = 0;
     put32(sy_file + SY_FILE_SUM, sy_fnv(sy_file, SY_FILE_SUM));
     s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
     if (fd >= 0) {
@@ -1362,6 +1376,16 @@ UI_SMALL SCREEN static void sy_sound_set(sy_t *s, u32 n) {
     s->picks++;
     s->dirty = 1;
     sy_changed(s);
+}
+
+/* SY test 11: a pad's SOUND: pads 1-15 the tones 1-15, pad 16 OFF; with SHIFT held, pads 1-5 the tones 16-20 (SHIFT
+ * then counts as used: its release keeps the page). */
+UI_SMALL SCREEN static u32 sy_pad_sound(sy_t *s, u32 pad) {
+    if (key_held(KEY_SHIFT) && pad < SY_SHIFT_TONES) {
+        s->shift_used = 1;
+        return 16u + pad;
+    }
+    return pad == SY_OFF_PAD ? 0u : pad + 1u;
 }
 
 /* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): test 6: the tone's own setting, TONE and LEVEL (knob -
@@ -1478,7 +1502,7 @@ UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val)
         if ((u32)what < PADS) {
             s->pads_taken |= 1u << what;
             s->pads_ate++;
-            sy_sound_set(s, (u32)what == SY_OFF_PAD ? 0u : (u32)what + 1u);
+            sy_sound_set(s, sy_pad_sound(s, (u32)what));
             return 1;
         }
         if (what != KEY_SUB_PAD) return 0;
@@ -1500,7 +1524,7 @@ UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val)
     if (type == EV_KEY) {
         if ((u32)what < PADS) {
             sy_take(s, what);
-            sy_sound_set(s, (u32)what == SY_OFF_PAD ? 0u : (u32)what + 1u);
+            sy_sound_set(s, sy_pad_sound(s, (u32)what));
             return 1;
         }
         if (what == KEY_REC && LOOPER_ON) return 0;    /* test 10: the looper's REC (a loop), as on the stock page */
@@ -1574,21 +1598,24 @@ UI_SMALL SCREEN static u32 sy_pct(u32 pos) { return pos <= 64u ? (pos * 50u + 32
 EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
     const sy_t *s = &sy;
     u32 tone = sy_tone(s), i = col + ((s->shift_page ^ s->shift_down) ? 3u : 0u);
-    *put_str(label, i == 0u ? SY_P2_NAMES[tone] : SY_LABELS[i]) = 0;
+    *put_str(label, i == 0u ? SYV_P2NAME[tone] : SY_LABELS[i]) = 0;
     char *p = value;
-    if (i == 0)
+    if (i == 0 && SYV_P2KIND[tone] == SYV_P_ENVSEL) {   /* SY test 11: the ENV preset itself, by name */
+        s32 k = s->knob[tone][1], z = ((64 + k) * 10) >> 7;
+        u32 pre = k ? (u32)(z < 0 ? 0 : z > 9 ? 9 : z) : SYV_PRESET_OF[tone];
+        p = put_str(p, SYV_PRESET_NAME[pre]);
+    } else if (i == 0)
         p = put_signed(p, sy_pm50(s->knob[tone][1]));
     else if (i == 1)
         p = put_signed(p, sy_pm50(s->knob[tone][0]));
     else if (i == 2)
         p = put_u(p, sy_pct((u32)(64 + s->knob[tone][2])));
     else if (i == 3)
-        p = put_signed(p, (u32)s->oct[tone] - 1u < SY_OCTAVES ? (s32)s->oct[tone] - (s32)SY_OCT_ZERO
-                                                               : (s32)SY_OCT_DESIGN[tone]);
+        p = put_signed(p, (u32)s->oct[tone] - 1u < SY_OCTAVES ? (s32)s->oct[tone] - (s32)SY_OCT_ZERO : 0);
     else if (i == 4)
-        p = put_u(p, s->susk[tone] ? s->susk[tone] - 1u : SY_SUS_DESIGN[tone]);
+        p = put_u(p, s->susk[tone] ? s->susk[tone] - 1u : 50u);   /* SY test 11: 50 as designed (x1 the times) */
     else
-        p = put_u(p, s->dynk[tone] ? s->dynk[tone] - 1u : SY_DYN_DESIGN[tone]);
+        p = put_u(p, s->dynk[tone] ? s->dynk[tone] - 1u : SYV_DYN_DESIGN[tone]);
     *p = 0;
 }
 
@@ -1596,7 +1623,7 @@ EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
  * its last letter), its number is in the column and the bar. */
 EXPORT UI_SMALL SCREEN void sy_foot_text(char *out) {
     const sy_t *s = &sy;
-    *put_str(out, s->muted ? "SYNTH OFF" : SY_NAME[sy_tone(s)]) = 0;
+    *put_str(out, s->muted ? "SYNTH OFF" : SYV_NAME[sy_tone(s)]) = 0;
 }
 
 /* A widget's frame (framebuffer at +0x84, rectangle x0 y0 x1 y1 at +4), cleared as the stock draws do. */

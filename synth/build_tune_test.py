@@ -89,16 +89,18 @@ HERE = Path(__file__).resolve().parent
 SRC = HERE / 'tunetest'
 sys.path.insert(0, str(SRC))
 import sy_ref  # noqa: E402  (the SY engine's tables)
+import sy_voices  # noqa: E402  (SY test 11: the tones, syv_tables.h / syv_names.h)
 INTEGER_SOURCE = SRC / 'tune_test.c'           # none of its functions may hold an FPU instruction
-SOURCES = [INTEGER_SOURCE, SRC / 'tune_fp.c', SRC / 'sy_fp.c']
-HEADERS = [SRC / 'tune_test.h', SRC / 'sy_ref.py']   # sy_ref.py writes sy_tables.h
+SOURCES = [INTEGER_SOURCE, SRC / 'tune_fp.c', SRC / 'sy_fp.c', SRC / 'sy_voice.c']
+SIZE_SOURCES = ('sy_voice.c',)                 # SY test 11: built -Os (its slots are small)
+HEADERS = [SRC / 'tune_test.h', SRC / 'sy_ref.py', SRC / 'sy_voice.h', SRC / 'sy_voices.py']
 THIRD_PARTY = ()
 TEST_PLAN = SRC / 'HARDWARE_TEST.md'
 FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test10'
+REVISION = 'sy-synth-test11'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -110,6 +112,16 @@ SY_BSS = (0x83FE6000, 0x83FE6C00)
 # SY test 5: the guitar synth screen's code (tune_test.c's functions in section .sytext) in the rest of that slot, a boot
 # copy row of its own (the module's own slot is full)
 SY_TEXT = (0x83FE6C00, 0x83FE8000)
+# SY test 11: the voice-per-note engine (sy_voice.c) in slots nothing in v9.52 uses (a test build's: each one is
+# checked free in the input, rows and references): its code in the CPU meter's and bounce probe's test slots, the note
+# manager in the free top of chromatic scales' 8 KB slot (its row ends at 0x83fd79ae), its state in the free top of FX
+# deep edit's 16 KB slot (its row ends at 0x83fe4780).
+SYV_TEXT = (0x83FED000, 0x83FEF000)
+SYV_NOTES = (0x83FD7A00, 0x83FD9000)
+SYV_BSS = (0x83FE4800, 0x83FE6000)
+SYV_DATA = (0x83FEF100, 0x83FF0000)    # its constants and smaller functions: the free rest of the start fix's slot
+SYV_SLOTS = (SYV_TEXT, SYV_NOTES, SYV_BSS, SYV_DATA)
+SYV_CODE = {'.syvtext': SYV_TEXT, '.syvnotes': SYV_NOTES, '.syvdata': SYV_DATA}
 TX_BRIDGE, RX_BRIDGE, UI_BRIDGE = 0x83FE8000, 0x83FE8030, 0x83FE8080   # bounce-3-test9's bridges
 TX_SITE, RX_SITE, FEED, LOOP, TX_BACK, TICK_REST = 0x0001D090, 0x0001D0C2, 0x0001CA80, 0x0001D05C, 0x0001D09A, 0x8006B95C
 
@@ -135,6 +147,13 @@ SHA_GUARDS = [
     (0x800DEBD8, 0x800DEC48, '22abec76d1aba2f98baf9ba58a4383d2075417a6d981e86b791054dccef5d6bf', 'file close (fd)'),
     (0x800DD9B8, 0x800DD9F8, 'd204acf3596d8eab1eca7a6d4e1cf2aec6429890e0b05a88ed1357982cda0fb6',
      'file write (fd, buf, n): bytes written'),
+    # SY test 11: the Sound Generator's wave code (the v9 waves module) sy_voice.c calls for types 15-31: wave_eval
+    # (DUTY clamped, x 100, on to wave_core) and wave_core with its helpers, as the parent has them; the host build of
+    # waves_v8_ram/waves.c the checks compare against computes the same values
+    (0x83F80400, 0x83F80438, 'e10b626d01fe82538e394662c7d65fb9e0e104da6fd8614e8be1c69743db5b2f',
+     "the SG's wave_eval (0x83f80401): sy_voice.c's WAVE_EVAL"),
+    (0x83F818DC, 0x83F82A2C, '195f8e2361bc5d3582248359cd99b7256404849cfd76de6d4e7a932365394251',
+     "the SG's wave_core and its helpers (to wave_output)"),
     # SY test 5: the settings setter the screen switches EXT SOURCE on with (bounce's guard)
     (0x800DD0C0, 0x800DD0E0, '3e20a3e2a93b9efb07122e0dbe90268461453c13c9310ab2c018777060eef5cc',
      'settings set (obj, id, value, flag)'),
@@ -718,8 +737,20 @@ def read_module(data, base, limit, extra=None, extra_text=None):
     sections, names = elf_sections(data)
     syms, funcs, blocks, end, text = {}, [], [], base, None
     extra_spans, sytext = [], []
+    read_module.syv = {}                                # SY test 11: '.syvtext' / '.syvnotes' -> (address, bytes)
+    read_module.syv_bss = []
     for name, kind, flags, addr, off, size, link, info, align, entsize in sections:
         if flags & 2 and size:
+            sname = names[name:].split(b'\0')[0].decode('ascii')
+            if sname in SYV_CODE:
+                lo, hi = SYV_CODE[sname]
+                if kind == 8 or not (lo <= addr and addr + size <= hi):
+                    raise ValueError(f'{sname} at {addr:#x}+{size:#x} outside its slot {lo:#x}..{hi:#x}')
+                read_module.syv[sname] = (addr, data[off:off + size])
+                continue
+            if kind == 8 and SYV_BSS[0] <= addr and addr + size <= SYV_BSS[1]:
+                read_module.syv_bss.append((addr, addr + size))
+                continue
             if extra and kind == 8 and extra[0] <= addr and addr + size <= extra[1]:
                 extra_spans.append((addr, addr + size))
                 continue
@@ -792,20 +823,25 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fd
         ''.join(f'#define {name}_LO {value & 0xFFFF:#x}\n#define {name}_HI {value >> 16:#x}\n'
                 for _, value, _, name, _ in BAR_SITES),
         encoding='ascii', newline='\n')
-    (folder / 'sy_tables.h').write_text(sy_ref.c_header(), encoding='ascii', newline='\n')
-    (folder / 'sy_names.h').write_text(sy_ref.c_names(), encoding='ascii', newline='\n')
+    (folder / 'sy_tables.h').write_text(sy_ref.c_header(tones=False), encoding='ascii', newline='\n')
+    (folder / 'syv_tables.h').write_text(sy_voices.c_header(), encoding='ascii', newline='\n')
+    (folder / 'syv_names.h').write_text(sy_voices.c_names(), encoding='ascii', newline='\n')
     # The integer side (tune_test.o) first, from the base to tt_integer_end; then the FPU side. Unused sections go
     # (--gc-sections: Zig links its compiler_rt, of which only what something calls may stay).
     fp_keep = ' '.join(f'KEEP(*(.text.{n}))' for n in EXPORTS if n not in DATA and not n.startswith(('meter', 'diag')))
     (folder / 'tune_test.ld').write_text(f'''ENTRY(meter_mix_entry)
 SECTIONS {{
  . = {base:#x};
- .text : {{ KEEP(*tune_test.o(.text.meter_mix_entry)) KEEP(*tune_test.o(.text*)) tt_integer_end = .; {fp_keep} *(.text*) }}
- .rodata : ALIGN(4) {{ KEEP(*(.rodata.tt_layout)) KEEP(*(.rodata.sy_layout)) *(.rodata*) }}
+ .text : {{ KEEP(*tune_test.o(.text.meter_mix_entry)) KEEP(*tune_test.o(.text*)) tt_integer_end = .; {fp_keep} *(EXCLUDE_FILE(*sy_voice.o) .text*) }}
+ .rodata : ALIGN(4) {{ KEEP(*(.rodata.tt_layout)) KEEP(*(.rodata.sy_layout)) *(EXCLUDE_FILE(*sy_voice.o) .rodata*) }}
  .data : ALIGN(4) {{ *(.data*) }}
  .bss : ALIGN(32) {{ *(.bss*) *(COMMON) }}
- .sytext {SY_TEXT[0]:#x} : {{ KEEP(*(.sytext)) }}
+ .syvnotes {SYV_NOTES[0]:#x} : {{ KEEP(*(.syvnotes)) }}
+ .syvbss {SYV_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.syvbss)) }}
  .sybss {SY_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.sybss)) }}
+ .sytext {SY_TEXT[0]:#x} : {{ KEEP(*(.sytext)) }}
+ .syvtext {SYV_TEXT[0]:#x} : {{ KEEP(*(.syvtext)) *sy_voice.o(.text*) }}
+ .syvdata {SYV_DATA[0]:#x} : {{ KEEP(*(.syvdata)) *sy_voice.o(.rodata*) }}
  /DISCARD/ : {{ *(.ARM.exidx*) *(.ARM.extab*) *(.comment) *(.note*) *(.ARM.attributes) }}
 }}
 ''', encoding='ascii', newline='\n')
@@ -814,13 +850,14 @@ SECTIONS {{
     if subprocess.check_output([str(zig), 'version'], text=True).strip() != '0.13.0':
         raise ValueError('needs Zig 0.13.0')
     target = ['-target', 'thumb-freestanding-eabihf', '-mcpu=cortex_m7+fp_armv8d16sp']
-    common = target + ['-O2', '-ffreestanding', '-fno-math-errno', '-fno-stack-protector', '-ffunction-sections',
+    common = target + ['-ffreestanding', '-fno-math-errno', '-fno-stack-protector', '-ffunction-sections',
                        '-fdata-sections', '-I', str(folder), '-I', str(inc), '-I', str(SRC)]
     objs = []
     for src in SOURCES:
         obj = folder / (src.stem + '.o')
         warn = ['-Wall'] if src in THIRD_PARTY else ['-Wall', '-Werror']
-        subprocess.run([str(zig), 'cc', *common, *warn, '-c', str(src), '-o', str(obj)], check=True, env=env)
+        opt = ['-Os'] if src.name in SIZE_SOURCES else ['-O2']
+        subprocess.run([str(zig), 'cc', *opt, *common, *warn, '-c', str(src), '-o', str(obj)], check=True, env=env)
         objs.append(obj)
     elf = folder / 'tune_test.elf'
     subprocess.run([str(zig), 'cc', *target, '-nostdlib', '-Wl,--no-undefined', '-Wl,--build-id=none',
@@ -835,6 +872,13 @@ SECTIONS {{
     if len(extra) != 1 or extra[0][0] != SY_BSS[0] or syms.get('sy_block') != SY_BSS[0]:
         raise ValueError(f'sy_block not alone at {SY_BSS[0]:#x}: {extra} {syms.get("sy_block")}')
     compile_module.sy_bss = extra[0]
+    syv = read_module.syv                               # SY test 11: the voice engine's code, its notes, its state
+    if set(syv) != set(SYV_CODE) or any(syv[k][0] != v[0] for k, v in SYV_CODE.items()):
+        raise ValueError(f'the voice engine\'s code not at its slots: {[(k, hex(a), len(b)) for k, (a, b) in syv.items()]}')
+    if len(read_module.syv_bss) != 1 or read_module.syv_bss[0][0] != SYV_BSS[0] or syms.get('syv_state') != SYV_BSS[0]:
+        raise ValueError(f'syv_state not alone at {SYV_BSS[0]:#x}: {read_module.syv_bss} {syms.get("syv_state")}')
+    compile_module.syv = dict(text=syv['.syvtext'], notes=syv['.syvnotes'], data=syv['.syvdata'],
+                              bss=read_module.syv_bss[0], maps=read_module.sytext_maps)
     missing = [n for n in EXPORTS + ('tt_integer_end',) if n not in syms]
     if missing:
         raise ValueError(f'module symbols missing: {missing}')
@@ -878,7 +922,7 @@ def code_spans(text):
     return spans
 
 
-def check_module(code, text, base, integer, sytext=None):
+def check_module(code, text, base, integer, sytext=None, syv=None):
     """Every code span decoded to its end; direct branches stay inside .text (SY test 5: or .sytext, whose own code is
     checked the same way); no FPU instruction in the integer side's functions (tune_test.c: the meter's hooks, the UI
     and the RX glue, the screen). Returns the FPU instruction count."""
@@ -886,7 +930,14 @@ def check_module(code, text, base, integer, sytext=None):
     spans = [(lo, hi, code, base) for lo, hi in code_spans(text)]
     if sytext:
         spans += [(lo, hi, sytext[1], sytext[0]) for lo, hi in code_spans(sytext[2])]
-    inside = lambda t: text[0] <= t < text[1] or (sytext and sytext[2][0] <= t < sytext[2][1])  # noqa: E731
+    extra = []                                          # SY test 11: the voice engine's two code sections
+    for name in ('text', 'notes', 'data') if syv else ():
+        at, blob = syv[name]
+        sec = (at, at + len(blob), syv['maps'])
+        spans += [(lo, hi, blob, at) for lo, hi in code_spans(sec)]
+        extra.append((at, at + len(blob)))
+    inside = lambda t: text[0] <= t < text[1] or bool(sytext and sytext[2][0] <= t < sytext[2][1]) or \
+        any(lo <= t < hi for lo, hi in extra)  # noqa: E731
     for lo, hi, blob, at in spans:
         seen = lo
         for ins in MD.disasm(blob[lo - at:hi - at], lo):
@@ -943,6 +994,13 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     hits = refs_into(bytes(img), SY_SLOT[0], SY_SLOT[1])
     if hits:
         raise ValueError(f'input refers to sy_block\'s slot: {hits[:4]}')
+    for lo, hi in SYV_SLOTS:                                   # SY test 11: the voice engine's three slots are free
+        for load, dst, n, fn in rows:
+            if max(dst, lo) < min(dst + n, hi):
+                raise ValueError(f'row {dst:#x}+{n:#x} overlaps the voice engine\'s slot {lo:#x}..{hi:#x}')
+        hits = refs_into(bytes(img), lo, hi)
+        if hits:
+            raise ValueError(f'input refers to the voice engine\'s slot {lo:#x}..{hi:#x}: {hits[:4]}')
     code, syms, funcs, text, integer = compile_module(zig, (build_dir or out / 'build').resolve(), base, pre_target,
                                                       bridges, sg_midi, kit_mode, fde_dt1, nr_event_c)
     end = base + len(code)
@@ -951,7 +1009,8 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     # Compiler helpers the link pulled in (they run from the integer side too) must be integer code as well.
     integer = integer + [(a, a + n, name) for name, a, n in funcs if name.startswith('__aeabi')]
     sytext = compile_module.sytext
-    fpu_count = check_module(code, text, base, integer, sytext)
+    syv = compile_module.syv
+    fpu_count = check_module(code, text, base, integer, sytext, syv)
     block_bytes = struct.unpack_from('<I', code, syms['tt_layout'] - base + 11 * 4)[0]
     sy_block_bytes = struct.unpack_from('<I', code, syms['sy_layout'] - base + 6 * 4)[0]
     targets = {MIXER: syms['meter_mix_entry'], STUB: syms['meter_voice']}
@@ -1011,10 +1070,18 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
         img[off:off + 4] = new
     file_at = append(img, code, 16)
     sytext_at = append(img, sytext[1], 16)
+    syv_at = append(img, syv['text'][1], 16)                   # SY test 11
+    syvn_at = append(img, syv['notes'][1], 16)
+    syvd_at = append(img, syv['data'][1], 16)
     table = append(img, b'', 16)
     sy_lo, sy_hi = compile_module.sy_bss
+    syv_lo, syv_hi = syv['bss']
     for row in rows + [[FLASH + file_at, base, len(code), COPY], [FLASH + sytext_at, sytext[0], len(sytext[1]), COPY],
-                       [0, sy_lo, sy_hi - sy_lo, ZERO]]:
+                       [0, sy_lo, sy_hi - sy_lo, ZERO],
+                       [FLASH + syv_at, syv['text'][0], len(syv['text'][1]), COPY],
+                       [FLASH + syvn_at, syv['notes'][0], len(syv['notes'][1]), COPY],
+                       [FLASH + syvd_at, syv['data'][0], len(syv['data'][1]), COPY],
+                       [0, syv_lo, syv_hi - syv_lo, ZERO]]:
         img += struct.pack('<4I', *row)
     struct.pack_into('<2I', img, 0x80, table - 0x80, len(img) - 0x80)
     if FLASH + len(img) > FLASH_END:
@@ -1026,7 +1093,12 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 10: the footer drawn when the screen opens over the Sound Generator page '
+        description='SY synth test 11: a synth voice per note (sy_voice.c): the SY bands found as notes (young voices at '
+                    'the band\'s level until they hold, mono leads confirmed), each with oscillators (BLEP saw/pulse, '
+                    'SG waves, supersaw, FM), a filter and envelopes of its own, 20 tones in the styles of the SG and '
+                    'classic synths, no effects (the SP\'s bus FX); CTRL 1 the tone\'s own setting (SG tones: the ENV '
+                    'preset), SHIFT + pads 1-5 tones 16-20, the file version 4. '
+                    'SY synth test 10: the footer drawn when the screen opens over the Sound Generator page '
                     '(plain or drum mode) already up; the chord on the looper page (0x27); REC on the screen to the '
                     'looper while looper mode is on (0x82e0b92c). '
                     'SY synth test 9: test 8 on combined-test19 (v9.52 with LEVEL for MIDI notes and the Sound '
@@ -1117,11 +1189,24 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
         tt_block_bytes=block_bytes, sy_block_bytes=sy_block_bytes, bounce_bridges={k: v for k, v in bridges.items()},
         source_sha256={str(p.relative_to(HERE)): sha(lf(p)) for p in SOURCES + HEADERS},
         test_plan_sha256=sha(lf(TEST_PLAN)), tool_sha256=sha(lf(Path(__file__))),
-        compiler='zig 0.13.0 cc -target thumb-freestanding-eabihf -mcpu=cortex_m7+fp_armv8d16sp -O2',
+        compiler='zig 0.13.0 cc -target thumb-freestanding-eabihf -mcpu=cortex_m7+fp_armv8d16sp -O2 '
+                 '(sy_voice.c -Os)',
         rows_added=[dict(kind='copy', address=base, size=len(code)),
                     dict(kind='copy', address=sytext[0], size=len(sytext[1]), file_offset=sytext_at,
                          what='the guitar synth screen\'s code (SY test 5: .sytext, out of the module)'),
-                    dict(kind='zero', address=sy_lo, size=sy_hi - sy_lo, what='sy_block (SY test 3: out of the module)')],
+                    dict(kind='zero', address=sy_lo, size=sy_hi - sy_lo, what='sy_block (SY test 3: out of the module)'),
+                    dict(kind='copy', address=syv['text'][0], size=len(syv['text'][1]), file_offset=syv_at,
+                         what='SY test 11: the voice engine (sy_voice.c .syvtext)'),
+                    dict(kind='copy', address=syv['notes'][0], size=len(syv['notes'][1]), file_offset=syvn_at,
+                         what='SY test 11: its note manager (.syvnotes)'),
+                    dict(kind='copy', address=syv['data'][0], size=len(syv['data'][1]), file_offset=syvd_at,
+                         what='SY test 11: its constants, wave helper and output stage (.syvdata)'),
+                    dict(kind='zero', address=syv_lo, size=syv_hi - syv_lo, what='SY test 11: its state (syv_state)')],
+        syv=dict(text=dict(slot=list(SYV_TEXT), size=len(syv['text'][1]), sha256=sha(syv['text'][1])),
+                 notes=dict(slot=list(SYV_NOTES), size=len(syv['notes'][1]), sha256=sha(syv['notes'][1])),
+                 data=dict(slot=list(SYV_DATA), size=len(syv['data'][1]), sha256=sha(syv['data'][1])),
+                 state=dict(slot=list(SYV_BSS), used=[syv_lo, syv_hi]),
+                 tones=[t['name'] for t in sy_voices.VOICES], gains=sy_voices.VOICE_GAINS, vref=sy_voices.VREF),
         sy_bss=dict(slot=[SY_BSS[0], SY_BSS[1]], used=[sy_lo, sy_hi]),
         sytext=dict(slot=[SY_TEXT[0], SY_TEXT[1]], address=sytext[0], size=len(sytext[1]), file_offset=sytext_at,
                     sha256=sha(sytext[1])),

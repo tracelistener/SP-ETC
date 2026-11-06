@@ -128,6 +128,7 @@ u32 tune_fp_step(tt_t *t);
 /* ---- SY synth tests 1 and 2 (sy_fp.c): 49 semitone bands, oscillators each, to the DRY pair ---- */
 #define SY_BANDS 49u
 #define SY_SUB 16u                          /* 12 kHz samples a block */
+#define SY_NTONES 20u                       /* SY test 11: the tones (sy_voices.py's VOICES) */
 
 /* A band's constants (sy_tables.h, from sy_ref.py): b0, -a1, -a2 of both band-pass stages, the energy follower,
  * the centre period, the periods that count, the periods the band owns (12 kHz samples). */
@@ -172,19 +173,18 @@ typedef struct {
     volatile u32 req;                       /* 1: run; 0: fade out and stop */
     u32 starts, stops;
     u32 reset_req;
-    volatile u32 tone_req;                  /* test 2: the tone picked (test 5: SOUND 1-15: 0..14) */
+    volatile u32 tone_req;                  /* test 2: the tone picked (test 11: SOUND 1-20: 0..19) */
     volatile u32 muted;                     /* test 2: the synth off (test 5: SOUND OFF) */
     u32 picks, taken;                       /* SOUND changes; test 5: keys 0..31 whose press was taken (and release) */
     volatile u32 bpm100;                    /* the SP's tempo for the step gate (BPM x 100), every 0.1 s */
     u32 tempo_checked;
-    volatile s8 knob[15][3];                /* test 3: each tone's TONE, P2, LEVEL, as knob position - 64 (0: as
+    volatile s8 knob[SY_NTONES][3];         /* test 3: each tone's TONE, P2, LEVEL, as knob position - 64 (0: as
                                                designed) */
     u8 dirty, loaded;                       /* test 3: picks or knobs not in the file yet; the file was read */
-    u8 pad3[1];
-    volatile s8 oct[15];                    /* test 5: each tone's OCTAVE: 0 as designed, 1..5 = -2..+2 */
-    volatile u8 susk[15];                   /* test 5: each tone's SUSTAIN: 0 as designed, 1..101 = 0..100 */
-    volatile u8 dynk[15];                   /* test 6: each tone's DYNAMICS: 0 as designed, 1..101 = 0..100 */
-    u8 pad5[3];
+    u8 pad3[2];
+    volatile s8 oct[SY_NTONES];             /* test 5: each tone's OCTAVE: 0 as designed, 1..5 = -2..+2 */
+    volatile u8 susk[SY_NTONES];            /* test 5: each tone's SUSTAIN: 0 as designed, 1..101 = 0..100 */
+    volatile u8 dynk[SY_NTONES];            /* test 6: each tone's DYNAMICS: 0 as designed, 1..101 = 0..100 */
     u32 loads, saves, save_errors, bad_files;   /* test 3: the file */
     /* written by the audio task */
     volatile u32 state;
@@ -233,19 +233,14 @@ typedef struct __attribute__((aligned(32))) {
     float e[SY_BANDS];                      /* the band's energy */
     float tl[SY_BANDS];                     /* its last positive crossing, from this block's start (12 kHz samples) */
     float per[SY_BANDS], trend[SY_BANDS];   /* its period (alpha-beta tracked) and the period's trend */
-    float ph[SY_BANDS], amp[SY_BANDS];      /* its oscillator: the ramp (-1..1) and the amplitude */
-    float phb[SY_BANDS];                    /* test 2: wave B's ramp */
-    float peaks[32];                        /* test 2: the blocks' peaks, for the pick */
+    float amp[SY_BANDS];                    /* SY test 11: its level while it sounds (the note manager's input) */
     u8 armed[SY_BANDS];                     /* went below -ARM x its level since the last crossing */
     u8 nper[SY_BANDS];                      /* periods counted since it woke (to 255) */
     u8 owned[SY_BANDS];                     /* sounding in the last block */
-    u8 age[SY_BANDS];                       /* test 2: blocks it has sounded (to 255; kept while it releases) */
     u8 hold[SY_BANDS];                      /* test 6: blocks it sounds on after it stops owning */
     float ehold[SY_BANDS];                  /* test 6: its energy when it last owned */
-    float env, s1, s2, mg;                  /* the input's peak follower, the output filter, the fade */
-    float fe, lfo_ph, seq_ph, gate;         /* test 2: the pick envelope, the LFO's ramp, the steps' beats, the gate */
-    s32 last_pick;                          /* test 2: the block of the last pick */
-    u32 ns, tone;                           /* test 2: the noise's LCG; the tone playing */
+    float env, mg;                          /* the input's peak follower; the fade */
+    u32 tone;                               /* the tone playing */
     u32 started, blocks, crossings;
     u32 fund_cut;                           /* test 5: band-blocks FUND silenced (whole multiples of a lower band) */
 } sy_block_t;

@@ -139,12 +139,23 @@ def static_checks(out, man, parent_img, img):
     st = man['sytext']
     text_row = [FLASH + st['file_offset'], st['address'], st['size'], COPY]
     zero_rows = [[0, r['address'], r['size'], base.ZERO] for r in man['rows_added'] if r['kind'] == 'zero']
-    check(rows == rows_p + [new_row, text_row] + zero_rows and len(zero_rows) == 1 and
-          zero_rows[0][1] == man['symbols']['sy_block'] and st['address'] == 0x83FE6C00 and
-          st['address'] + st['size'] <= 0x83FE8000 and zero_rows[0][1] + zero_rows[0][2] <= st['address'] and
-          sha(img[st['file_offset']:st['file_offset'] + st['size']]) == st['sha256'],
+    added = [[0, r['address'], r['size'], base.ZERO] if r['kind'] == 'zero' else
+             [FLASH + r.get('file_offset', man['module_file_offset']), r['address'], r['size'], COPY]
+             for r in man['rows_added']]
+    sv = man['syv']
+    in_slots = all(lo <= r['address'] and r['address'] + r['size'] <= hi for r, (lo, hi) in
+                   zip(man['rows_added'][3:], (sv['text']['slot'], sv['notes']['slot'], sv['data']['slot'],
+                                               sv['state']['slot'])))
+    check(rows == rows_p + added and added[:2] == [new_row, text_row] and len(zero_rows) == 2 and
+          zero_rows[0][1] == man['symbols']['sy_block'] and zero_rows[1][1] == sv['state']['used'][0] == 0x83FE4800 and
+          st['address'] == 0x83FE6C00 and st['address'] + st['size'] <= 0x83FE8000 and
+          zero_rows[0][1] + zero_rows[0][2] <= st['address'] and in_slots and
+          sha(img[st['file_offset']:st['file_offset'] + st['size']]) == st['sha256'] and
+          all(sha(img[r['file_offset']:r['file_offset'] + r['size']]) == sv[k]['sha256']
+              for r, k in zip(man['rows_added'][3:6], ('text', 'notes', 'data'))),
           'scatter table = parent rows + the module row + the screen code\'s row (SY test 5, .sytext in the SY slot) + '
-          'sy_block\'s zero row (SY test 3), the slot shared without overlap')
+          'sy_block\'s zero row (SY test 3) + SY test 11\'s voice engine: three copy rows (its code, its notes, its '
+          'constants) and its state\'s zero row, each inside its slot')
     module = img[man['module_file_offset']:man['module_file_offset'] + man['module_size']]
     check(sha(module) == man['module_sha256'] and man['module_base'] + man['module_size'] <= man['module_limit'],
           f"module bytes match the manifest and end below {man['module_limit']:#x}")
@@ -1035,12 +1046,14 @@ def synth_checks(img, man, kit_sym):
 # SY synth tests 1 to 5: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx, the file, test 5's
 # screen through sy_event and the SG page's widgets) and its twin (sy_ref.py).
 SY_OFF, SY_RUN, SY_SLOW = range(3)
-SY_PLAIN = 12                      # test 5: WAH, the one tone without a release (the engine's own checks run on it)
+SY_PLAIN = 10                      # SY test 11: PUNCH BASS, mono with a short release (the engine's own checks run on it)
+SY_NT = 20                         # SY test 11: the tones (sy_voices.py's VOICES)
+SY_STEP_MAX = 100000               # SY test 11: instructions a step may take (measured 44-91k; tests 1-10: 60000 / 100000)
 SY_HEAD = 'req starts stops reset_req tone_req muted picks taken bpm100 tempo_checked'.split()
 SY_FILE = 'loads saves save_errors bad_files'.split()
 SY_RUNF = 'state rx steps tx fresh stopping sounding last_mix'.split()
-SY_KNOB_AT = 4 * len(SY_HEAD)                  # test 3: s8 knob[15][3], dirty, loaded, a pad byte; test 5: oct, susk
-SY_FILE_AT = SY_KNOB_AT + 96                   # SY test 6: dynk[15] and three pad bytes after susk
+SY_KNOB_AT = 4 * len(SY_HEAD)                  # test 3: s8 knob[20][3], dirty, loaded, two pad bytes; oct, susk, dynk
+SY_FILE_AT = SY_KNOB_AT + 124                  # SY test 11: 20 tones (60 + 4 + 3 x 20)
 SY_RUN_AT = SY_FILE_AT + 4 * len(SY_FILE)
 SY_OUT_AT = SY_RUN_AT + 4 * len(SY_RUNF)
 SY_TAIL = ('w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack '
@@ -1072,8 +1085,8 @@ class SyLayout:
          self.fe, self.knob, self.dirty, self.loads, self.mode, self.rec, self.oct, self.susk, self.fund_cut,
          self.dynk, self.rem_down, self.hold, self.out_bus, self.armed) = v
         check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
-              self.dirty == SY_KNOB_AT + 45 and self.oct == SY_KNOB_AT + 48 and self.susk == self.oct + 15 and
-              self.dynk == self.susk + 15 and self.loads == SY_FILE_AT and
+              self.dirty == SY_KNOB_AT + 60 and self.oct == SY_KNOB_AT + 64 and self.susk == self.oct + 20 and
+              self.dynk == self.susk + 20 and self.loads == SY_FILE_AT and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
               self.mode == self.tot_max_ever + 24 and self.rem_down == self.mode + 64 and self.rec == self.mode + 88 and
               self.sy_bytes == self.rec + 128 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
@@ -1127,12 +1140,12 @@ class SyMachine(SynthMachine):
     def sy(self):
         s = self.sym['sy']
         st = dict(zip(SY_HEAD, struct.unpack(f'<{len(SY_HEAD)}I', self.bytes(s, 4 * len(SY_HEAD)))))
-        kb = self.bytes(s + SY_KNOB_AT, 96)
-        st['knob'] = [list(struct.unpack('<3b', kb[3 * t:3 * t + 3])) for t in range(15)]
-        st['dirty'], st['loaded'] = kb[45], kb[46]
-        st['oct'] = list(struct.unpack('<15b', kb[48:63]))
-        st['susk'] = list(kb[63:78])
-        st['dynk'] = list(kb[78:93])
+        kb = self.bytes(s + SY_KNOB_AT, 124)
+        st['knob'] = [list(struct.unpack('<3b', kb[3 * t:3 * t + 3])) for t in range(SY_NT)]
+        st['dirty'], st['loaded'] = kb[60], kb[61]
+        st['oct'] = list(struct.unpack('<20b', kb[64:84]))
+        st['susk'] = list(kb[84:104])
+        st['dynk'] = list(kb[104:124])
         st.update(zip(SY_FILE, struct.unpack(f'<{len(SY_FILE)}I', self.bytes(s + SY_FILE_AT, 4 * len(SY_FILE)))))
         st.update(zip(SY_RUNF, struct.unpack(f'<{len(SY_RUNF)}I', self.bytes(s + SY_RUN_AT, 4 * len(SY_RUNF)))))
         st['out'] = list(struct.unpack('<64i', self.bytes(s + self.sl.out, 256)))
@@ -1466,16 +1479,16 @@ def sy_checks(parent_img, img, man, kit_sym):
     check(not mism, f'the module\'s output = sy_ref.py\'s, value for value, on every block of {len(cases)} signals '
                     f'({sum(r["blocks"] for r in results.values())} blocks; first differences {mism[:3]})')
     shares = {k: r['share'] for k, r in results.items() if r['share'] is not None}
-    check(all(v >= 0.96 for v in shares.values()),
-          f'the bands sounding are the strings\' partials (within 30 cents; 96% since SY test 6: a band sounds on 4 '
-          f'blocks while it keeps 0.8 of its energy; test 5 had 97.0 / 98.6 / 99.1): {shares}')
+    check(all(v >= 0.95 for v in shares.values()),
+          f'the bands sounding are the strings\' partials (within 30 cents; 95% since SY test 11, FUND always on: the '
+          f'note manager\'s input; test 10 on WAH: 96.6 / 97.4 / 97.9): {shares}')
     hh = results['hiss and hum alone']
     check(hh['peak'] == 0 and hh['last_sound_ms'] is None, 'hiss and hum alone (-74 / -66 dBFS): no sound at all')
     tails = {k: r['length_ms'] - r['last_sound_ms'] for k, r in results.items() if r['last_sound_ms'] is not None}
-    check(all(v >= 200 for v in tails.values()),
-          f'once the strings stop (each signal ends in 0.4 s of hiss and hum) the output goes to 0 within 0.2 s: ms of '
-          f'silence at the end {tails}')
-    check(worst <= 60000, f'the most instructions a step takes: {worst} ({worst / 8000:.1f}% of a block at one a '
+    check(all(v >= 50 for v in tails.values()),
+          f'once the strings stop (each signal ends in 0.4 s of hiss and hum) the output goes to 0 within 0.35 s (SY '
+          f'test 11: PUNCH BASS\'s 90 ms release after the note ends; WAH had none): ms of silence at the end {tails}')
+    check(worst <= SY_STEP_MAX, f'the most instructions a step takes: {worst} ({worst / 8000:.1f}% of a block at one a '
                           f'cycle; the bands {", ".join(f"{k}: {r["bands"]}" for k, r in results.items())})')
     report['sy']['signals'] = results
     report['sy']['worst_step_instructions'] = worst
@@ -1640,6 +1653,7 @@ def sy_signal():
 def sy_tone_checks(img, man):
     """SY test 2: the tones, the pick, a tone change."""
     import sy_ref
+    import sy_voices
     sym = man['symbols']
     fde = man['guards']['fde']
     # 1. Every tone (picked before the start: the engine starts on it) against sy_ref.py, value for value.
@@ -1649,7 +1663,7 @@ def sy_tone_checks(img, man):
         counter[0] += 1
     blocks = ref.to_blocks(sy_signal())
     mism, worst, peaks = [], {}, {}
-    for tone in range(len(sy_ref.TONES)):
+    for tone in range(len(sy_voices.VOICES)):
         mt = SyMachine(img, man)
         mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')                 # (test 5: the default OCTAVE, SUSTAIN)
         mt.start()
@@ -1670,16 +1684,17 @@ def sy_tone_checks(img, man):
             pk = max(pk, max(abs(v) for v in want))
             if got != want:
                 mism.append((tone, b))
-        worst[sy_ref.TONES[tone]['name']] = top
-        peaks[sy_ref.TONES[tone]['name']] = pk
+        worst[sy_voices.VOICES[tone]['name']] = top
+        peaks[sy_voices.VOICES[tone]['name']] = pk
     check(not mism and all(v > 1000 for v in peaks.values()),
-          f'every tone: the module\'s output = sy_ref.py\'s, value for value ({len(sy_ref.TONES)} tones x '
-          f'{len(blocks)} blocks; first differences {mism[:3]})')
-    check(max(worst.values()) <= 100000,
+          f'every tone: the module\'s output = sy_ref.py\'s (SY test 11: its analysis, then the host build of '
+          f'sy_voice.c), value for value ({len(sy_voices.VOICES)} tones x {len(blocks)} blocks; first differences '
+          f'{mism[:3]})')
+    check(max(worst.values()) <= SY_STEP_MAX,
           f'the most instructions a step takes, by tone: {worst} (the most is {max(worst.values()) / 8000:.1f}% of a '
           f'block at one a cycle)')
     report['sy']['tones'] = dict(worst_step_instructions=worst, peaks=peaks,
-                                 names=[t['name'] for t in sy_ref.TONES])
+                                 names=[t['name'] for t in sy_voices.VOICES])
     # 2. Test 5: a tone change while playing, from the screen (the Sound Generator page in SY mode): VALUE steps SOUND
     #    1 -> 9; out over 8 blocks, the new tone from rest, in over 8, value for value.
     mc = ScreenMachine(img, man, page=SG_PAGE)
@@ -1772,15 +1787,22 @@ class Files:
         self._ret(uc, 0)
 
 
-def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=3, bus=0):
-    """B:/_sy_tones.bin as sy_save writes it (SY test 6, version 3): "SYTN", 3, tone, muted, 15, 45 knob positions,
-    15 OCTAVE, 15 SUSTAIN, 15 DYNAMICS, two zeros, FNV-1a of the first 100. version=2: test 5's (88 bytes: no
-    DYNAMICS, one zero, the sum of the first 84)."""
-    octs = octs or [0] * 15
-    suss = suss or [0] * 15
-    dyns = dyns or [0] * 15
-    body = (b'SYTN' + bytes([version, tone, muted, 15]) + bytes(64 + d for row in knobs for d in row) +
-            bytes(o & 0xFF for o in octs) + bytes(suss) + (bytes(dyns) + bytes([bus, 0]) if version == 3 else bytes(1)))
+def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=4, bus=0):
+    """B:/_sy_tones.bin as sy_save writes it (SY test 11, version 4): "SYTN", 4, tone, muted, 20, 60 knob positions,
+    20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, three zeros, FNV-1a of the first 132. version=3: tests 6-10's (15
+    tones: 104 bytes, the bus at 98, the sum of the first 100); version=2: test 5's (88 bytes)."""
+    n = 20 if version == 4 else 15
+    octs = octs or [0] * n
+    suss = suss or [0] * n
+    dyns = dyns or [0] * n
+    body = (b'SYTN' + bytes([version, tone, muted, n]) + bytes(64 + d for row in knobs[:n] for d in row) +
+            bytes(o & 0xFF for o in octs[:n]) + bytes(suss[:n]))
+    if version == 4:
+        body += bytes(dyns[:n]) + bytes([bus, 0, 0, 0])
+    elif version == 3:
+        body += bytes(dyns[:n]) + bytes([bus, 0])
+    else:
+        body += bytes(1)
     h = 2166136261
     for c in body:
         h = ((h ^ c) * 16777619) & 0xFFFFFFFF
@@ -1834,10 +1856,10 @@ def sy_knob_checks(img, man):
     st3 = m.sy()
     want = sy_file_bytes(3, 0, st3['knob'], st3['oct'], st3['susk'], st3['dynk'])
     check(up1 == (0, True) and held_back == (1, 1) and up2 == (0, True) and len(files.writes) == 2 and
-          files.writes[-1] == (SY_PATH, want) and st3['dirty'] == 0 and st3['saves'] == 2 and len(want) == 104,
+          files.writes[-1] == (SY_PATH, want) and st3['dirty'] == 0 and st3['saves'] == 2 and len(want) == 136,
           f'a key release with an FX screen up: no file yet; at the next release with none, {SY_PATH} written once '
-          f'({len(want)} bytes: "SYTN", version 3, tone 4, 45 knobs, 15 OCTAVE, 15 SUSTAIN, 15 DYNAMICS, FNV-1a); both '
-          f'releases go on to note repeat')
+          f'({len(want)} bytes: "SYTN", version 4, tone 4, 60 knobs, 20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, '
+          f'FNV-1a); both releases go on to note repeat')
     # 3. A fresh start with that file: read at the first key event; the engine as the twin with the same settings.
     mf, f2 = machine({SY_PATH: want})
     before = mf.sy()['loaded']
@@ -1877,14 +1899,19 @@ def sy_knob_checks(img, man):
     v2 = sy_file_bytes(5, 0, [[k, -k, 2 * k] for k in range(15)], [3] * 15, [40] * 15, version=2)
     m2, _ = machine({SY_PATH: v2})
     m2.ev(EV_KEY, KEY_EXT)
-    sb, s1, sn, s2 = mb.sy(), m1.sy(), mn.sy(), m2.sy()
+    v3 = sy_file_bytes(5, 1, [[k, -k, 2 * k] for k in range(15)], [3] * 15, [40] * 15, [7] * 15, version=3, bus=2)
+    m3, _ = machine({SY_PATH: v3})
+    m3.ev(EV_KEY, KEY_EXT)
+    sb, s1, sn, s2, s3 = mb.sy(), m1.sy(), mn.sy(), m2.sy(), m3.sy()
     check(sb['bad_files'] == 1 and sb['loads'] == 0 and sb['tone_req'] == 0 and all(r == [0, 0, 0] for r in sb['knob'])
           and s1['bad_files'] == 1 and s1['tone_req'] == 0 and sn['loaded'] == 1 and sn['loads'] == 0 and
-          sn['bad_files'] == 0 and not f4.writes and len(v2) == 88 and s2['loads'] == 1 and s2['bad_files'] == 0 and
-          s2['tone_req'] == 5 and s2['knob'][7] == [7, -7, 14] and s2['oct'] == [3] * 15 and s2['susk'] == [40] * 15 and
-          s2['dynk'] == [0] * 15,
-          'a file whose sum is wrong is ignored, and so is a test 3/4 file (version 1: the tones changed); test 5\'s file '
-          '(version 2, 88 bytes) is read, DYNAMICS as designed; no file: nothing read, nothing written yet')
+          sn['bad_files'] == 0 and not f4.writes and len(v2) == 88 and s2['bad_files'] == 1 and s2['loads'] == 0 and
+          len(v3) == 104 and s3['loads'] == 1 and s3['bad_files'] == 0 and s3['out_bus'] == 2 and s3['muted'] == 1 and
+          s3['tone_req'] == 0 and all(r == [0, 0, 0] for r in s3['knob']) and s3['oct'] == [0] * SY_NT and
+          s3['dirty'] == 1,
+          'a file whose sum is wrong is ignored, and so are versions 1 and 2 (the old tones); tests 6-10\'s file '
+          '(version 3, 104 bytes) keeps only its bus and SOUND OFF (the new tones as designed) and is written as '
+          'version 4 at the next save; no file: nothing read, nothing written yet')
     # 4. Every tone with OCTAVE, SUSTAIN and DYNAMICS turned, value for value (the knobs' cubic exp2 and log2 paths).
     blocks = ref.to_blocks(sy_signal())
     mism = []
@@ -1906,7 +1933,9 @@ def sy_knob_checks(img, man):
     check(not mism, f'OCTAVE, SUSTAIN and DYNAMICS from the screen (+2 / 100 / 0, -2 / 0 / 50, +1 / 50 / 100, '
                     f'-1 / 79 / 30 on four tones): the module = sy_ref.py value for value ({len(blocks)} blocks each; '
                     f'first differences {mism[:3]})')
-    report['sy']['knobs'] = dict(p2=[t['p2name'] for t in sy_ref.TONE], file=SY_PATH, file_bytes=len(want))
+    import sy_voices
+    report['sy']['knobs'] = dict(p2=[sy_voices.P2_NAMES[t.get('p2', sy_voices.P_RESO)] for t in sy_voices.VOICES],
+                                 file=SY_PATH, file_bytes=len(want))
 
 
 def fx_view(m):
@@ -1967,12 +1996,12 @@ def sy_screen_checks(img, man):
     check(all(r == (1, False) for r in rp + sub) and st3['tone_req'] == 3 and st3['muted'] == 0 and
           st3['pads_taken'] == 8 and st3['taken'] == 8 and st4['pads_taken'] == 0 and st4['taken'] == 0 and
           off['muted'] == 1 and m.sy()['pads_taken'] == 0 and not m.passed,
-          'on the screen a pad picks a sound (pad 4: SUPERSAW), pad 16 OFF; the pad hit and its key press, SUB PAD and '
+          'on the screen a pad picks a sound (pad 4: ENSEMBLE), pad 16 OFF; the pad hit and its key press, SUB PAD and '
           'every release taken: nothing reaches note repeat or stock (no sample plays)')
     # 3. SY test 6: CTRL 1 is the tone's own setting (VALUE and the pads pick the sound); VALUE steps SOUND; VALUE's
     #    push and REC taken; CTRL 4 and another encoder go on.
     m.ev(EV_PAD, 0, 100)
-    m.ev(EV_PAD_UP, 0)                                                 # SOUND 1 (SAW LEAD)
+    m.ev(EV_PAD_UP, 0)                                                 # SOUND 1 (POLY PAD)
     k1 = m.ev(EV_KNOB, 1, 100)
     st_k1 = m.sy()
     steps = []
@@ -1990,10 +2019,10 @@ def sy_screen_checks(img, man):
     other2 = m.ev(EV_ENC, 1, 1)
     check(k1 == (1, False) and st_k1['knob'][0][1] == 36 and st_k1['tone_req'] == 0 and st_k1['muted'] == 0 and
           all(s == (1, False) for s in steps) and st5['tone_req'] == 2 and st5['muted'] == 0 and
-          top == 14 and bottom == 1 and all(k == (1, False) for k in keys) and other == (0, True) and
+          top == SY_NT - 1 and bottom == 1 and all(k == (1, False) for k in keys) and other == (0, True) and
           other2 == (0, True),
-          'CTRL 1 sets the sound\'s own setting (SAW LEAD\'s RESO), the sound stays; VALUE steps SOUND one a turn, '
-          'OFF..15 and no further; VALUE\'s push and REC taken (no edit mode, no export); CTRL 4 and another encoder '
+          'CTRL 1 sets the sound\'s own setting (POLY PAD\'s ATTACK), the sound stays; VALUE steps SOUND one a turn, '
+          'OFF..20 and no further; VALUE\'s push and REC taken (no edit mode, no export); CTRL 4 and another encoder '
           'go on')
     # 4. SHIFT: a tap turns the page; held, a turn edits the other page and the release keeps it; SHIFT goes on.
     m.ev(EV_PAD, 4, 100)
@@ -2016,7 +2045,7 @@ def sy_screen_checks(img, man):
     m.ev(EV_KEY, KEY_SHIFT)
     m.ev(EV_KEY_UP, KEY_SHIFT)                                         # back to the first page
     m.ev(EV_PAD, 3, 100)
-    m.ev(EV_PAD_UP, 3)                                                 # SOUND 4 (SUPERSAW)
+    m.ev(EV_PAD_UP, 3)                                                 # SOUND 4 (ENSEMBLE)
     m.ev(EV_KNOB, 2, 64 + 12)
     m.ev(EV_KNOB, 3, 96)
     cols = []
@@ -2028,17 +2057,17 @@ def sy_screen_checks(img, man):
     foot = m.draw_footer()
     texts = [[d[3] for d in c if d[0] == 'text'] for c in cols + cols2]
     t3 = m.sy()
-    want_cols = [['DETUNE', '0'], ['TONE', '+10'], ['LEVEL', '75'],
-                 ['OCTAVE', str(t3['oct'][3] - 3) if t3['oct'][3] else str(sy_ref.TONE[3]['oct_design'])],
-                 ['SUSTAIN', str(sy_ref.TONE[3]['sus_design'])], ['DYNAMICS', '100']]
+    want_cols = [['ENV', '0'], ['TONE', '+10'], ['LEVEL', '75'],
+                 ['OCTAVE', str(t3['oct'][3] - 3) if t3['oct'][3] else '0'],
+                 ['SUSTAIN', '50'], ['DYNAMICS', '60']]
     shape = cols[0]
     check(texts == want_cols and shape[:3] == [('color', 0xFFFFFF, 0), ('rect', 0, 0, 43, 39), ('font', 0x1D)] and
           shape[3][1:3] == (21, 3) and shape[4] == ('font', 2) and shape[5][1:3] == (21, 15) and len(shape) == 6 and
-          [d[3] for d in foot if d[0] == 'text'] == ['SUPERSAW'] and ('font', 0x1D) in foot and not m.kits,
+          [d[3] for d in foot if d[0] == 'text'] == ['ENSEMBLE'] and ('font', 0x1D) in foot and not m.kits,
           f'the columns (SY test 6: the sound\'s own setting, TONE -50..+50 (+12 shows +10), LEVEL 0..100 (96 shows '
           f'75); SHIFT: OCTAVE, SUSTAIN, DYNAMICS): the name small at +3 (font 0x1d), the value big at +15 (font 2), '
           f'where the stock column draws its own ({texts}); the footer shows the name of the sound, small '
-          f'("SUPERSAW"); no kit draw asked')
+          f'("ENSEMBLE"); no kit draw asked')
     other_type = m.draw_column(0, 0x7B, kind=1)
     m.page(1)
     m.call(sym['sy_ui'])
@@ -2209,7 +2238,8 @@ def sy_screen_checks(img, man):
           'button goes on, no stock REMAIN; with a frozen FX screen up: taken, an EXIT closes it, the flag cleared; '
           'not frozen, and on the main screen: REMAIN goes on as stock')
     # 12. SY test 7: VALUE's push steps the synth's bus, DRY -> BUS 1 -> BUS 2 -> BOTH -> DRY, its press and release
-    #     taken; the bar shows each ("OUT: BUS 2"), redrawn after each; written to the file's byte 98 at a key release
+    #     taken; the bar shows each ("OUT: BUS 2"), redrawn after each; written to the file's byte 128 (SY test 11's
+    #     version 4; 98 in version 3) at a key release
     #     and read back; a bad byte there (4) read as DRY.
     v = ScreenMachine(img, man, page=SG_PAGE)
     v.start()
@@ -2229,17 +2259,17 @@ def sy_screen_checks(img, man):
     vf, _ = ScreenMachine(img, man, store={SY_PATH: wrote}), None
     vf.start()
     vf.ev(EV_KEY, KEY_EXT)
-    bad = sy_file_bytes(0, 0, [[0, 0, 0]] * 15, bus=4)
+    bad = sy_file_bytes(0, 0, [[0, 0, 0]] * 20, bus=4)
     vb = ScreenMachine(img, man, store={SY_PATH: bad})
     vb.start()
     vb.ev(EV_KEY, KEY_EXT)
     check(all(x == (1, False) for x in pushes) and seen == [1, 2, 3, 0] and all(polls) and
-          texts == [['OUT: BUS 1'], ['OUT: BUS 2'], ['OUT: BOTH'], ['OUT: DRY']] and len(wrote) == 104 and
-          wrote[98] == 2 and vf.sy()['out_bus'] == 2 and vf.sy()['loads'] == 1 and vb.sy()['out_bus'] == 0 and
+          texts == [['OUT: BUS 1'], ['OUT: BUS 2'], ['OUT: BOTH'], ['OUT: DRY']] and len(wrote) == 136 and
+          wrote[128] == 2 and vf.sy()['out_bus'] == 2 and vf.sy()['loads'] == 1 and vb.sy()['out_bus'] == 0 and
           vb.sy()['loads'] == 1,
           f'SY test 7: VALUE\'s push steps the synth\'s bus DRY -> BUS 1 -> BUS 2 -> BOTH -> DRY ({seen}), press and '
-          f'release taken; the bar shows each ({texts}), redrawn after each; the file keeps it (byte 98 = '
-          f'{wrote[98] if wrote else None}) and gives it back; a bus byte out of range reads as DRY')
+          f'release taken; the bar shows each ({texts}), redrawn after each; the file keeps it (byte 128 = '
+          f'{wrote[128] if wrote else None}) and gives it back; a bus byte out of range reads as DRY')
     # 13. SY test 8: the synth plays from the screen on. EXT SOURCE on, the screen never opened: no engine, no ROUTING
     #     hold; the screen opens: armed, the hold and the engine; EXIT to the main screen: it plays on; EXT SOURCE off:
     #     disarmed; on again: silent (no hold) until the screen opens again.
@@ -2307,7 +2337,7 @@ def sy_screen_checks(img, man):
           f'SY test 10: the page\'s own footer kept outside the screen, so the screen opened over the page redraws it '
           f'with the columns ({redrawn}); the chord on the looper page asks for the Sound Generator page ({lreq}); with '
           f'looper mode on REC goes on to the looper, with it off REC is taken as before')
-    report['sy']['screen'] = dict(columns=want_cols, footer='SUPERSAW', bar='OUT: <bus>', fx_passes=fa['fx_passes'],
+    report['sy']['screen'] = dict(columns=want_cols, footer='ENSEMBLE', bar='OUT: <bus>', fx_passes=fa['fx_passes'],
                                   remain=dict(taps=st_r['rem_taps'], holds=st_r['rem_holds']), bus_texts=texts)
 
 

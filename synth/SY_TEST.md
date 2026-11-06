@@ -1,4 +1,4 @@
-# SY synth tests 1 to 10: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 11: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -645,6 +645,72 @@ looper it read "rec wait" (AUTO TRIG on, no input in DM-404).
 screen and redrawn with the columns once the screen opens over the page; the chord on page 0x27 asks for the SG page;
 REC passed on with looper mode on, taken with it off.
 
+## SY synth test 11 (sy-synth-test11): a synth voice per note
+
+The user (after test 10): the tracking is "amazing", but the tones "do not sound very good"; they wanted tones like
+the Sound Generator's and in the styles of the synths they like (Korg polys; their plug-ins: Juno-106, Jupiter-8,
+SH-101, TB-303, Minimoog, Wavestation, Poly-800, the Usual Suspects' Virus and JP-8000 emulations), "more than 15
+tones", and no effects inside the synth ("can just use bus fx ie chorus"). An offline prototype's demos (session
+scratchpad `sy10/proto`, `release\..\demos\sy-voice-demos1`) were approved: "Good, build them".
+
+- **The engine** (`tunetest/sy_voice.c`, new). Tests 1-10 gave every sounding band oscillators of its own, all through
+  one filter, at the guitar's level. Now:
+  - The SY analysis is unchanged, with FUND always on and no DYNAMICS shaping. It hands each band's level, frequency
+    and energy to sy_voice.c.
+  - A note manager turns the bands into notes. A pick rings short blips in other bands (in the demos' lead phrase,
+    281 band segments for about 25 notes), and a note's ownership can start one band low while its first periods
+    read flat.
+    - Poly: a new band plays at once at its own level, as before, and becomes a synth note once it has held for 32 ms
+      with a settled reading.
+    - Mono: a note is confirmed after 13 ms, with a settled reading near its band's centre, while no lower band that
+      could be its fundamental is building up. The loudest candidate wins.
+    - A voice follows its partial to a neighbouring band (a bend), and a note picked again attacks again.
+  - Each note gets a voice of its own:
+    - oscillators as passes over the block: BLEP saw and pulse, triangle, sine; the Sound Generator's 32 waves (its
+      own wave_eval for types 15-31, with the heavy LPSaw, LPSqr, Organ and Vowel at half rate); a seven-saw
+      supersaw; two-modulator FM; a hard-synced oscillator 2 with a pitch sweep;
+    - a filter: a 12 dB state-variable, a 24 or 18 dB ladder, or the SG's ENV preset with its own filter (env.c's);
+    - amp and filter envelopes, an LFO, glide.
+  - Four voices (three for SUPERSAW, SG VOWEL and VECTOR PAD). The output is mono and dry: effects come from the
+    SP's bus FX.
+- **20 tones** (`tunetest/sy_voices.py` VOICES), each levelled to the old SAW LEAD's RMS (-17.7 dB of the clip) with
+  peaks under 0.9: POLY PAD, STRINGS, POLY BRASS, ENSEMBLE, POLY KEYS, VECTOR PAD, SYNC LEAD, LADDER LEAD, FAT BASS,
+  ACID BASS, PUNCH BASS, SUPERSAW, FM PIANO, FM BELL, then six made from the SG's own waves and ENV presets (SG ACID,
+  SG VOWEL, SG ORGAN, SG CZ KEYS, SG PLUCK, SG FM BELL).
+- **The screen:**
+  - Pads 1-15 pick tones 1-15, SHIFT + pads 1-5 pick tones 16-20, pad 16 is OFF; VALUE steps through all of them.
+  - CTRL 1 is the tone's own setting. On the SG tones it picks the ENV preset, shown by name.
+  - TONE moves the cutoff +-2 octaves. On an SG preset it moves that preset's filter, or DUTY if it has none; on the
+    FM tones it moves the brightness.
+  - LEVEL, OCTAVE, SUSTAIN (the decay and release times x 0.25..4) and DYNAMICS (pick sensitivity).
+  - The file is version 4 (136 bytes). A version 3 file keeps only its bus and SOUND OFF.
+- **Memory:** test slots that v9.52 leaves free, each a boot row, each checked unused in the parent:
+  - the code, 7.1 KB at 0x83fed000 (the CPU meter's and bounce probe's test slots);
+  - the note manager, 4.8 KB at 0x83fd7a00 (the free top of chromatic scales' slot);
+  - the constants and smaller functions, 2.5 KB at 0x83fef100 (the rest of the start fix's slot);
+  - the state, 4.0 KB at 0x83fe4800 (the free top of FX deep edit's slot), with the block's buffers, so the step
+    uses 1.1 KB of the tracker's 2 KB stack.
+  A public release would need these slots planned with those features.
+- **CPU:** at most 44-91k instructions a step on the tone checks' signal (SG ORGAN 91,001, 11.4% of a block; tests
+  1-10's tones: 47-77k). The first two steps after a tone switch are not held to SLOW, as a start's are (DM-404
+  timed 1.76 M cycles on code run for the first time).
+- **The twin:** sy_ref.py keeps the analysis. The notes, voices and output stage are the host build of the same C
+  (sy_voices.Host: x86-64, no fused operations, FTZ and DAZ as the module's FPSCR), so the module and the twin agree
+  value for value.
+
+**DM-404** (the release's APP1): the screen opens with the new tones:
+- the columns show ATTACK / TONE / LEVEL on POLY PAD and DETUNE on SUPERSAW;
+- pad 12 picks SUPERSAW and SHIFT + pad 2 picks SG ORGAN, whose ENV column reads OFF and, after CTRL 1, Bass;
+- the SHIFT page reads OCTAVE 0, SUSTAIN 50, DYNAMICS 60;
+- VALUE stops at SG FM BELL (Perc);
+- the engine runs throughout.
+
+**Emulator checks:** 352 (168 distinct) pass on `release/sy-synth-test11`. Test 11's: every tone against the twin,
+value for value, at most 100k instructions a step; the screen's names, columns and SHIFT + pads; the file version 4
+and a version 3 file's bus.
+
+**Demos:** `release\..\demos\sy-voice-demos2` is rendered by the engine itself, so it is what the unit plays.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -661,5 +727,6 @@ REC passed on with looper mode on, taken with it off.
 - Test 3: whether the file saves and comes back on the unit (FX deep edit's way of saving works there), and whether
   the shared knob positions (the bus effect jumping after an edit) get in the way.
 - Test 10: whether a looper take made from the guitar synth screen has the synth in it.
+- Test 11: which tones sound good on a real guitar; whether the pick's blips or settling notes are heard; the engine's real cycles on the unit (the readout's SY line), and whether SLOW ever stops it.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.
