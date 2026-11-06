@@ -221,6 +221,10 @@ typedef struct {
     /* test 4, audio task: the synth's newest block as TX added it, for the recorder on ROUTING ExtIn */
     volatile u32 rec_fresh;                 /* rec holds a block the recorder has not had */
     s16 rec[FRAMES];
+    /* SY test 15, UI task: the TRACK page (SHIFT's third), for every tone: WAIT (0..12 blocks a band sounds before it
+       is a new note), SENS (0..50: a new note's least level, % of the loudest band), GUARD (0/1), 0; 0 each is test
+       11's tracking */
+    volatile u8 trk[4];
 } sy_t;
 
 /* The engine's memory, in the module. The UI clears it before a start. Test 2: no stack of its own: the engine runs

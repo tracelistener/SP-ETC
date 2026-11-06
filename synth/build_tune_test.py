@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test14'
+REVISION = 'sy-synth-test15'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1093,7 +1093,13 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 14: test 13 with test 10\'s timing (test 13 on the unit: "still too much '
+        description='SY synth test 15: test 11 again (its sy_voice.c, b322ab2: the user wants its tones and '
+                    'tracking), plus a TRACK page (SHIFT tapped twice) of three settings for every tone, each 0 as '
+                    'test 11: WAIT (0-16 ms before a band is a new note), SENS (a new note\'s least level, 0-50% of '
+                    'the loudest band) and GUARD (test 13\'s moves without a new attack, a held string\'s voice kept '
+                    'from blips, a note back after a dip), kept in the file\'s three spare bytes. At 0 the voices '
+                    'match test 11 value for value on the user\'s recording. '
+                    'SY synth test 14: test 13 with test 10\'s timing (test 13 on the unit: "still too much '
                     'latency"): a band is a note after 2 blocks (at most 2.7 ms), poly and mono, where test 13 waited '
                     '8 ms (16 near a sounding note\'s overtones, 13 mono); the moves without a new attack and the held '
                     'strings\' voices stay (on the user\'s recording: notes start where test 10\'s bands did; POLY '

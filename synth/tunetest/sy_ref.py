@@ -458,6 +458,7 @@ class Engine:
         self.octs = np.zeros(n, np.int64)                # test 5: OCTAVE (0 as designed, 1..5)
         self.suss = np.zeros(n, np.int64)                # test 5: SUSTAIN (0 as designed, 1..101)
         self.dyns = np.zeros(n, np.int64)                # test 6: DYNAMICS (0 as designed, 1..101)
+        self.trk = [0, 0, 0]                             # SY test 15: the TRACK page: WAIT, SENS, GUARD (every tone)
         self._host = None                                # SY test 11: the voices (sy_voices.Host)
         self.hold = np.zeros(NB, np.int64)               # test 6: blocks a band sounds on after it stopped owning
         self.ehold = np.zeros(NB, F32)
@@ -597,7 +598,8 @@ class Engine:
         fr = (F32(FS12) / per).astype(F32)
         t = self.tone
         h = self.host()
-        h.set_knobs(*[int(v) for v in self.knobs[t]], int(self.octs[t]), int(self.suss[t]), int(self.dyns[t]))
+        h.set_knobs(*[int(v) for v in self.knobs[t]], int(self.octs[t]), int(self.suss[t]), int(self.dyns[t]),
+                    *[int(v) for v in self.trk])
         mgt = F32(0) if stopping or tone_req != self.tone else F32(1)
         res, mg = h.block(t, tg, per, e, nper, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
                           scale=float(G['OUT_SCALE']))

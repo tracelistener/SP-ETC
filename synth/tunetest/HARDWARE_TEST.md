@@ -1,7 +1,8 @@
-# SY synth test 14: test 11's tones with test 10's timing
+# SY synth test 15: test 11, with a TRACK page to tame its artifacts
 
 A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, and the quieter Sound Generator and kits) plus the
-guitar synth with test 11's tones and test 10's tracking and timing. Not for sharing. To go back, patch v9.52 again.
+guitar synth of test 11 (its tones and tracking), with three new settings. Not for sharing. To go back, patch v9.52
+again.
 
 | File | SHA-256 |
 | --- | --- |
@@ -10,16 +11,19 @@ guitar synth with test 11's tones and test 10's tracking and timing. Not for sha
 
 What's new:
 
-- **No more waiting.** Test 13 waited 8 to 16 ms before a new note got a voice (13 ms on leads and basses). Test 14
-  waits at most 2.7 ms, usually nothing, so notes start when test 10's did. Leads and basses start about 13 ms sooner
-  than in test 11.
-- **Kept from test 13:** every chord note plays; a note moving between bands, a pick's overtone giving way to the
-  real note, and a string coming back after a dip keep their voice without a new attack; a blip can't cut off a
-  string you're holding. There are more blips than in test 13 (that wait was what removed them), but fewer than in
-  test 11.
-- The tones, knobs and screen are the same as test 11, and your tone settings carry over.
+- **Test 11 again.** With the new settings at 0 (as they start), the synth plays exactly as test 11 did.
+- **The TRACK page:** tap SHIFT twice on the guitar synth screen (main page, OTHERS, TRACK; a third tap goes back).
+  The settings are for every tone and are saved.
+  - **CTRL 1, WAIT (0-16 ms):** how long a string has to sound before it gets a note. Higher drops more of the pick's
+    blips, but notes start later.
+  - **CTRL 2, SENS (0-50):** how loud a new note must be, as % of the loudest string. Higher drops quiet stray notes;
+    too high and quiet chord notes go too.
+  - **CTRL 3, GUARD (OFF / ON):** ON stops blips from cutting off strings you hold, and stops the extra attacks when a
+    note moves between bands, when a pick's overtone gives way to the real note, or when a string dips. No added
+    latency.
+- The tones, knobs and screen are test 11's, and your tone settings carry over.
 
-1. Volume low. On the guitar synth screen, play single notes, a bend, then chords, on a few tones.
-2. Try a lead (pad 7 or 8) and a bass (pads 9-11) too.
+1. Volume low. On the guitar synth screen, play single notes and chords: it should sound like test 11.
+2. Tap SHIFT twice for TRACK. Turn GUARD on, then try SENS, then WAIT, playing as you go.
 
-Tell me: is the timing right now? Are the blips that are left OK?
+Tell me: which settings sound best to you, and which artifacts are still there?

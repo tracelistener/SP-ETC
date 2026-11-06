@@ -1079,21 +1079,23 @@ DOOM_PAGE = 0x60                   # a page above the stock ones (DOOM OS's own 
 class SyLayout:
     """sy_t and sy_block_t offsets, from the module's sy_layout table."""
     def __init__(self, m, sym):
-        v = struct.unpack('<31I', m.bytes(sym['sy_layout'], 124))
+        v = struct.unpack('<32I', m.bytes(sym['sy_layout'], 128))
         (self.sy_bytes, self.state, self.out, self.w_n, self.pub, self.tot_max_ever, self.block_bytes, self.e,
          self.per, self.ph, self.amp, self.owned, self.env, self.started, self.tone, self.nper, self.tone_req,
          self.fe, self.knob, self.dirty, self.loads, self.mode, self.rec, self.oct, self.susk, self.fund_cut,
-         self.dynk, self.rem_down, self.hold, self.out_bus, self.armed) = v
+         self.dynk, self.rem_down, self.hold, self.out_bus, self.armed, self.trk) = v
         check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
               self.dirty == SY_KNOB_AT + 60 and self.oct == SY_KNOB_AT + 64 and self.susk == self.oct + 20 and
               self.dynk == self.susk + 20 and self.loads == SY_FILE_AT and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
               self.mode == self.tot_max_ever + 24 and self.rem_down == self.mode + 64 and self.rec == self.mode + 88 and
-              self.sy_bytes == self.rec + 128 and self.tone_req == 4 * SY_HEAD.index('tone_req') and
+              self.trk == self.rec + 128 and self.sy_bytes == self.trk + 4 and
+              self.tone_req == 4 * SY_HEAD.index('tone_req') and
               self.started + 12 <= self.block_bytes and self.fund_cut + 4 <= self.block_bytes and
               self.hold + 49 <= self.block_bytes and self.out_bus == self.rem_down + 2 and
               self.armed == self.rem_down + 3,
-              'sy_t and sy_block_t layout as the test reads it (SY test 6: DYNAMICS, REMAIN, the bands\' hold)')
+              'sy_t and sy_block_t layout as the test reads it (SY test 6: DYNAMICS, REMAIN, the bands\' hold; SY '
+              'test 15: the TRACK page\'s trk at the end)')
 
 
 class SyMachine(SynthMachine):
@@ -1156,6 +1158,7 @@ class SyMachine(SynthMachine):
         st['rem_down'], st['rem_fx'], st['out_bus'], st['armed'] = self.bytes(s + self.sl.rem_down, 4)
         st.update(zip(SY_REM, struct.unpack('<5I', self.bytes(s + self.sl.rem_down + 4, 20))))
         st['rec'] = list(struct.unpack('<64h', self.bytes(s + self.sl.rec, 128)))
+        st['trk'] = list(self.bytes(s + self.sl.trk, 4))           # SY test 15: WAIT, SENS, GUARD, 0
         return st
 
     def ev(self, kind, what, val=0):
@@ -1697,6 +1700,36 @@ def sy_tone_checks(img, man):
           f'block at one a cycle)')
     report['sy']['tones'] = dict(worst_step_instructions=worst, peaks=peaks,
                                  names=[t['name'] for t in sy_voices.VOICES])
+    # 1b. SY test 15: the TRACK page set (WAIT 4, SENS 20, GUARD on) on a poly, a mono and an SG tone: the module's
+    #     output = sy_ref.py's with the same settings, value for value, and not test 11's (the settings reach the notes).
+    tmism, tdiff, tworst = [], {}, 0
+    for tone in (0, 7, 18):
+        mt = SyMachine(img, man)
+        mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
+        mt.uc.mem_write(sym['sy'] + mt.sl.trk, bytes([4, 20, 1, 0]))
+        mt.start()
+        eng = sy_ref.Engine(tone)
+        eng.trk = [4, 20, 1]
+        plain = sy_ref.Engine(tone)
+        differs = 0
+        for b, values in enumerate(blocks):
+            mt.feed(values)
+            h = mt.uc.hook_add(UC_HOOK_CODE, every)
+            counter[0] = 0
+            mt.call(sym['sy_rx'])
+            mt.uc.hook_del(h)
+            tworst = max(tworst, counter[0])
+            got = list(struct.unpack('<64i', mt.bytes(sym['sy'] + mt.sl.out, 256)))
+            want, _ = eng.step(values, bpm100=mt.sy()['bpm100'])
+            base11, _ = plain.step(values, bpm100=mt.sy()['bpm100'])
+            differs += want != base11
+            if got != want:
+                tmism.append((tone, b))
+        tdiff[sy_voices.VOICES[tone]['name']] = differs
+    check(not tmism and all(v > 0 for v in tdiff.values()) and tworst <= SY_STEP_MAX,
+          f'SY test 15: with the TRACK page set (WAIT 4, SENS 20, GUARD on) the module\'s output = sy_ref.py\'s with the '
+          f'same settings, value for value (POLY PAD, LADDER LEAD, SG PLUCK x {len(blocks)} blocks; first differences '
+          f'{tmism[:3]}), unlike the settings at 0 in blocks {tdiff}; the most instructions a step takes {tworst}')
     # 2. Test 5: a tone change while playing, from the screen (the Sound Generator page in SY mode): VALUE steps SOUND
     #    1 -> 9; out over 8 blocks, the new tone from rest, in over 8, value for value.
     mc = ScreenMachine(img, man, page=SG_PAGE)
@@ -1789,9 +1822,10 @@ class Files:
         self._ret(uc, 0)
 
 
-def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=4, bus=0):
+def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=4, bus=0, trk=(0, 0, 0)):
     """B:/_sy_tones.bin as sy_save writes it (SY test 11, version 4): "SYTN", 4, tone, muted, 20, 60 knob positions,
-    20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, three zeros, FNV-1a of the first 132. version=3: tests 6-10's (15
+    20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, SY test 15's WAIT, SENS and GUARD (trk; zeros before), FNV-1a of the
+    first 132. version=3: tests 6-10's (15
     tones: 104 bytes, the bus at 98, the sum of the first 100); version=2: test 5's (88 bytes)."""
     n = 20 if version == 4 else 15
     octs = octs or [0] * n
@@ -1800,7 +1834,7 @@ def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=4
     body = (b'SYTN' + bytes([version, tone, muted, n]) + bytes(64 + d for row in knobs[:n] for d in row) +
             bytes(o & 0xFF for o in octs[:n]) + bytes(suss[:n]))
     if version == 4:
-        body += bytes(dyns[:n]) + bytes([bus, 0, 0, 0])
+        body += bytes(dyns[:n]) + bytes([bus, *trk])
     elif version == 3:
         body += bytes(dyns[:n]) + bytes([bus, 0])
     else:
@@ -2044,8 +2078,9 @@ def sy_screen_checks(img, man):
           'edits the first page\'s LEVEL and the release keeps the second page')
     # 5. The draws: each knob column (descriptor type 0, parameter 0x7b..0x80) cleared, its name small, its value big;
     #    the footer the sound's name; a column of another type, or outside the screen, to the kits' draws.
-    m.ev(EV_KEY, KEY_SHIFT)
-    m.ev(EV_KEY_UP, KEY_SHIFT)                                         # back to the first page
+    for _ in range(2):                                                 # SY test 15: OTHERS -> TRACK -> the first page
+        m.ev(EV_KEY, KEY_SHIFT)
+        m.ev(EV_KEY_UP, KEY_SHIFT)
     m.ev(EV_PAD, 3, 100)
     m.ev(EV_PAD_UP, 3)                                                 # SOUND 4 (ENSEMBLE)
     m.ev(EV_KNOB, 2, 64 + 12)
@@ -2056,6 +2091,33 @@ def sy_screen_checks(img, man):
     m.ev(EV_KEY, KEY_SHIFT)
     m.ev(EV_KEY_UP, KEY_SHIFT)
     cols2 = [m.draw_column(c, 0x7B + c) for c in range(3)]
+    # SY test 15: a third tap, the TRACK page: CTRL 1 WAIT (12 blocks: 16 ms at the top), CTRL 2 SENS (64: 25), CTRL 3
+    # GUARD (the upper half on); the columns; the next tap back to the first page; the settings in the file
+    m.ev(EV_KEY, KEY_SHIFT)
+    m.ev(EV_KEY_UP, KEY_SHIFT)
+    page_t = m.sy()['shift_page']
+    t_before = list(m.sy()['trk'])
+    m.ev(EV_KNOB, 1, 127)
+    m.ev(EV_KNOB, 2, 64)
+    m.ev(EV_KNOB, 3, 100)
+    cols3 = [m.draw_column(c, 0x7B + c) for c in range(3)]
+    trk = list(m.sy()['trk'])
+    m.ev(EV_KNOB, 3, 20)
+    guard_off = m.sy()['trk'][2]
+    m.ev(EV_KNOB, 3, 100)
+    m.ev(EV_KEY, KEY_SHIFT)
+    m.ev(EV_KEY_UP, KEY_SHIFT)
+    page_back = m.sy()['shift_page']
+    t_writes = [w for w in m.files.writes if w[0] == SY_PATH]
+    t_file = t_writes[-1][1] if t_writes else b''
+    texts3 = [[d[3] for d in c if d[0] == 'text'] for c in cols3]
+    check(page_t == 2 and t_before == [0, 0, 0, 0] and trk == [12, 25, 1, 0] and guard_off == 0 and page_back == 0 and
+          texts3 == [['WAIT MS', '16'], ['SENS', '25'], ['GUARD', 'ON']] and len(t_file) == 136 and
+          list(t_file[129:132]) == [12, 25, 1] and m.sy()['knob'][3] == m.sy()['knob'][3],
+          f'SY test 15: SHIFT\'s third tap shows the TRACK page (every tone): CTRL 1 WAIT 0..12 blocks (in ms: 127 '
+          f'shows 16), CTRL 2 SENS 0..50 (64: 25), CTRL 3 GUARD (the upper half on, the lower off); the next tap goes '
+          f'back to the first page; the file keeps them in its spare bytes 129-131 ({texts3}, {trk}, '
+          f'{list(t_file[129:132]) if t_file else None})')
     foot = m.draw_footer()
     texts = [[d[3] for d in c if d[0] == 'text'] for c in cols + cols2]
     t3 = m.sy()

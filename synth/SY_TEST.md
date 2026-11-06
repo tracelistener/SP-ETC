@@ -1,4 +1,4 @@
-# SY synth tests 1 to 14: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 15: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -817,6 +817,36 @@ of the notes), and HOLD_M 10 (13 ms) on a mono tone.
 
 **Emulator checks:** 352 pass on `release/sy-synth-test14`.
 
+## SY synth test 15 (sy-synth-test15): test 11, with a TRACK page
+
+The user on test 14: "no better hmmm. any way to go back to test 11 but have new setting parameters that can adjust
+unwanted artifacts" (first written as test 10, then "oh my bad i meant test 11"). Measured before it, on the user's
+recording: test 14's sound is heard as soon as test 10's after a pick, and its plucky tones reach full level sooner, so
+the lag the user felt was not when the notes start; tests 12-14 had all changed test 11's note manager.
+
+- **Test 11's voice code again** (b322ab2's sy_voice.c and .h), with three settings for every tone on a TRACK page,
+  SHIFT's third: a tap steps the main page, OTHERS, TRACK and back; SHIFT held shows OTHERS, or the main page from
+  OTHERS.
+  - **WAIT** (CTRL 1, 0..12 blocks, shown as 0..16 ms): a band is a new note at its run's (WAIT + 1)th block (0: the
+    block it begins, test 11's). Mono: its CONFIRM plus WAIT.
+  - **SENS** (CTRL 2, 0..50): a new note needs SENS % of the loudest band (mono: its candidates).
+  - **GUARD** (CTRL 3, ON in its upper half): test 13's moves without a new attack (a band beginning next to a note's
+    band and reading its pitch within 17 cents; a young note moving down to its fundamental; a note's band back within
+    20 blocks, no louder than 1.6x) and its stealing (a young note's voice only if quieter, a note in full's only at
+    1.5x its level). Mono: a takeover in a note's first 20 blocks moves it. The voices' resume (a note back after a gap
+    goes on without an attack) only with GUARD on.
+  - At 0 each (as they start, and as tests 11-14's files read), the voices are test 11's: on the user's recording, 8
+    tones x 80,250 blocks match b322ab2's DLL value for value.
+- **The file:** version 4 as before, the three settings in its spare bytes 129-131 (zero in tests 11-14's files).
+- **sy_t:** trk[4] at its end, sy_layout's 32nd entry. The note manager with the settings did not fit .syvnotes (6014
+  of 5632 bytes): knobs() and g_down() moved to .syvdata (now 3804 of 3840; notes 4748).
+- **On the recording** (the shares of short attacks, under 60 ms). POLY PAD, runs and chords; test 11 (all 0): 1840
+  of 2084 in the runs, 1226 attacks in the chords. GUARD: 1304 and 651. SENS 20: 1264 and 886. WAIT 2 + GUARD: 1088
+  and 482, notes within 2.7 ms of test 11's. WAIT 2 + SENS 20 + GUARD: 801 and 402. Mono (LADDER LEAD; test 11: 149
+  short, 225 attacks in the chords): GUARD 131 and 188; WAIT 2 + GUARD 113 and 153.
+
+**Emulator checks:** 360 pass on `release/sy-synth-test15`.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -836,6 +866,7 @@ of the notes), and HOLD_M 10 (13 ms) on a mono tone.
 - Test 11: which tones sound good on a real guitar; whether the pick's blips or settling notes are heard; the engine's real cycles on the unit (the readout's SY line), and whether SLOW ever stops it.
 - Test 12 on the unit: "awful" (late notes, chords without character); replaced by test 13.
 - Test 13 on the unit: "still too much latency"; replaced by test 14.
-- Test 14: whether the timing matches test 10 on the unit, and whether the blips that are left are acceptable.
+- Test 14 on the unit: "no better"; replaced by test 15.
+- Test 15: which TRACK settings sound best on the unit, and which artifacts they leave.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

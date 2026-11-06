@@ -53,27 +53,22 @@ float wave_eval(u32 type, float p, float d, float dt, float r);
 #endif
 
 #define FS 48000.0f
-/* the note manager (SY test 14, v5; scored on the user's clean recording): blocks of 64 samples (1.33 ms) */
-#define SKIP_P 4                    /* sy_fp.c's SY_SKIP: a band's first periods after it wakes read its centre */
-#define PROB 24                     /* a young note (test 11): this many blocks on, at PROB_HOLD of its peak and */
-#define PROB_HOLD 0.5f              /*   settled (STABLE cents over 4 blocks) it is a note in full; till then it */
-#define STABLE 15.0f                /*   sounds at its band's own level, so a blip stays as faint as its band */
-#define OFF_MAX 3                   /* a note in full rides this many blocks of its band off; a young one none */
-#define HAND_C 17.0f                /* a band starting next to a note's band, reading its pitch within this: takes it on */
-#define HOLD_N 2                    /* a band sounds this many blocks before it is a new note (test 14: 2, was 6), */
-#define HOLD_H 2                    /*   this many when +-1 band from a whole multiple of a sounding note's (was 12), */
-#define HOLD_M 2                    /*   this many for a mono tone (was 10) */
-#define RESUME 20                   /* a note's band back within this many blocks of its end, */
-#define REPICK 1.6f                 /*   no louder than this x its last level: it goes on; a re-pick: this x the level */
-#define RP_LO 0.8f                  /*   8 blocks before, which was under RP_LO x the peak, back over RP_HI x the */
-#define RP_HI 0.25f                 /*   peak, RP_AGE blocks after its attack (test 11's) */
-#define RP_AGE 40
-#define STEAL 1.5f                  /* a new note takes a note in full's voice only at this x its level */
-#define MONO_REL 1.0f               /* mono: a new band weaker than this x the note's level is not played, */
-#define MONO_WAIT 15                /*   but weighed again for this many blocks (it takes over as the note fades); */
-#define FIX_M 20                    /*   one taking over a note this young moves it (no second attack) */
+#define PROB 24
+#define PROB_HOLD 0.5f
+#define CONFIRM 10
+#define CONFIRM_MAX 40
+#define HOLD_LEVEL 0.6f
+#define STABLE 15.0f
+#define NEAR 45.0f
+#define REPICK 1.6f
+/* SY test 15, GUARD (test 13's): */
+#define G_HAND 17.0f                /* a band beginning next to a note's, reading its pitch within this: takes it on */
+#define G_RESUME 20                 /* a note's band back within this many blocks of its end, */
+#define G_BACK 1.6f                 /*   no louder than this x its last level: it goes on */
+#define G_STEAL 1.5f                /* a new note takes a note in full's voice only at this x its level */
+#define G_FIX 20                    /* mono: a band taking over a note this young moves it (no second attack) */
 
-static const s32 SUBS[7] = {12, 19, 24, 28, 31, 34, 36};   /* 2x..8x in semitones */
+static const s32 SUBS[5] = {12, 19, 24, 28, 31};
 static const float OCT_MUL[5] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
 
 static inline float absf(float x) { return x < 0.0f ? -x : x; }
@@ -210,7 +205,6 @@ SYV_DATA void syv_reset(syv_state_t *s) {
     for (u32 v = 0; v < SYV_NV; v++) {
         s->n[v].band = -1;
         s->n[v].start = -1000000;
-        s->n[v].born = -1000000;
         s->n[v].rel = -1000000;
         s->n[v].rp = -1000000;
         s->v[v].ns = 12345u + 7919u * v;
@@ -219,12 +213,14 @@ SYV_DATA void syv_reset(syv_state_t *s) {
             s->v[v].uph[u] = x - floorf_(x);
         }
     }
+    for (u32 k = 0; k < SYV_BANDS; k++)
+        s->pend_b0[k] = -1;
     s->started = 1;
 }
 
 /* ---- the screen's settings ---- */
 
-SYV_NOTES static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs_t *k) {
+SYV_DATA static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs_t *k) {
     syv_patch_t *p = &s->eff;
     const u32 *src = (const u32 *)t;
     u32 *dst = (u32 *)p;
@@ -308,8 +304,8 @@ SYV_NOTES static u32 repick(syv_note_t *n, float lv, s32 blk) {
     n->hist[w] = lv;
     if (n->nh < 255u) n->nh++;
     float lo = n->hist[(w + 1u) % 9u];                 /* the level 8 blocks ago */
-    if (blk - n->start < RP_AGE || blk - n->rp < 30 || n->nh < 9u) return 0;
-    if (lo > 0.0f && lo < RP_LO * n->peak && lv > REPICK * lo && lv > RP_HI * n->peak) {
+    if (blk - n->start < 40 || blk - n->rp < 30 || n->nh < 9u) return 0;
+    if (lo > 0.0f && lo < 0.8f * n->peak && lv > REPICK * lo && lv > 0.25f * n->peak) {
         n->rp = blk;
         n->nh = 0;
         return 1;
@@ -344,10 +340,10 @@ static inline float velocity(float peak, float vref) {
 
 typedef syv_ctl_t ctl_t;
 
-/* a young note's band went quiet as a band a whole multiple below it began to sound (the analysis's FUND rule: the
- * pick's overtone came first): the note moves down to it, no new attack (1 if it moved) */
-SYV_NOTES static u32 down(syv_state_t *s, syv_note_t *n, const u8 *on, u32 nv, unsigned long long *taken) {
-    for (u32 q = 0; q < 7u; q++) {
+/* SY test 15, GUARD: a young note's band went quiet as a band a whole multiple below began to sound (the analysis's
+ * FUND: the pick's overtone came first): the note moves down to it, no new attack (1 if it moved) */
+SYV_DATA static u32 g_down(syv_state_t *s, syv_note_t *n, const u8 *on, u32 nv, unsigned long long *taken) {
+    for (u32 q = 0; q < 5u; q++) {
         s32 j = n->band - SUBS[q];
         if (j < 0) break;
         if (!on[j] || ((*taken >> j) & 1ull)) continue;
@@ -362,44 +358,29 @@ SYV_NOTES static u32 down(syv_state_t *s, syv_note_t *n, const u8 *on, u32 nv, u
     return 0;
 }
 
-static inline float note_level(const syv_note_t *n, const float *tg) {
+static inline float g_level(const syv_note_t *n, const float *tg) {
     return n->gate && tg[n->band] > 0.0f ? tg[n->band] : n->last;
 }
 
-/* SY test 13: the note manager v5, test 10's tracking for test 11's voices (test 12's v4 waited for each note's pitch
- * and held back bands near a note's overtones: late notes, chords without their sevenths and ninths). The bands that
- * sound are the analysis's (sy_fp.c: a band owns, the gate, the hold, FUND), the ones test 10 gave an oscillator each,
- * and no band is held back: every note of a chord sounds, as in tests 10 and 11. A band that has sounded HOLD_N blocks
- * is a note (test 13 waited 8 ms, 16 ms near a sounding note's overtones, 13 ms mono: "still too much latency"; test
- * 14 waits 2 blocks, at most 2.7 ms, for poly and mono alike, which on the user's recording leaves the notes' starts
- * where test 10's were and drops the one-block blips). A partial moving between bands keeps its note, as test 10's
- * oscillator moved with it:
- *  - a band beginning next to a note's band, reading the note's pitch (HAND_C, test 10's 1%), takes the note on;
- *  - a young note's band going quiet as a band a whole multiple below sounds (the pick's overtone came first) moves
- *    the note down to it;
- *  - a note's band back within RESUME blocks of its end, no louder than REPICK x, goes on;
- * none of these with a new attack. A young note (PROB) sounds at its band's own level (test 11's confidence), so a blip
- * is as faint as its band, and ends with a fast release. A new note takes a free voice, else the quietest young note's
- * if quieter, else the quietest note's if it is STEAL x louder (a blip never cuts a held string). Mono: the newest band,
- * unless weaker than MONO_REL x the note's level (weighed again for MONO_WAIT blocks, so it takes over as the note
- * fades). */
-SYV_NOTES static void notes(syv_state_t *s, const syv_patch_t *p, const float *tg, const float *rc, const u8 *nper,
-                            float vref, ctl_t *c, u32 nv) {
+/* Test 11's note manager. SY test 15: WAIT (a band is a new note once it has sounded wait + 1 blocks in a row; 0: the
+ * block it begins, as test 11), SENS (a new note needs sens % of the loudest band) and GUARD (a band beginning next to
+ * a note's band reading its pitch takes the note on; a young note moves down to its fundamental; a note's band back
+ * soon, no louder, goes on; none with a new attack; a new note takes the quietest young note's voice only if quieter,
+ * a note in full's only at G_STEAL x its level). */
+SYV_NOTES static void notes_poly(syv_state_t *s, const syv_patch_t *p, const float *tg, const float *rc, float vref,
+                                 ctl_t *c, u32 nv, const syv_knobs_t *kn) {
     const s32 blk = s->blk;
-    const float *rc4 = blk >= 4 ? s->rc_prev[blk & 3] : rc;   /* the readings four blocks ago */
+    const float *rc4 = s->rc_prev[blk & 3];            /* the readings four blocks ago */
+    const u32 wait = kn->wait <= 12u ? kn->wait : 12u, guard = kn->guard & 1u;
+    const float sens = (float)(kn->sens <= 50u ? kn->sens : 50u) * 0.01f;
     u8 on[SYV_BANDS];
-    for (u32 k = 0; k < SYV_BANDS; k++)
+    float lmax = 0.0f;
+    for (u32 k = 0; k < SYV_BANDS; k++) {
         on[k] = tg[k] > 0.0f;
-    for (u32 k = 0; k < SYV_BANDS; k++) {              /* each band's run */
-        if (on[k]) {
-            if (s->run[k] < 255u) s->run[k]++;
-        } else {
-            s->run[k] = 0;
-            s->seen[k] = 0;
-        }
+        if (tg[k] > lmax) lmax = tg[k];
     }
     unsigned long long taken = 0;
-    for (u32 v = 0; v < nv; v++) {                     /* the notes go on, move with their partial, or end */
+    for (u32 v = 0; v < nv; v++) {
         syv_note_t *n = &s->n[v];
         n->trig = 0;
         if (n->band < 0 || !n->gate) continue;
@@ -408,174 +389,262 @@ SYV_NOTES static void notes(syv_state_t *s, const syv_patch_t *p, const float *t
             taken |= 1ull << n->band;
             continue;
         }
-        if (follow(s, n, on, rc, nv, &taken) || (n->young && down(s, n, on, nv, &taken))) {
+        if (follow(s, n, on, rc, nv, &taken) || (guard && n->young && g_down(s, n, on, nv, &taken))) {
             n->off = 0;
             continue;
         }
         n->off++;
-        if (n->young || n->off > OFF_MAX) {
+        if (n->young || n->off > 3u) {
             n->gate = 0;
             n->rel = blk;
             n->fast = n->young;
         }
     }
-    unsigned long long fresh = 0;                      /* the bands beginning to sound, held long enough */
-    for (u32 k = 0; k < SYV_BANDS; k++) {
-        if (!on[k] || s->seen[k] || ((taken >> k) & 1ull)) continue;
-        const u32 base = p->mono ? HOLD_M : HOLD_N;
-        u32 need = base;
-        for (u32 v = 0; v < nv && need < HOLD_H; v++) {
-            const syv_note_t *n = &s->n[v];
-            if (n->band < 0 || !n->gate || n->band >= (s32)k) continue;
-            s32 d = (s32)k - n->band;
-            for (u32 q = 0; q < 7u; q++)
-                if (d >= SUBS[q] - 1 && d <= SUBS[q] + 1) need = HOLD_H;
-        }
-        if (s->run[k] >= need) fresh |= 1ull << k;
-    }
-    while (fresh) {                                    /* loudest first */
-        s32 k = -1;
-        for (u32 j = 0; j < SYV_BANDS; j++)
-            if (((fresh >> j) & 1ull) && (k < 0 || tg[j] > tg[k])) k = (s32)j;
-        fresh &= ~(1ull << k);
-        if ((taken >> k) & 1ull) continue;
-        s32 w = -1;
-        for (u32 v = 0; v < nv && w < 0; v++) {        /* a note's partial moving on to this band */
-            const syv_note_t *n = &s->n[v];
-            if (n->band < 0 || !n->gate || (n->band - k != 1 && k - n->band != 1)) continue;
-            if (absf(rc[k] - n->r) < HAND_C) w = (s32)v;
-        }
-        if (w >= 0) {
-            syv_note_t *n = &s->n[w];
-            n->band = (signed char)k;
-            n->off = 0;
-            taken |= 1ull << k;
-            continue;
-        }
-        for (u32 v = 0; v < nv && w < 0; v++) {        /* a note's band back soon after it ended, no louder */
-            const syv_note_t *n = &s->n[v];
-            s32 d = n->band - k;
-            if (n->band < 0 || n->gate || blk - n->rel > RESUME || d < -1 || d > 1 || tg[k] > REPICK * n->last)
-                continue;
-            if (d != 0 && nper[k] > SKIP_P && absf(rc[k] - n->r) >= HAND_C) continue;
-            w = (s32)v;
-        }
-        if (w >= 0) {
-            syv_note_t *n = &s->n[w];
-            n->band = (signed char)k;
-            n->gate = 1;
-            n->off = 0;
-            n->fast = 0;
-            taken |= 1ull << k;
-            continue;
-        }
-        u32 legato = 0;
-        if (p->mono) {
-            const syv_note_t *n = &s->n[0];
-            if (n->gate && n->band >= 0 && tg[k] < MONO_REL * note_level(n, tg)) {
-                if (s->run[k] >= HOLD_M + MONO_WAIT) s->seen[k] = 1;   /* weighed again for MONO_WAIT blocks */
-                continue;
+    for (u32 k = 0; k < SYV_BANDS; k++) {            /* test 15: the run's (wait + 1)th block; 0: its first */
+        if (!on[k] || s->run[k] != wait + 1u || ((taken >> k) & 1ull)) continue;
+        if (sens > 0.0f && tg[k] < sens * lmax) continue;
+        s32 best = -1;
+        if (guard) {
+            for (u32 v = 0; v < nv && best < 0; v++) {  /* a note's partial moving on to this band */
+                syv_note_t *n = &s->n[v];
+                if (n->band >= 0 && n->gate && (n->band - (s32)k == 1 || (s32)k - n->band == 1) &&
+                    absf(rc[k] - n->r) < G_HAND)
+                    best = (s32)v;
             }
-            legato = n->gate || blk - n->rel < 4;
-            if (n->gate && n->band >= 0 && blk - n->born < FIX_M) {   /* the note's first band was the pick's blip: */
-                syv_note_t *m = &s->n[0];                             /*   it moves here, no second attack */
-                m->band = (signed char)k;
-                m->off = 0;
-                m->c = rc[k];
-                m->r = rc[k];
-                m->last = tg[k];
-                m->peak = maxf(m->peak, tg[k]);
+            if (best >= 0) {
+                s->n[best].band = (signed char)k;
+                s->n[best].off = 0;
                 taken |= 1ull << k;
-                break;
+                continue;
             }
-            w = 0;
-        } else {
-            for (u32 v = 0; v < nv; v++)               /* a free voice, released longest ago */
-                if (!s->n[v].gate && (w < 0 || s->n[v].rel < s->n[w].rel)) w = (s32)v;
-            if (w < 0) {                               /* else the quietest young note, if quieter */
-                for (u32 v = 0; v < nv; v++)
-                    if (s->n[v].young && (w < 0 || note_level(&s->n[v], tg) < note_level(&s->n[w], tg))) w = (s32)v;
-                if (w >= 0 && note_level(&s->n[w], tg) >= tg[k]) w = -1;
-            }
-            if (w < 0) {                               /* else the quietest note, if STEAL x quieter */
-                for (u32 v = 0; v < nv; v++)
-                    if (w < 0 || note_level(&s->n[v], tg) < note_level(&s->n[w], tg)) w = (s32)v;
-                if (STEAL * note_level(&s->n[w], tg) >= tg[k]) {
-                    s->seen[k] = 1;                    /* no voice for it: as test 11, not weighed again */
+            for (u32 v = 0; v < nv && best < 0; v++) {  /* a note's band back soon after it ended, no louder */
+                const syv_note_t *n = &s->n[v];
+                s32 d = n->band - (s32)k;
+                if (n->band < 0 || n->gate || blk - n->rel > G_RESUME || d < -1 || d > 1 || tg[k] > G_BACK * n->last)
                     continue;
-                }
+                if (d != 0 && absf(rc[k] - n->r) >= G_HAND) continue;
+                best = (s32)v;
+            }
+            if (best >= 0) {
+                syv_note_t *n = &s->n[best];
+                n->band = (signed char)k;
+                n->gate = 1;
+                n->off = 0;
+                n->fast = 0;
+                taken |= 1ull << k;
+                continue;
             }
         }
-        syv_note_t *n = &s->n[w];
+        for (u32 v = 0; v < nv; v++)                    /* a free voice, released longest ago */
+            if (!s->n[v].gate && (best < 0 || s->n[v].rel < s->n[best].rel)) best = (s32)v;
+        if (best < 0 && !guard)                         /* else the quietest young voice (a blip) */
+            for (u32 v = 0; v < nv; v++)
+                if (s->n[v].young && (best < 0 || s->n[v].hist[8] < s->n[best].hist[8])) best = (s32)v;
+        if (best < 0 && !guard)
+            for (u32 v = 0; v < nv; v++)                /* else the oldest note */
+                if (best < 0 || s->n[v].start < s->n[best].start) best = (s32)v;
+        if (best < 0) {                                 /* GUARD: the quietest young note's, if quieter; else the */
+            for (u32 v = 0; v < nv; v++)                /*   quietest note's, if G_STEAL x quieter; else none */
+                if (s->n[v].young && (best < 0 || g_level(&s->n[v], tg) < g_level(&s->n[best], tg))) best = (s32)v;
+            if (best >= 0 && g_level(&s->n[best], tg) >= tg[k]) best = -1;
+            if (best < 0) {
+                for (u32 v = 0; v < nv; v++)
+                    if (best < 0 || g_level(&s->n[v], tg) < g_level(&s->n[best], tg)) best = (s32)v;
+                if (G_STEAL * g_level(&s->n[best], tg) >= tg[k]) continue;
+            }
+        }
+        syv_note_t *n = &s->n[best];
         n->band = (signed char)k;
         n->gate = 1;
         n->off = 0;
         n->start = blk;
-        n->born = blk;
         n->peak = tg[k];
         n->c = rc[k];
         n->r = rc[k];
         n->last = tg[k];
-        n->lev = 1.0f;
-        n->nh = 0;
-        n->rp = -1000000;
         n->young = 1;
         n->fast = 0;
-        n->trig = p->mono ? (u8)!(legato && !p->retrig) : 1u;
+        n->lev = 1.0f;
+        n->nh = 0;
+        n->trig = 1;
         taken |= 1ull << k;
-        if (p->mono) break;
     }
-    for (u32 v = 0; v < nv; v++) {                     /* levels, settling, re-picks, the pitch (test 11's) */
+    for (u32 v = 0; v < SYV_NV; v++) {
         syv_note_t *n = &s->n[v];
-        if (n->band < 0 || !n->gate || !on[n->band]) continue;
-        s32 k = n->band;
-        n->r = rc[k];
-        n->last = tg[k];
-        if (n->young) {
-            n->c = rc[k];
-            n->peak = maxf(n->peak, tg[k]);
-            if (blk - n->start >= PROB && tg[k] >= PROB_HOLD * n->peak && blk >= 4 && absf(rc[k] - rc4[k]) < STABLE)
-                n->young = 0;
-        } else {
-            if (repick(n, tg[k], blk)) {
-                n->trig = 1;
-                n->start = blk;
-                n->peak = tg[k];
-            }
-            steady(n, rc[k]);
-            if (blk - n->start < 12) n->peak = maxf(n->peak, tg[k]);
+        if (v >= nv) {                                  /* past the tone's cap: silent */
+            c->trig[v] = 0;
+            c->gate[v] = 0.0f;
+            c->conf[v] = 1.0f;
+            c->fast[v] = 1;
+            c->freq[v] = 0.0f;
+            c->vel[v] = 0.05f;
+            c->lev[v] = 1.0f;
+            continue;
         }
-        n->lev = minf(1.0f, tg[k] / maxf(n->peak, 1e-9f));
-    }
-    for (u32 v = 0; v < SYV_NV; v++) {                 /* to the voices */
-        syv_note_t *n = &s->n[v];
-        c->trig[v] = 0;
+        c->trig[v] = n->trig;
         c->gate[v] = 0.0f;
         c->conf[v] = 1.0f;
-        c->fast[v] = v >= nv;
+        c->fast[v] = 0;
         c->freq[v] = 0.0f;
         c->vel[v] = 0.05f;
         c->lev[v] = 1.0f;
-        if (v >= nv || n->band < 0) continue;
+        if (n->band < 0) continue;
         s32 k = n->band;
-        c->trig[v] = n->trig;
+        u32 live = n->gate && on[k];
+        if (live) {
+            n->r = rc[k];
+            n->last = tg[k];
+            if (n->young) {
+                n->c = rc[k];
+                n->peak = maxf(n->peak, tg[k]);
+                if (blk - n->start >= PROB && tg[k] >= PROB_HOLD * n->peak && blk >= 4 &&
+                    absf(rc[k] - rc4[k]) < STABLE)
+                    n->young = 0;
+            } else {
+                if (repick(n, tg[k], blk)) {
+                    c->trig[v] = 1;
+                    n->start = blk;
+                    n->peak = tg[k];
+                }
+                steady(n, rc[k]);
+                if (blk - n->start < 12) n->peak = maxf(n->peak, tg[k]);
+            }
+            n->lev = minf(1.0f, tg[k] / maxf(n->peak, 1e-9f));
+        }
         c->gate[v] = n->gate ? 1.0f : 0.0f;
         c->freq[v] = 440.0f * syv_exp2(n->c * (1.0f / 1200.0f));
         c->vel[v] = velocity(n->peak, vref);
         c->lev[v] = n->lev;
+        float vs = (1.0f - p->avel) + p->avel * c->vel[v];
+        if (n->young && live) {
+            float a = minf(1.0f, syv_exp2(0.7f * syv_log2(maxf(tg[k], 1e-12f) / vref)));
+            n->hist[8] = minf(1.0f, a / maxf(vs, 0.05f));    /* a young voice keeps its last confidence here */
+            c->conf[v] = n->hist[8];
+        } else if (n->young) {
+            c->conf[v] = n->hist[8];
+        }
         c->fast[v] = n->fast;
-        if (n->young && !p->mono) {                    /* a young note at its band's own level (test 11; mono's one
-                                                          voice goes on at its level, as test 11's did) */
-            if (n->gate && on[k]) {
-                float vs = (1.0f - p->avel) + p->avel * c->vel[v];
-                float a = minf(1.0f, syv_exp2(0.7f * syv_log2(maxf(tg[k], 1e-12f) / vref)));
-                n->cf = minf(1.0f, a / maxf(vs, 0.05f));
+    }
+}
+
+SYV_NOTES static void notes_mono(syv_state_t *s, const syv_patch_t *p, const float *tg, const float *rc,
+                                 const float *e, float vref, ctl_t *c, const syv_knobs_t *kn) {
+    const s32 blk = s->blk;
+    const s32 wait = (s32)(kn->wait <= 12u ? kn->wait : 12u);   /* SY test 15: WAIT on top of CONFIRM, SENS, GUARD */
+    const u32 guard = kn->guard & 1u;
+    const float sens = (float)(kn->sens <= 50u ? kn->sens : 50u) * 0.01f;
+    float lmax = 0.0f;
+    for (u32 k = 0; k < SYV_BANDS; k++)
+        if (tg[k] > lmax) lmax = tg[k];
+    const float *rc4 = s->rc_prev[blk & 3];
+    const float *rc1 = s->rc_prev[(blk + 3) & 3];      /* the last block's readings */
+    const float *e4 = s->e_prev[blk & 3];
+    syv_note_t *n = &s->n[0];
+    u8 on[SYV_BANDS];
+    for (u32 k = 0; k < SYV_BANDS; k++)
+        on[k] = tg[k] > 0.0f;
+    n->trig = 0;
+    if (n->band >= 0 && n->gate && !on[n->band]) {
+        unsigned long long t = 0;
+        if (follow(s, n, on, rc, 1, &t)) {
+            s->pend_b0[n->band] = -1;
+        } else {
+            n->off++;
+            if (n->off > 3u) {
+                n->gate = 0;
+                n->rel = blk;
             }
-            c->conf[v] = n->cf;
         }
     }
-    for (u32 k = 0; k < SYV_BANDS; k++)
-        if ((taken >> k) & 1ull) s->seen[k] = 1;
+    for (u32 j = 0; j < SYV_BANDS; j++)
+        if (on[j] && !s->prev[j] && ((s32)j != n->band || !n->gate)) {
+            s->pend_b0[j] = blk;
+            s->pend_pk[j] = tg[j];
+        }
+    u8 gone[SYV_BANDS];
+    for (u32 j = 0; j < SYV_BANDS; j++)
+        gone[j] = s->pend_b0[j] >= 0 && !on[j];
+    for (u32 j = 0; j < SYV_BANDS; j++) {              /* a pending band moving on with its partial */
+        if (!gone[j]) continue;
+        s32 b0 = s->pend_b0[j];
+        float pk = s->pend_pk[j];
+        s->pend_b0[j] = -1;
+        for (s32 d = -1; d <= 1; d += 2) {
+            s32 nj = (s32)j + d;
+            if (nj < 0 || nj >= SYV_BANDS || !on[nj] || s->pend_b0[nj] >= 0 || nj == n->band) continue;
+            if (absf(rc[nj] - rc1[j]) >= 60.0f) continue;
+            s->pend_b0[nj] = b0;
+            s->pend_pk[nj] = maxf(pk, tg[nj]);
+            break;
+        }
+    }
+    s32 best = -1;
+    for (u32 j = 0; j < SYV_BANDS; j++) {
+        if (s->pend_b0[j] < 0) continue;
+        if (tg[j] > s->pend_pk[j]) s->pend_pk[j] = tg[j];
+        s32 age = blk - s->pend_b0[j];
+        u32 ok = age >= CONFIRM + wait && tg[j] >= HOLD_LEVEL * s->pend_pk[j] && blk >= 4 &&
+                 absf(rc[j] - rc4[j]) < STABLE && absf(rc[j] - SYV_CENTRE[j]) < NEAR && tg[j] >= sens * lmax;
+        if (ok && age < CONFIRM_MAX) {                 /* a fundamental still building up below: wait for it */
+            for (u32 q = 0; q < 5u; q++) {
+                s32 i = (s32)j - SUBS[q];
+                if (i >= 0 && e[i] > 0.02f * e[j] && e[i] > 1.15f * e4[i]) {
+                    ok = 0;
+                    break;
+                }
+            }
+        }
+        if ((ok || (age >= CONFIRM_MAX + wait && tg[j] >= sens * lmax)) && (best < 0 || tg[j] > tg[best]))
+            best = (s32)j;
+    }
+    if (best >= 0 && n->gate && n->band >= 0 && on[n->band] && blk - n->start < 45 && tg[best] < 0.8f * tg[n->band])
+        best = -1;                                     /* a weaker band while the note is young: not a note */
+    if (best >= 0) {
+        u32 legato = n->gate || blk - n->rel < 4;
+        s32 dist = best - n->band;
+        u32 fix = n->gate && (guard ? blk - n->start < G_FIX : (dist == 1 || dist == -1) && blk - n->start < 15);
+        n->band = (signed char)best;
+        n->gate = 1;
+        n->off = 0;
+        n->c = rc[best];
+        n->r = rc[best];
+        if (!fix) {
+            n->start = blk;
+            n->peak = s->pend_pk[best];
+            n->nh = 0;
+            if (!(legato && !p->retrig)) n->trig = 1;
+        }
+        s->pend_b0[best] = -1;
+    }
+    s32 k = n->band;
+    if (k >= 0 && n->gate && on[k]) {
+        n->off = 0;
+        n->r = rc[k];
+        if (repick(n, tg[k], blk)) {
+            n->trig = 1;
+            n->start = blk;
+            n->peak = tg[k];
+        }
+        steady(n, rc[k]);
+        if (blk - n->start < 12) n->peak = maxf(n->peak, tg[k]);
+        n->lev = minf(1.0f, tg[k] / maxf(n->peak, 1e-9f));
+    }
+    for (u32 v = 0; v < SYV_NV; v++) {
+        c->trig[v] = 0;
+        c->gate[v] = 0.0f;
+        c->conf[v] = 1.0f;
+        c->fast[v] = 0;
+        c->freq[v] = 0.0f;
+        c->vel[v] = 0.05f;
+        c->lev[v] = 1.0f;
+    }
+    if (k >= 0) {
+        c->trig[0] = n->trig;
+        c->gate[0] = n->gate ? 1.0f : 0.0f;
+        c->freq[0] = 440.0f * syv_exp2(n->c * (1.0f / 1200.0f));
+        c->vel[0] = velocity(n->peak, vref);
+        c->lev[0] = n->lev;
+    }
 }
 
 /* ---- voices ---- */
@@ -756,7 +825,7 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
     u32 n_on = 0;
     for (u32 v = 0; v < nv; v++) {
         syv_voice_t *x = &s->v[v];
-        if (c->trig[v] || (c->gate[v] > 0.0f && !x->active)) {   /* SY test 12: or a note back after it died */
+        if (c->trig[v] || (s->guard && c->gate[v] > 0.0f && !x->active)) {   /* test 15: GUARD's resume */
             x->astg = 1;
             x->fstg = 1;
             x->t = 0.0f;
@@ -772,7 +841,7 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
                 x->lev = c->lev[v];
             }
             x->active = 1;
-        } else if (c->gate[v] > 0.0f && x->astg == 4u) {   /* SY test 12: a note going on after a gap: no attack */
+        } else if (s->guard && c->gate[v] > 0.0f && x->astg == 4u) {   /* test 15: GUARD: back after a gap, no attack */
             x->astg = 2;
             x->fstg = 2;
         }
@@ -1025,10 +1094,9 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
 SYV_DATA static float output(syv_state_t *s, const float *acc, float gain, float mg, float mgt, float fade,
                              float scale, s32 *out) {
     float xm1 = s->dcx, ym1 = s->dcy;
-    const float dk = s->cost ? 0.9995f : 0.99f;       /* SY test 12: no voice: the blocker's tail gone in ~5 ms */
     for (u32 i = 0; i < SYV_FRAMES; i++) {
         float x = acc[i];
-        ym1 = x - xm1 + dk * ym1;
+        ym1 = x - xm1 + 0.9995f * ym1;
         xm1 = x;
         float y = ym1 * gain;
         if (y > 1.0f) y = 1.0f;
@@ -1049,9 +1117,13 @@ SYV_DATA static float output(syv_state_t *s, const float *acc, float gain, float
 }
 
 SYV_DATA float syv_block(syv_state_t *s, const syv_patch_t *tone, const syv_knobs_t *k, const float *tg,
-                         const float *per, const float *e, const u8 *nper, float vref, float mg, float mgt,
-                         float fade, float scale, s32 *out) {
+                         const float *per, const float *e, const u8 *nper, float vref, float mg, float mgt, float fade,
+                         float scale, s32 *out) {
+    (void)nper;
     if (!s->started) syv_reset(s);
+    for (u32 b = 0; b < SYV_BANDS; b++)                /* SY test 15: each band's run (WAIT) */
+        s->run[b] = tg[b] > 0.0f ? (u8)(s->run[b] < 255u ? s->run[b] + 1u : 255u) : 0u;
+    s->guard = k->guard & 1u;
     knobs(s, tone, k);
     const syv_patch_t *p = &s->eff;
     float *rc = s->rc;
@@ -1060,16 +1132,20 @@ SYV_DATA float syv_block(syv_state_t *s, const syv_patch_t *tone, const syv_knob
     ctl_t *cp = &s->ctl;
     u32 cap = p->flags & 0x0Fu;                      /* the tone's voice cap (flags' low bits) */
     u32 nv = p->mono ? 1u : cap && cap < SYV_NV ? cap : SYV_NV;
-    notes(s, p, tg, rc, nper, vref, cp, nv);
+    if (p->mono) notes_mono(s, p, tg, rc, e, vref, cp, k);
+    else notes_poly(s, p, tg, rc, vref, cp, nv, k);
     float *acc = s->acc;
     for (u32 i = 0; i < SYV_FRAMES; i++)
         acc[i] = 0.0f;
     s->cost = render(s, p, cp, acc, nv);
     mg = output(s, acc, p->gain, mg, mgt, fade, scale, out);
-    float *slot = s->rc_prev[s->blk & 3];             /* this block's readings, for four blocks on */
-    for (u32 b = 0; b < SYV_BANDS; b++)
+    float *slot = s->rc_prev[s->blk & 3];             /* this block's readings and energies, for four blocks on */
+    float *es = s->e_prev[s->blk & 3];
+    for (u32 b = 0; b < SYV_BANDS; b++) {
         slot[b] = rc[b];
-    (void)e;
+        es[b] = e[b];
+        s->prev[b] = tg[b] > 0.0f;
+    }
     s->blk++;
     return mg;
 }

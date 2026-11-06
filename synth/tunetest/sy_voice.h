@@ -41,10 +41,12 @@ typedef struct {
 } syv_patch_t;
 
 /* The screen's settings for the tone playing: CTRL 1-3 as knob position - 64 (0: as designed), OCTAVE (0 as designed,
- * 1..5: -2..+2), SUSTAIN and DYNAMICS (0 as designed, 1..101: 0..100). */
+ * 1..5: -2..+2), SUSTAIN and DYNAMICS (0 as designed, 1..101: 0..100). SY test 15: the TRACK page's, for every tone:
+ * WAIT (0..12: the blocks a band sounds before it is a new note), SENS (0..50: a new note's least level, % of the
+ * loudest band) and GUARD (0 off, 1 on); 0 each is test 11's tracking. */
 typedef struct {
     syv_s8 tone, p2, level;
-    syv_u8 oct, sus, dyn, pad[2];
+    syv_u8 oct, sus, dyn, wait, sens, guard, pad[3];
 } syv_knobs_t;
 
 /* P2 kinds (CTRL 1): what it moves */
@@ -60,12 +62,12 @@ typedef struct {
     syv_u8 astg, fstg, active, fast;
 } syv_voice_t;
 
-typedef struct {                     /* a note (SY test 13: v5) */
-    float peak, c, r, lev, last, cf, hist[9];   /* its peak, pitch (smoothed / now, cents), level / peak, its band's
-                                                    last level, its confidence while young, its last nine levels */
-    syv_s32 start, born, rel, rp;    /* its last attack, its first, its release, its last re-pick (blocks) */
+typedef struct {
+    float peak, c, r, lev, hist[9];
+    float last;                      /* SY test 15: its band's last level (GUARD) */
+    syv_s32 start, rel, rp;
     syv_s8 band;
-    syv_u8 gate, off, nh, trig, young, fast, pad[1];
+    syv_u8 gate, off, young, fast, nh, trig, pad;
 } syv_note_t;
 
 typedef struct {                     /* the note manager's word to the voices, per block */
@@ -76,10 +78,13 @@ typedef struct {                     /* the note manager's word to the voices, p
 typedef struct {
     syv_voice_t v[SYV_NV];
     syv_note_t n[SYV_NV];
+    float pend_pk[SYV_BANDS];
+    syv_s32 pend_b0[SYV_BANDS];      /* mono: a band waiting to be a note since this block (-1: none) */
     float rc_prev[4][SYV_BANDS];     /* the readings of the last four blocks, in cents (settling) */
-    syv_u8 run[SYV_BANDS];           /* SY test 13: the blocks each band has sounded in a row */
-    syv_u8 seen[SYV_BANDS];          /*   1 once this run of it was a note's or was weighed as a new one */
-    syv_u8 started, pad[2];
+    float e_prev[4][SYV_BANDS];      /* the energies of the last four blocks (a fundamental building up) */
+    syv_u8 prev[SYV_BANDS];
+    syv_u8 run[SYV_BANDS];           /* SY test 15: the blocks each band has sounded in a row (WAIT) */
+    syv_u8 started, guard, pad;      /* guard: GUARD, this block (the voices' resume) */
     syv_s32 blk;
     float dcx, dcy;
     syv_u32 cost;                    /* voices rendered in the last block */
@@ -91,9 +96,8 @@ typedef struct {
 } syv_state_t;
 
 /* One block: the bands' levels (tg, 0 = not sounding), periods (12 kHz samples), energies and periods counted since
- * each woke (nper; SY test 12); vref the level a full pick reads. The output stage (as sy_fp.c's before): the soft
- * clip (1.5x - 0.5x^3, +-1 beyond), the fade (mg towards mgt by `fade` a sample) and x `scale` to out (truncated).
- * Returns the fade. */
+ * each woke (nper; SY test 12, unused since test 15); vref the level a full pick reads. The output stage (as sy_fp.c's before): the soft clip (1.5x - 0.5x^3, +-1 beyond), the fade (mg towards
+ * mgt by `fade` a sample) and x `scale` to out (truncated). Returns the fade. */
 float syv_block(syv_state_t *s, const syv_patch_t *tone, const syv_knobs_t *k, const float *tg, const float *per,
                 const float *e, const syv_u8 *nper, float vref, float mg, float mgt, float fade, float scale,
                 syv_s32 *out);
