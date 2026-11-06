@@ -53,16 +53,16 @@ float wave_eval(u32 type, float p, float d, float dt, float r);
 #endif
 
 #define FS 48000.0f
-/* the note manager (SY test 13, v5; scored on the user's clean recording): blocks of 64 samples (1.33 ms) */
+/* the note manager (SY test 14, v5; scored on the user's clean recording): blocks of 64 samples (1.33 ms) */
 #define SKIP_P 4                    /* sy_fp.c's SY_SKIP: a band's first periods after it wakes read its centre */
 #define PROB 24                     /* a young note (test 11): this many blocks on, at PROB_HOLD of its peak and */
 #define PROB_HOLD 0.5f              /*   settled (STABLE cents over 4 blocks) it is a note in full; till then it */
 #define STABLE 15.0f                /*   sounds at its band's own level, so a blip stays as faint as its band */
 #define OFF_MAX 3                   /* a note in full rides this many blocks of its band off; a young one none */
 #define HAND_C 17.0f                /* a band starting next to a note's band, reading its pitch within this: takes it on */
-#define HOLD_N 6                    /* a band sounds this many blocks before it is a new note, */
-#define HOLD_H 12                   /*   this many when +-1 band from a whole multiple of a sounding note's, */
-#define HOLD_M 10                   /*   this many for a mono tone (its one voice jumps to every new note) */
+#define HOLD_N 2                    /* a band sounds this many blocks before it is a new note (test 14: 2, was 6), */
+#define HOLD_H 2                    /*   this many when +-1 band from a whole multiple of a sounding note's (was 12), */
+#define HOLD_M 2                    /*   this many for a mono tone (was 10) */
 #define RESUME 20                   /* a note's band back within this many blocks of its end, */
 #define REPICK 1.6f                 /*   no louder than this x its last level: it goes on; a re-pick: this x the level */
 #define RP_LO 0.8f                  /*   8 blocks before, which was under RP_LO x the peak, back over RP_HI x the */
@@ -370,9 +370,10 @@ static inline float note_level(const syv_note_t *n, const float *tg) {
  * and held back bands near a note's overtones: late notes, chords without their sevenths and ninths). The bands that
  * sound are the analysis's (sy_fp.c: a band owns, the gate, the hold, FUND), the ones test 10 gave an oscillator each,
  * and no band is held back: every note of a chord sounds, as in tests 10 and 11. A band that has sounded HOLD_N blocks
- * (8 ms; HOLD_H, 16 ms, +-1 band from a whole multiple of a sounding note; HOLD_M, 13 ms, on a mono tone) is a note:
- * most of the pick's blips are gone by then (on the user's recording, 64% of the bands starting from E4 up, 9% of the
- * played notes' own band starts). A partial moving between bands keeps its note, as test 10's oscillator moved with it:
+ * is a note (test 13 waited 8 ms, 16 ms near a sounding note's overtones, 13 ms mono: "still too much latency"; test
+ * 14 waits 2 blocks, at most 2.7 ms, for poly and mono alike, which on the user's recording leaves the notes' starts
+ * where test 10's were and drops the one-block blips). A partial moving between bands keeps its note, as test 10's
+ * oscillator moved with it:
  *  - a band beginning next to a note's band, reading the note's pitch (HAND_C, test 10's 1%), takes the note on;
  *  - a young note's band going quiet as a band a whole multiple below sounds (the pick's overtone came first) moves
  *    the note down to it;

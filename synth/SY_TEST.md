@@ -1,4 +1,4 @@
-# SY synth tests 1 to 13: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 14: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -798,6 +798,25 @@ fault.)
 
 **Demos:** `release\..\demos\sy-voice-demos4` has the recording through test 11 and test 13, on five tones.
 
+## SY synth test 14 (sy-synth-test14): test 13 with test 10's timing
+
+The user on test 13: "still too much latency". Test 13 waited HOLD_N 6 blocks (8 ms) before a band was a new note,
+HOLD_H 12 (16 ms) when the band was +-1 from a whole multiple of a sounding note (in a chord or a melody, a good share
+of the notes), and HOLD_M 10 (13 ms) on a mono tone.
+
+- **Test 14 waits 2 blocks** for every new note, poly and mono (HOLD_N = HOLD_H = HOLD_M = 2: at most 2.7 ms). On the
+  user's clean recording that leaves the notes' starts where test 10's bands began (median +0 ms, 90% within 1.3 ms),
+  and keeps out the one-block blips. Mono tones now start about 13 ms sooner than test 11's, whose mono confirmed 10
+  blocks.
+- **Kept from test 13:** no band held back (every chord note); the moves without a new attack (a neighbour band reading
+  the note's pitch, an overtone giving way to its fundamental, a band back after a dip); a blip never takes a held
+  string's voice; mono's takeover in a note's first 20 blocks moves it.
+- **The cost:** the blips test 13's wait removed are back in part. On the recording, POLY PAD: 1415 attacks in the
+  runs, 1190 under 60 ms (test 11: 2084 and 1840; test 13: 766 and 556), 539 in the chords (test 11: 1226; test 13:
+  295). Mono (LADDER LEAD): 365 attacks, 187 under 60 ms (test 11: 339 and 149), 191 in the chords (test 11: 225).
+
+**Emulator checks:** 352 pass on `release/sy-synth-test14`.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -816,6 +835,7 @@ fault.)
 - Test 10: whether a looper take made from the guitar synth screen has the synth in it.
 - Test 11: which tones sound good on a real guitar; whether the pick's blips or settling notes are heard; the engine's real cycles on the unit (the readout's SY line), and whether SLOW ever stops it.
 - Test 12 on the unit: "awful" (late notes, chords without character); replaced by test 13.
-- Test 13: whether it responds like test 10 on the unit, whether chords sound full, and how many of the pick's blips are still heard (8 ms of hold on every new note).
+- Test 13 on the unit: "still too much latency"; replaced by test 14.
+- Test 14: whether the timing matches test 10 on the unit, and whether the blips that are left are acceptable.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.
