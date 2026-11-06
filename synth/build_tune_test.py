@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test15'
+REVISION = 'sy-synth-test16'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1093,7 +1093,15 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 15: test 11 again (its sy_voice.c, b322ab2: the user wants its tones and '
+        description='SY synth test 16: test 15 on the unit: "subtle clicking" in chords, and on PUNCH BASS '
+                    '"on note release triggers multiple extra notes no matter settings". The clicks: a young note '
+                    'ends over 10 ms (was 3), a faint voice once rendered stays rendered, and GUARD gives a sounding '
+                    'note\'s voice (young or not) only to a band 1.5x louder. The release notes: SENS weighs a new '
+                    'note against a held peak of the playing (-20 dB in 0.6 s); GUARD on a mono tone keeps a weaker '
+                    'band from taking the note and rides its band\'s gaps (to 27 ms, unless the string stopped); '
+                    'GUARD\'s third position, PICK (mono tones), lets only a band begun within 60 ms of a pick (test '
+                    '10\'s rule again, in sy_fp.c) be a new note. '
+                    'SY synth test 15: test 11 again (its sy_voice.c, b322ab2: the user wants its tones and '
                     'tracking), plus a TRACK page (SHIFT tapped twice) of three settings for every tone, each 0 as '
                     'test 11: WAIT (0-16 ms before a band is a new note), SENS (a new note\'s least level, 0-50% of '
                     'the loudest band) and GUARD (test 13\'s moves without a new attack, a held string\'s voice kept '

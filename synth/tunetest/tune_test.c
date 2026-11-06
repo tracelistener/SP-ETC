@@ -1240,7 +1240,8 @@ UI_SMALL static void sy_ready(void) {
         u32 w = sy_file[SY_FILE_BUS + 1u], se = sy_file[SY_FILE_BUS + 2u];   /* SY test 15: the TRACK page */
         s->trk[0] = (u8)(w <= SY_WAIT_MAX ? w : 0u);
         s->trk[1] = (u8)(se <= SY_SENS_MAX ? se : 0u);
-        s->trk[2] = (u8)(sy_file[SY_FILE_BUS + 3u] & 1u);
+        u32 g = sy_file[SY_FILE_BUS + 3u];             /* test 16: 0 OFF, 1 ON, 2 PICK */
+        s->trk[2] = (u8)(g <= 2u ? g : 0u);
     }
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
     s->muted = sy_file[6] & 1u;
@@ -1414,7 +1415,7 @@ UI_SMALL SCREEN static void sy_screen_knob(sy_t *s, u32 k, s32 pos) {
     s->turns++;
     if (page == 2u)
         s->trk[k] = (u8)(k == 0 ? (pos * (s32)(SY_WAIT_MAX + 1u)) >> 7 : k == 1u ? (pos * (s32)(SY_SENS_MAX + 1u)) >> 7 :
-                         pos >= 64);
+                         (pos * 3) >> 7);              /* test 16: GUARD OFF / ON / PICK in thirds */
     else if (!page)
         s->knob[tone][k == 0 ? 1 : k == 1u ? 0 : 2] = (s8)(pos - 64);
     else if (k == 0)
@@ -1642,7 +1643,7 @@ EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
     else if (i == 7)
         p = put_u(p, s->trk[1]);
     else
-        p = put_str(p, s->trk[2] ? "ON" : "OFF");
+        p = put_str(p, s->trk[2] >= 2u ? "PICK" : s->trk[2] ? "ON" : "OFF");
     *p = 0;
 }
 

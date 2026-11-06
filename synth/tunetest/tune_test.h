@@ -247,6 +247,8 @@ typedef struct __attribute__((aligned(32))) {
     u32 tone;                               /* the tone playing */
     u32 started, blocks, crossings;
     u32 fund_cut;                           /* test 5: band-blocks FUND silenced (whole multiples of a lower band) */
+    float peaks[32];                        /* SY test 16: the blocks' input peaks (test 10's pick rule) */
+    s32 last_pick;                          /*   the block of the last pick */
 } sy_block_t;
 
 extern sy_t sy;

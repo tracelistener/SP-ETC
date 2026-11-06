@@ -1,4 +1,4 @@
-# SY synth tests 1 to 15: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 16: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -847,6 +847,43 @@ the lag the user felt was not when the notes start; tests 12-14 had all changed 
 
 **Emulator checks:** 360 pass on `release/sy-synth-test15`.
 
+## SY synth test 16 (sy-synth-test16): fewer clicks, and no extra notes when a note is let go
+
+The user on test 15: it "works better but seems to be subtle clicking (using chords with first few patches)", and
+"if i test single notes on like punch bass, on note release triggers multiple extra notes no matter settings".
+
+- **The release notes, measured** (sy15/release.py: the Sound Generator tracker's note-offs on the user's recording,
+  the synth's attacks from 20 ms before to 400 ms after each). PUNCH BASS, test 11's tracking: 243 attacks around 134
+  note-offs, up to 18 after one; most very quiet (median 5% of the note let go), median 95 ms after it. SENS could not
+  stop them: it weighed a new note against the loudest band at that moment, which after a release is the quiet sound
+  itself. The loud rest were other pitches, many below the note (an open string ringing as the finger lifts).
+- **SENS** now weighs a new note against the louder of the loudest band and a held peak of it (PKH_DK 0.995 a block:
+  -20 dB in 0.6 s; state pkh, updated in syv_block).
+- **GUARD on a mono tone:** a band weaker than the note sounding does not take it over at any age (test 11: while
+  the note was young); the note rides its band's gaps for G_RIDE (20) blocks unless the band's energy falls under G_END
+  (0.1) of its last (the string stopped), so a held note's dropout neither ends it nor needs a new start.
+- **PICK, GUARD's third position** (CTRL 3 in thirds: OFF, ON, PICK; file byte 131 0..2): mono tones only (on a poly
+  tone a strum's later strings make no pick of their own, so chords lost their notes; there PICK is ON). The pick is
+  test 10's rule again (sy_fp.c and sy_ref.py: a block's input peak at P_RATIO 2x the highest of blocks 3..18 back,
+  over P_MIN, REFRACTORY 24 blocks), passed down as the blocks since it (syv_knobs_t.since, 255 long ago). With PICK a
+  pending band is a note only if it began within P_WIN_M (45) blocks of a pick, whenever it confirms.
+- **The clicks:** a young note's fast release over 10 ms (crf 0.990454 a sample; test 11: 3 ms); a faint voice (under
+  5%) still waits to be rendered at its start, as test 11's did, but once rendered it stays rendered to its end (test 11
+  left it out again whenever it fell under 5%, a step each way); and GUARD gives a sounding note's voice, young or not,
+  only to a band G_STEAL (1.5x) louder (test 15 also gave a quieter young note's voice away: a strum's strings, young
+  together, lost theirs to blips).
+- **At all 0** the voices are no longer test 11's value for value on poly tones (the faint voices and the 10 ms
+  release): their 10 ms levels are a median 0.4-0.6 dB from test 11's on the recording. Mono tones at all 0 still match
+  it exactly.
+- **On the recording.** PUNCH BASS (attacks around note-offs, the most after one; the runs' attacks and short ones):
+  test 11 243 (18), 339 / 149; GUARD ON 163 (6), 247 / 48; PICK 82 (4), 161 / 27; PICK + SENS 20 68 (4), 144 / 15;
+  135 of 136 notes heard in each, no later. POLY PAD with GUARD ON: runs 1452 / 1225 (test 11: 2084 / 1840), chords 609
+  attacks, 3.3 voices sounding; with SENS 20, runs 721 / 571.
+- **Slots:** g_down() back in .syvnotes (4878 of 5632); .syvdata 3680 of 3840; sy_block_t gains peaks[32] and
+  last_pick (2368 bytes).
+
+**Emulator checks:** 360 pass on `release/sy-synth-test16`.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -867,6 +904,7 @@ the lag the user felt was not when the notes start; tests 12-14 had all changed 
 - Test 12 on the unit: "awful" (late notes, chords without character); replaced by test 13.
 - Test 13 on the unit: "still too much latency"; replaced by test 14.
 - Test 14 on the unit: "no better"; replaced by test 15.
-- Test 15: which TRACK settings sound best on the unit, and which artifacts they leave.
+- Test 15 on the unit: "works better", subtle clicks in chords, extra notes on release; replaced by test 16.
+- Test 16: whether the clicks are gone on the unit, and whether PICK and SENS stop the release notes.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

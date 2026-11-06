@@ -267,7 +267,8 @@ __declspec(dllexport) unsigned syv_cost(const syv_state_t *s) {{ return s->cost;
 class _Knobs(ctypes.Structure):
     _fields_ = [('tone', ctypes.c_int8), ('p2', ctypes.c_int8), ('level', ctypes.c_int8), ('oct', ctypes.c_uint8),
                 ('sus', ctypes.c_uint8), ('dyn', ctypes.c_uint8), ('wait', ctypes.c_uint8), ('sens', ctypes.c_uint8),
-                ('guard', ctypes.c_uint8), ('pad', ctypes.c_uint8 * 3)]   # SY test 15: the TRACK page
+                ('guard', ctypes.c_uint8), ('since', ctypes.c_uint8),
+                ('pad', ctypes.c_uint8 * 2)]   # SY test 15: the TRACK page; 16: since, blocks since the last pick
 
 
 _DLLS = {}
@@ -294,10 +295,11 @@ class Host:
     def tone(self, i):
         return self.lib.syv_tone(i)
 
-    def set_knobs(self, tone=0, p2=0, level=0, oct=0, sus=0, dyn=0, wait=0, sens=0, guard=0):
+    def set_knobs(self, tone=0, p2=0, level=0, oct=0, sus=0, dyn=0, wait=0, sens=0, guard=0, since=255):
         self.knobs.tone, self.knobs.p2, self.knobs.level = tone, p2, level
         self.knobs.oct, self.knobs.sus, self.knobs.dyn = oct, sus, dyn
         self.knobs.wait, self.knobs.sens, self.knobs.guard = wait, sens, guard   # SY test 15: the TRACK page
+        self.knobs.since = since                                                 # SY test 16
 
     def block(self, tone_index, tg, per, e, nper, vref=None, mg=1.0, mgt=1.0, fade=1.0, scale=1.0):
         """One block from the bands' levels, periods (12 kHz samples), energies and periods counted since each woke

@@ -1703,13 +1703,13 @@ def sy_tone_checks(img, man):
     # 1b. SY test 15: the TRACK page set (WAIT 4, SENS 20, GUARD on) on a poly, a mono and an SG tone: the module's
     #     output = sy_ref.py's with the same settings, value for value, and not test 11's (the settings reach the notes).
     tmism, tdiff, tworst = [], {}, 0
-    for tone in (0, 7, 18):
+    for tone, guard in ((0, 1), (7, 2), (18, 2)):                     # SY test 16: GUARD 2 is PICK
         mt = SyMachine(img, man)
         mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
-        mt.uc.mem_write(sym['sy'] + mt.sl.trk, bytes([4, 20, 1, 0]))
+        mt.uc.mem_write(sym['sy'] + mt.sl.trk, bytes([4, 20, guard, 0]))
         mt.start()
         eng = sy_ref.Engine(tone)
-        eng.trk = [4, 20, 1]
+        eng.trk = [4, 20, guard]
         plain = sy_ref.Engine(tone)
         differs = 0
         for b, values in enumerate(blocks):
@@ -1727,8 +1727,9 @@ def sy_tone_checks(img, man):
                 tmism.append((tone, b))
         tdiff[sy_voices.VOICES[tone]['name']] = differs
     check(not tmism and all(v > 0 for v in tdiff.values()) and tworst <= SY_STEP_MAX,
-          f'SY test 15: with the TRACK page set (WAIT 4, SENS 20, GUARD on) the module\'s output = sy_ref.py\'s with the '
-          f'same settings, value for value (POLY PAD, LADDER LEAD, SG PLUCK x {len(blocks)} blocks; first differences '
+          f'SY test 15: with the TRACK page set (WAIT 4, SENS 20, GUARD ON; PICK on the last two: test 16) the module\'s '
+          f'output = sy_ref.py\'s with the same settings, value for value (POLY PAD, LADDER LEAD, SG PLUCK x '
+          f'{len(blocks)} blocks; first differences '
           f'{tmism[:3]}), unlike the settings at 0 in blocks {tdiff}; the most instructions a step takes {tworst}')
     # 2. Test 5: a tone change while playing, from the screen (the Sound Generator page in SY mode): VALUE steps SOUND
     #    1 -> 9; out over 8 blocks, the new tone from rest, in over 8, value for value.
@@ -2104,6 +2105,8 @@ def sy_screen_checks(img, man):
     trk = list(m.sy()['trk'])
     m.ev(EV_KNOB, 3, 20)
     guard_off = m.sy()['trk'][2]
+    m.ev(EV_KNOB, 3, 64)
+    guard_on = (m.sy()['trk'][2], [d[3] for d in m.draw_column(2, 0x7D) if d[0] == 'text'])
     m.ev(EV_KNOB, 3, 100)
     m.ev(EV_KEY, KEY_SHIFT)
     m.ev(EV_KEY_UP, KEY_SHIFT)
@@ -2111,12 +2114,12 @@ def sy_screen_checks(img, man):
     t_writes = [w for w in m.files.writes if w[0] == SY_PATH]
     t_file = t_writes[-1][1] if t_writes else b''
     texts3 = [[d[3] for d in c if d[0] == 'text'] for c in cols3]
-    check(page_t == 2 and t_before == [0, 0, 0, 0] and trk == [12, 25, 1, 0] and guard_off == 0 and page_back == 0 and
-          texts3 == [['WAIT MS', '16'], ['SENS', '25'], ['GUARD', 'ON']] and len(t_file) == 136 and
-          list(t_file[129:132]) == [12, 25, 1] and m.sy()['knob'][3] == m.sy()['knob'][3],
+    check(page_t == 2 and t_before == [0, 0, 0, 0] and trk == [12, 25, 2, 0] and guard_off == 0 and page_back == 0 and
+          guard_on == (1, ['GUARD', 'ON']) and texts3 == [['WAIT MS', '16'], ['SENS', '25'], ['GUARD', 'PICK']] and
+          len(t_file) == 136 and list(t_file[129:132]) == [12, 25, 2],
           f'SY test 15: SHIFT\'s third tap shows the TRACK page (every tone): CTRL 1 WAIT 0..12 blocks (in ms: 127 '
-          f'shows 16), CTRL 2 SENS 0..50 (64: 25), CTRL 3 GUARD (the upper half on, the lower off); the next tap goes '
-          f'back to the first page; the file keeps them in its spare bytes 129-131 ({texts3}, {trk}, '
+          f'shows 16), CTRL 2 SENS 0..50 (64: 25), CTRL 3 GUARD in thirds (SY test 16: OFF, ON, PICK); the next tap '
+          f'goes back to the first page; the file keeps them in its spare bytes 129-131 ({texts3}, {trk}, '
           f'{list(t_file[129:132]) if t_file else None})')
     foot = m.draw_footer()
     texts = [[d[3] for d in c if d[0] == 'text'] for c in cols + cols2]

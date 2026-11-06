@@ -70,6 +70,7 @@ static void sy_init(sy_block_t *b, const sy_t *s) {
     }
     b->mg = 1.0f;
     b->tone = s->tone_req < SYV_TONES ? s->tone_req : 0u;
+    b->last_pick = -1000;                               /* SY test 16 */
     b->started = 1;
     syv_reset(&syv_state);
 }
@@ -249,6 +250,19 @@ u32 sy_fp_step(sy_t *s) {
     u32 req = s->tone_req;
     if (req >= SYV_TONES) req = b->tone;
     float pk = sy_input(b, x12, dx);
+    {                                                   /* SY test 16: a pick (test 10's rule), for GUARD's PICK */
+        u32 blk = b->blocks;
+        b->peaks[blk & 31u] = pk;
+        if (blk >= SY_P_TO) {
+            float ref = 0.0f;
+            for (u32 kk = SY_P_FROM; kk <= SY_P_TO; kk++) {
+                float v = b->peaks[(blk - kk) & 31u];
+                ref = v > ref ? v : ref;
+            }
+            if (pk >= SY_P_MIN && pk >= SY_P_RATIO * ref && (s32)blk - b->last_pick >= (s32)SY_REFRACTORY)
+                b->last_pick = (s32)blk;
+        }
+    }
     float ev = b->env * SY_ENV_K;
     b->env = pk > ev ? pk : ev;
     b->crossings += sy_bands(b, dx);
@@ -264,7 +278,11 @@ u32 sy_fp_step(sy_t *s) {
     kn.wait = s->trk[0];                                /* SY test 15: the TRACK page (every tone) */
     kn.sens = s->trk[1];
     kn.guard = s->trk[2];
-    kn.pad[0] = kn.pad[1] = kn.pad[2] = 0;
+    {
+        s32 since = (s32)b->blocks - b->last_pick;      /* SY test 16: blocks since the last pick */
+        kn.since = (u8)(since > 255 ? 255 : since);
+    }
+    kn.pad[0] = kn.pad[1] = 0;
     float mgt = (s->stopping || req != b->tone) ? 0.0f : 1.0f;
     float mg = syv_block(&syv_state, &SYV_TONE[t], &kn, b->amp, b->per, b->e, b->nper, SYV_VREF, b->mg, mgt,
                          SY_FADE, SY_OUT_SCALE, s->out);

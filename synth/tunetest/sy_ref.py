@@ -496,6 +496,15 @@ class Engine:
                 pk = a if a > pk else pk
         ev = self.env * G['ENV_K']
         self.env = pk if pk > ev else ev
+        blk = self.blocks                               # SY test 16: a pick (test 10's rule), for GUARD's PICK
+        self.peaks[blk & 31] = pk
+        if blk >= P_TO:
+            ref = F32(0)
+            for kk in range(P_FROM, P_TO + 1):
+                v = self.peaks[(blk - kk) & 31]
+                ref = v if v > ref else ref
+            if pk >= G['P_MIN'] and pk >= G['P_RATIO'] * ref and blk - self.last_pick >= REFRACTORY:
+                self.last_pick = blk
         dx = np.empty(SUB, F32)
         dx[0] = x12[0] - self.xh[0]
         dx[1] = x12[1] - self.xh[1]
@@ -599,7 +608,7 @@ class Engine:
         t = self.tone
         h = self.host()
         h.set_knobs(*[int(v) for v in self.knobs[t]], int(self.octs[t]), int(self.suss[t]), int(self.dyns[t]),
-                    *[int(v) for v in self.trk])
+                    *[int(v) for v in self.trk], min(self.blocks - self.last_pick, 255))
         mgt = F32(0) if stopping or tone_req != self.tone else F32(1)
         res, mg = h.block(t, tg, per, e, nper, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
                           scale=float(G['OUT_SCALE']))

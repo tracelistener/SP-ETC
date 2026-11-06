@@ -46,7 +46,8 @@ typedef struct {
  * loudest band) and GUARD (0 off, 1 on); 0 each is test 11's tracking. */
 typedef struct {
     syv_s8 tone, p2, level;
-    syv_u8 oct, sus, dyn, wait, sens, guard, pad[3];
+    syv_u8 oct, sus, dyn, wait, sens, guard, since, pad[2];   /* SY test 16: GUARD 2 = PICK; since: blocks since
+                                                               the input's last pick (255: long ago) */
 } syv_knobs_t;
 
 /* P2 kinds (CTRL 1): what it moves */
@@ -59,12 +60,13 @@ typedef struct {
     float ph[3], phs, phm, phm2, uph[7], phl;
     float f, aenv, fenv, y[4], ic1, ic2, g, c1, c2, c3, t, vel, lev, conf, m1, m2, rnd, sgprev;
     syv_u32 ns, tick;
-    syv_u8 astg, fstg, active, fast;
+    syv_u8 astg, fstg, active, fast, lit, pad[3];   /* lit: SY test 16, rendered since its start */
 } syv_voice_t;
 
 typedef struct {
     float peak, c, r, lev, hist[9];
     float last;                      /* SY test 15: its band's last level (GUARD) */
+    float elast;                     /* SY test 16: its band's last energy (mono's ride) */
     syv_s32 start, rel, rp;
     syv_s8 band;
     syv_u8 gate, off, young, fast, nh, trig, pad;
@@ -85,6 +87,7 @@ typedef struct {
     syv_u8 prev[SYV_BANDS];
     syv_u8 run[SYV_BANDS];           /* SY test 15: the blocks each band has sounded in a row (WAIT) */
     syv_u8 started, guard, pad;      /* guard: GUARD, this block (the voices' resume) */
+    float pkh;                       /* SY test 16: the held peak of the loudest band (-20 dB in 0.6 s): SENS's level */
     syv_s32 blk;
     float dcx, dcy;
     syv_u32 cost;                    /* voices rendered in the last block */
