@@ -249,10 +249,29 @@ typedef struct __attribute__((aligned(32))) {
     u32 fund_cut;                           /* test 5: band-blocks FUND silenced (whole multiples of a lower band) */
     float peaks[32];                        /* SY test 16: the blocks' input peaks (test 10's pick rule) */
     s32 last_pick;                          /*   the block of the last pick */
+    float es[SY_BANDS];                     /* SY test 18: the band's energy followed over about 32 blocks */
+    u8 struck[SY_BANDS];                    /*   blocks left of a strike (its energy at SY_RISE x es lately) */
+    u8 fresh[SY_BANDS];                     /*   a string struck at a multiple of a lower one ringing: FUND spares it
+                                               while it owns */
+    u8 oage[SY_BANDS];                      /*   blocks it has owned in a row (to 255) */
 } sy_block_t;
+
+/* SY test 18: the crash catcher's record (section .sycrash: the top of the SY slot, which no boot row writes, so it
+ * outlives the reset the fault handler asks for). */
+typedef struct {
+    u32 exc;                                /* the exception (IPSR: 3 HardFault, 4 MemManage, 5 BusFault, 6 Usage) */
+    u32 pc, lr, psr, sp;                    /* the stacked PC, LR and xPSR; the stack the fault came from */
+    u32 cfsr, hfsr, mmfar, bfar;            /* the SCB's fault status and address registers */
+    u32 ret;                                /* the handler's EXC_RETURN */
+    u32 blocks;                             /* the SY engine's blocks so far (sy_block.blocks) */
+    u32 page;                               /* the page up */
+    u32 sum;                                /* FNV-1a of the words above */
+    u32 magic;                              /* CRASH_MAGIC while it holds a crash not shown yet */
+} crash_t;
 
 extern sy_t sy;
 extern sy_block_t sy_block;
+extern volatile crash_t sy_crash;
 
 /* sy_fp.c */
 u32 sy_fp_call(u32 (*fn)(sy_t *), sy_t *arg, void *stack_top);

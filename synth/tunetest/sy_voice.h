@@ -46,8 +46,9 @@ typedef struct {
  * loudest band) and GUARD (0 off, 1 on); 0 each is test 11's tracking. */
 typedef struct {
     syv_s8 tone, p2, level;
-    syv_u8 oct, sus, dyn, wait, sens, guard, since, pad[2];   /* SY test 16: GUARD 2 = PICK; since: blocks since
-                                                               the input's last pick (255: long ago) */
+    syv_u8 oct, sus, dyn, wait, sens, guard, since;   /* SY test 16: GUARD 2 = PICK; since: blocks since the input's
+                                                       last pick (255: long ago) */
+    syv_u8 law, pad[1];              /* SY test 18: the TRACK page's LAW (0 off, 1 SY 1:1, 2 SY 2:1); WAIT is 0 */
 } syv_knobs_t;
 
 /* P2 kinds (CTRL 1): what it moves */
@@ -62,6 +63,7 @@ typedef struct {
     syv_u32 ns, tick;
     syv_u8 astg, fstg, active, fast, lit, soft, gl, pad;   /* lit: SY test 16, rendered since its start; soft,
                                                        gl: test 17, a start without a pick, gliding to a new note */
+    float lawf;                      /* SY test 18: LAW's factor, followed block by block */
 } syv_voice_t;
 
 typedef struct {
@@ -70,12 +72,14 @@ typedef struct {
     float elast;                     /* SY test 16: its band's last energy (mono's ride) */
     float cf;                        /* SY test 17: its confidence while young */
     syv_s32 start, rel, rp, born;    /* born: SY test 17, the block its band began */
+    syv_s32 took;                    /* SY test 18: the block it last took a string (a start, a mono takeover) */
     syv_s8 band;
     syv_u8 gate, off, young, fast, nh, trig, soft, glide;   /* soft, glide: SY test 17 */
 } syv_note_t;
 
 typedef struct {                     /* the note manager's word to the voices, per block */
     float gate[SYV_NV], freq[SYV_NV], vel[SYV_NV], lev[SYV_NV], conf[SYV_NV];
+    float law[SYV_NV];               /* SY test 18: LAW's factor for the voice's band */
     syv_u8 trig[SYV_NV], fast[SYV_NV], soft[SYV_NV], glide[SYV_NV];   /* soft, glide: SY test 17 */
 } syv_ctl_t;
 
@@ -83,12 +87,15 @@ typedef struct {
     syv_voice_t v[SYV_NV];
     syv_note_t n[SYV_NV];
     float rc_prev[4][SYV_BANDS];     /* the readings of the last four blocks, in cents (settling) */
+    syv_u8 onset[SYV_BANDS];         /* SY test 18: a sounding band the analysis saw struck (its string picked, the
+                                        pick seen or not) */
     syv_u8 run[SYV_BANDS];           /* SY test 15: the blocks each band has sounded in a row (WAIT) */
     syv_u8 started, guard, pad;      /* guard: GUARD, this block (the voices' resume) */
     float pkh;                       /* SY test 16: the held peak of the loudest band (-20 dB in 0.6 s): SENS's level */
     float ga, gf;                    /* SY test 17: the pick's amp and filter envelopes (every voice's) */
     syv_u8 gastg, gfstg, pick, anygate;   /*   their stages; a pick this block; a voice's band sounding */
     syv_u8 since, gpad[3];           /*   blocks since the input's pick (255: long ago) */
+    syv_s32 gat;                     /* SY test 18: the block the envelopes last (re)started */
     syv_s32 blk;
     float dcx, dcy;
     syv_u32 cost;                    /* voices rendered in the last block */
@@ -100,11 +107,13 @@ typedef struct {
     syv_ctl_t ctl;
 } syv_state_t;
 
-/* One block: the bands' levels (tg, 0 = not sounding), periods (12 kHz samples), energies and periods counted since
- * each woke (nper; SY test 12, unused since test 15); vref the level a full pick reads. The output stage (as sy_fp.c's before): the soft clip (1.5x - 0.5x^3, +-1 beyond), the fade (mg towards
- * mgt by `fade` a sample) and x `scale` to out (truncated). Returns the fade. */
+/* One block: the bands' levels (tg, 0 = not sounding), periods (12 kHz samples), energies and, SY test 18, the blocks
+ * left of each band's strike (struck: its energy at 2 x its last 32 blocks' lately, sy_fp.c's; tests 12-17 passed the
+ * periods counted since each woke here, unused since test 15); vref the level a full pick reads. The output stage (as
+ * sy_fp.c's before): the soft clip (1.5x - 0.5x^3, +-1 beyond), the fade (mg towards mgt by `fade` a sample) and x
+ * `scale` to out (truncated). Returns the fade. */
 float syv_block(syv_state_t *s, const syv_patch_t *tone, const syv_knobs_t *k, const float *tg, const float *per,
-                const float *e, const syv_u8 *nper, float vref, float mg, float mgt, float fade, float scale,
+                const float *e, const syv_u8 *struck, float vref, float mg, float mgt, float fade, float scale,
                 syv_s32 *out);
 void syv_reset(syv_state_t *s);
 

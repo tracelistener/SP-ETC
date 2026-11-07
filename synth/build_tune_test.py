@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test17'
+REVISION = 'sy-synth-test18'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -111,7 +111,14 @@ SY_SLOT = (0x83FE6000, 0x83FE8000)
 SY_BSS = (0x83FE6000, 0x83FE6C00)
 # SY test 5: the guitar synth screen's code (tune_test.c's functions in section .sytext) in the rest of that slot, a boot
 # copy row of its own (the module's own slot is full)
-SY_TEXT = (0x83FE6C00, 0x83FE8000)
+SY_TEXT = (0x83FE6C00, 0x83FE7F80)
+# SY test 18: the crash catcher. Its record (sy_crash, section .sycrash) in the top 128 bytes of that slot, under no
+# boot row (so it outlives the reset the handler asks for); the ITCM vector table (a boot copy row to 0x0, VTOR from the
+# literal at 0x60080044) sends HardFault, MemManage, BusFault and UsageFault to sy_fault (tune_test.c).
+CRASH = (0x83FE7F80, 0x83FE8000)
+VTOR_LITERAL = 0x60080044
+FAULT_VECTORS = ((0x0000000C, 0x8003C921, 'HardFault'), (0x00000010, 0x800406A9, 'MemManage'),
+                 (0x00000014, 0x80036119, 'BusFault'), (0x00000018, 0x800437D1, 'UsageFault'))
 # SY test 11: the voice-per-note engine (sy_voice.c) in slots nothing in v9.52 uses (a test build's: each one is
 # checked free in the input, rows and references): its code in the CPU meter's and bounce probe's test slots, the note
 # manager in the free top of chromatic scales' 8 KB slot (its row ends at 0x83fd79ae), its state in the free top of FX
@@ -192,8 +199,10 @@ EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', '
            'memcpy', 'meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy_rx', 'sy_tx', 'sy_ui', 'sy_fp_call',
            'sy_fp_step', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file', 'sy_feed', 'sy_dt1', 'sy_route_dt1',
            'sy_event', 'sy_shown', 'sy_col_draw', 'sy_foot_draw', 'sy_sg_poll', 'sy_bar_name', 'sy_bar_text',
-           'sy_bar_poll', 'sy_bar_name_c', 'sy_bar_text_c', 'sy_bar_poll_c', 'sy_col_text', 'sy_foot_text')
-DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file')
+           'sy_bar_poll', 'sy_bar_name_c', 'sy_bar_text_c', 'sy_bar_poll_c', 'sy_col_text', 'sy_foot_text',
+           'sy_fault', 'sy_fault_c', 'sy_crash')
+DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file',
+        'sy_crash')
 
 # Exact instructions at and around every site (capstone text).
 GUARDS = [
@@ -739,9 +748,15 @@ def read_module(data, base, limit, extra=None, extra_text=None):
     extra_spans, sytext = [], []
     read_module.syv = {}                                # SY test 11: '.syvtext' / '.syvnotes' -> (address, bytes)
     read_module.syv_bss = []
+    read_module.crash = None                            # SY test 18: '.sycrash' -> (address, end), no row
     for name, kind, flags, addr, off, size, link, info, align, entsize in sections:
         if flags & 2 and size:
             sname = names[name:].split(b'\0')[0].decode('ascii')
+            if sname == '.sycrash':
+                if kind != 8 or not (CRASH[0] <= addr and addr + size <= CRASH[1]):
+                    raise ValueError(f'.sycrash at {addr:#x}+{size:#x}: expected NOBITS in {CRASH[0]:#x}..{CRASH[1]:#x}')
+                read_module.crash = (addr, addr + size)
+                continue
             if sname in SYV_CODE:
                 lo, hi = SYV_CODE[sname]
                 if kind == 8 or not (lo <= addr and addr + size <= hi):
@@ -840,6 +855,7 @@ SECTIONS {{
  .syvbss {SYV_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.syvbss)) }}
  .sybss {SY_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.sybss)) }}
  .sytext {SY_TEXT[0]:#x} : {{ KEEP(*(.sytext)) }}
+ .sycrash {CRASH[0]:#x} (NOLOAD) : {{ KEEP(*(.sycrash)) }}
  .syvtext {SYV_TEXT[0]:#x} : {{ KEEP(*(.syvtext)) *sy_voice.o(.text*) }}
  .syvdata {SYV_DATA[0]:#x} : {{ KEEP(*(.syvdata)) *sy_voice.o(.rodata*) }}
  /DISCARD/ : {{ *(.ARM.exidx*) *(.ARM.extab*) *(.comment) *(.note*) *(.ARM.attributes) }}
@@ -868,6 +884,9 @@ SECTIONS {{
     st = read_module.sytext
     if not st or st[0] != SY_TEXT[0] or st[0] + len(st[1]) > SY_TEXT[1]:
         raise ValueError(f'the screen\'s code (.sytext) not at {SY_TEXT[0]:#x} within its slot: {st and hex(len(st[1]))}')
+    if read_module.crash is None or read_module.crash[0] != CRASH[0] or syms.get('sy_crash') != CRASH[0]:
+        raise ValueError(f'sy_crash not at {CRASH[0]:#x}: {read_module.crash} {syms.get("sy_crash")}')   # SY test 18
+    compile_module.crash = read_module.crash
     compile_module.sytext = (st[0], st[1], (st[0], st[0] + len(st[1]), read_module.sytext_maps))
     if len(extra) != 1 or extra[0][0] != SY_BSS[0] or syms.get('sy_block') != SY_BSS[0]:
         raise ValueError(f'sy_block not alone at {SY_BSS[0]:#x}: {extra} {syms.get("sy_block")}')
@@ -1068,6 +1087,19 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
         patches.append(dict(address=addr, size=4, original_hex=bytes(img[off:off + 4]).hex(), replacement_hex=new.hex(),
                             target=syms[ours] & ~1, original_target=value & ~1, what=f'SY test 5, {what} -> {ours}'))
         img[off:off + 4] = new
+    # SY test 18: the crash catcher: the ITCM vector table's fault entries -> sy_fault (the table at 0x0: the reset
+    # handler's literal pair, SCB VTOR's address and the value it writes there)
+    if struct.unpack_from('<2I', img, VTOR_LITERAL - FLASH) != (0xE000ED08, 0):
+        raise ValueError(f'expected VTOR (0xe000ed08) := 0 from the literals at {VTOR_LITERAL:#x}: the table moved')
+    for addr, value, what in FAULT_VECTORS:
+        off = file_offset(img, addr, 4)
+        if struct.unpack('<I', bytes(img[off:off + 4]))[0] != value:
+            raise ValueError(f'{addr:#x}: expected the stock {what} vector {value:#x}')
+        new = struct.pack('<I', syms['sy_fault'] | 1)
+        patches.append(dict(address=addr, size=4, original_hex=bytes(img[off:off + 4]).hex(), replacement_hex=new.hex(),
+                            target=syms['sy_fault'] & ~1, original_target=value & ~1,
+                            what=f'SY test 18: the {what} vector -> sy_fault (the crash catcher)'))
+        img[off:off + 4] = new
     file_at = append(img, code, 16)
     sytext_at = append(img, sytext[1], 16)
     syv_at = append(img, syv['text'][1], 16)                   # SY test 11
@@ -1093,7 +1125,17 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 17: BOSS SY\'s way, test 10\'s tracking with test 11\'s voices (the user: "whole '
+        description='SY synth test 18: test 17 on the unit (FAT BASS, open strings): "most didn\'t sound", then a '
+                    'freeze with a steady high pitch until unplugged. Fixes: a string the pick detector misses (it '
+                    'misses picks over ringing strings) still plays: a band the analysis sees struck (its energy at 2x '
+                    'its last 43 ms) counts as picked; the pick\'s envelopes open again for a string after their '
+                    'release; mono takes the newest string (a struck band, steady 11 ms, at 0.3x the note), not over '
+                    'a struck string\'s partials; FUND spares a string struck at a multiple of a lower one that only '
+                    'rings (an open B or E over a ringing low E). TRACK\'s first setting is LAW (WAIT is gone): OFF, '
+                    'SY 1:1 (a band at r of its five bands\' loudest plays at r of its level, the SY-1000\'s decoded '
+                    'volume step), SY 2:1 (the square law). A crash catcher: the fault vectors keep the crash and '
+                    'reset the SP, then a popup shows where it stopped. '
+                    'SY synth test 17: BOSS SY\'s way, test 10\'s tracking with test 11\'s voices (the user: "whole '
                     'point was to emulate how boss sy pedals track"): no notes; every band the analysis sounds drives '
                     'a voice of its own (up to 6) from the block it begins, at its own tracked pitch and level; the '
                     'amp and filter envelopes are the pick\'s, one for every voice (started at each input pick, '

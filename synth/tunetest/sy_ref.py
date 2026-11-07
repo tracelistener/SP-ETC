@@ -99,6 +99,10 @@ GATE = 0.1                               # test 6: a band under 0.1 x the loudes
 HOLD = 4                                 # test 6: blocks a band sounds on after it stops owning,
 HOLD_E = 0.8                             #   while its energy keeps 0.8 x what it was when it last owned
 FUND_REL = 0.01                          # test 6: a lower band mutes a multiple only at 0.01 x its energy (-20 dB) or more
+FUND_RISE = 2.0                          # SY test 18: a band at 2 x its energy followed over about 32 blocks (ES_K)
+ES_K = 0.03125                           #   is struck, for STRUCK blocks; a struck multiple of lower bands that only
+STRUCK = 32                              #   ring is a string of its own (FUND spares it while it owns)
+OLD = 32                                 #   a lower band only rings once it has owned 32 blocks (43 ms) or more
 DYN_LEV = 0.1                            # test 6: DYNAMICS 0 puts every note at this band level
 LOG2_C = (1.4191330077337858, -0.5760056527240476, 0.15687264499026177)   # log2(1 + f) ~ f (c1 + f (c2 + f c3))
 SUS_MS0, SUS_STEP = 40.0, 0.08           # test 5, SUSTAIN s: a falling level's time constant 40 ms x 2^(0.08 s)
@@ -249,7 +253,7 @@ def tables():
              FADE=1 / (FADE_BLOCKS * FRAMES), AMP_EPS=AMP_EPS, P_MIN=P_MIN, P_RATIO=P_RATIO, GATE_K=GATE_K,
              X_MIN=X_MIN, BEAT=BLOCK_S / 6000, BLOCK_MS=BLOCK_MS, INV1200=1 / 1200, HARM_TOL=HARM_TOL,
              SUS_MS0=SUS_MS0, SUS_STEP=SUS_STEP, GATE2=GATE * GATE, DYN_L2=math.log2(DYN_LEV), L1=LOG2_C[0],
-             L2=LOG2_C[1], L3=LOG2_C[2], HOLD_E=HOLD_E, FUND_REL=FUND_REL)
+             L2=LOG2_C[1], L3=LOG2_C[2], HOLD_E=HOLD_E, FUND_REL=FUND_REL, RISE=FUND_RISE, ES_K=ES_K)
     g = {n: F32(v) for n, v in g.items()}
     tones = [tone_params(t) for t in TONES]
     return band, dec, g, tones
@@ -353,7 +357,7 @@ def c_header(tones=True):
              f'#define SY_OFF_PAD {OFF_PAD}u', f'#define SY_P_FROM {P_FROM}u', f'#define SY_P_TO {P_TO}u',
              f'#define SY_REFRACTORY {REFRACTORY}u', f'#define SY_AGE_MIN {AGE_MIN}u',
              f'#define SY_HARM_MAX {HARM_MAX}', f'#define SY_OCTAVES {len(OCTAVES)}u', f'#define SY_SKIP {SKIP}u',
-             f'#define SY_HOLD {HOLD}u']
+             f'#define SY_HOLD {HOLD}u', f'#define SY_OLD {OLD}u', f'#define SY_STRUCK {STRUCK}u']
     for n, v in G.items():
         lines.append(f'#define SY_{n} {hx(v)}')
     if tones:
@@ -458,10 +462,15 @@ class Engine:
         self.octs = np.zeros(n, np.int64)                # test 5: OCTAVE (0 as designed, 1..5)
         self.suss = np.zeros(n, np.int64)                # test 5: SUSTAIN (0 as designed, 1..101)
         self.dyns = np.zeros(n, np.int64)                # test 6: DYNAMICS (0 as designed, 1..101)
-        self.trk = [0, 0, 0]                             # SY test 15: the TRACK page: WAIT, SENS, GUARD (every tone)
+        self.trk = [0, 0, 0]                             # SY test 15: the TRACK page: WAIT, SENS, GUARD (every tone);
+                                                         # test 18: LAW, SENS, GUARD
         self._host = None                                # SY test 11: the voices (sy_voices.Host)
         self.hold = np.zeros(NB, np.int64)               # test 6: blocks a band sounds on after it stopped owning
         self.ehold = np.zeros(NB, F32)
+        self.es = np.zeros(NB, F32)                      # SY test 18: each band's energy over about 32 blocks
+        self.struck = np.zeros(NB, np.int64)             #   blocks left of a strike
+        self.fresh = np.zeros(NB, bool)                  #   a string struck at a multiple of a ringing lower one
+        self.oage = np.zeros(NB, np.int64)               #   blocks it has owned in a row (to 255)
         self.fund_cut = 0                                # test 5: band-blocks FUND silenced
         self.blocks = self.crossings = 0
         self.sounding = 0                               # bands sounding in the last block
@@ -579,23 +588,39 @@ class Engine:
         held = held & ~fall
         self.hold[held] -= 1
         own = own | held
+        hit = (e >= G['E_FLOOR']) & (e >= G['RISE'] * self.es)   # SY test 18: struck (awake, 2 x its energy over
+                                                                  # about 32 blocks)
+        self.struck = np.where(hit, STRUCK, np.maximum(self.struck - 1, 0))
+        self.es = (self.es + (e - self.es) * G['ES_K']).astype(F32)
+        self.fresh[~own] = False
+        self.oage = np.where(own, np.minimum(self.oage + 1, 255), 0)
         lmax = np.zeros(NB, F32)                        # test 6: the loudest partial FUND silenced, per fundamental
         if True:                                        # test 5's FUND (SY test 11: always): a whole multiple of a lower sounding band is silent
             idx = np.nonzero(own)[0]
             keep = own.copy()
             for k in idx:
-                for j in idx:
+                cut, ringing = -1, True                 # the lowest band it is a multiple of; SY test 18: all of
+                for j in idx:                           # those only ringing (owned OLD blocks, not struck, not spared)
                     if j >= k:
                         break
                     r = per[j] / per[k]
                     h = int(F32(r + F32(0.5)))
                     if 2 <= h <= HARM_MAX and abs(r - F32(h)) < G['HARM_TOL'] * F32(h) and \
                             not (e[j] < G['FUND_REL'] * e[k]):
-                        keep[k] = False
-                        if e[k] > lmax[j]:
-                            lmax[j] = e[k]
-                        self.fund_cut += 1
-                        break
+                        if cut < 0:
+                            cut = j
+                        if self.struck[j] or self.fresh[j] or self.oage[j] < OLD:
+                            ringing = False
+                if cut < 0:
+                    continue
+                if ringing and (self.fresh[k] or self.struck[k]):   # SY test 18: struck while those only ring: a
+                    self.fresh[k] = True                     # of its own, spared while it owns
+                    continue
+                keep[k] = False
+                self.fresh[k] = False
+                if e[k] > lmax[cut]:
+                    lmax[cut] = e[k]
+                self.fund_cut += 1
             own = keep
         en = np.where(lmax > e, lmax, e).astype(F32)   # test 6: a note at its loudest partial's level
         lev = np.sqrt(en + en).astype(F32)
@@ -607,11 +632,12 @@ class Engine:
         fr = (F32(FS12) / per).astype(F32)
         t = self.tone
         h = self.host()
+        law = int(self.trk[0]) if int(self.trk[0]) <= 2 else 0   # SY test 18: TRACK's first setting is LAW (WAIT 0)
         h.set_knobs(*[int(v) for v in self.knobs[t]], int(self.octs[t]), int(self.suss[t]), int(self.dyns[t]),
-                    *[int(v) for v in self.trk], min(self.blocks - self.last_pick, 255))
+                    0, int(self.trk[1]), int(self.trk[2]), min(self.blocks - self.last_pick, 255), law)
         mgt = F32(0) if stopping or tone_req != self.tone else F32(1)
-        res, mg = h.block(t, tg, per, e, nper, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
-                          scale=float(G['OUT_SCALE']))
+        res, mg = h.block(t, tg, per, e, self.struck, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
+                          scale=float(G['OUT_SCALE']))   # SY test 18: the strikes (tests 12-17: nper, unused)
         self.mg = F32(mg)
         mg = self.mg
         if tone_req != self.tone and mg <= F32(0) and not stopping:   # faded out: the new tone, from rest

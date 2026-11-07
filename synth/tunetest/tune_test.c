@@ -265,6 +265,8 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define SY_FILE_BUS (SY_FILE_DYN + SY_NTONES)
 #define SY_WAIT_MAX 12u                                        /* SY test 15: the TRACK page's ranges */
 #define SY_SENS_MAX 50u
+#define SY_LAW_MAX 2u                                          /* SY test 18: LAW (OFF, SY 1:1, SY 2:1) in place of */
+#define SY_LAW_MARK 0x80u                                      /*   WAIT, its byte marked (a test 15-17 WAIT reads OFF) */
 #define SY_FILE3_BYTES 104
 #define SY_FILE3_SUM 100
 #define FNV 2166136261u
@@ -1238,7 +1240,8 @@ UI_SMALL static void sy_ready(void) {
         u32 bus = sy_file[SY_FILE_BUS];                 /* SY test 7: the synth's bus */
         s->out_bus = (u8)(bus <= 3u ? bus : 0u);
         u32 w = sy_file[SY_FILE_BUS + 1u], se = sy_file[SY_FILE_BUS + 2u];   /* SY test 15: the TRACK page */
-        s->trk[0] = (u8)(w <= SY_WAIT_MAX ? w : 0u);
+        u32 law = w & ~SY_LAW_MARK;                     /* SY test 18: LAW where WAIT was (unmarked: a WAIT, OFF) */
+        s->trk[0] = (u8)((w & SY_LAW_MARK) && law <= SY_LAW_MAX ? law : 0u);
         s->trk[1] = (u8)(se <= SY_SENS_MAX ? se : 0u);
         u32 g = sy_file[SY_FILE_BUS + 3u];             /* test 16: 0 OFF, 1 ON, 2 PICK */
         s->trk[2] = (u8)(g <= 2u ? g : 0u);
@@ -1279,6 +1282,8 @@ UI_SMALL static void sy_save(void) {
     }
     sy_file[SY_FILE_BUS] = s->out_bus;                  /* SY test 7 */
     for (u32 i = 0; i < 3u; i++) sy_file[SY_FILE_BUS + 1u + i] = s->trk[i];   /* SY test 15 */
+    sy_file[SY_FILE_BUS + 1u] = (u8)(s->trk[0] ? SY_LAW_MARK | s->trk[0] : 0u);   /* SY test 18: LAW, marked (OFF: 0, as
+                                                                                  a test 15-17 file's WAIT 0) */
     for (u32 i = SY_FILE_BUS + 4u; i < SY_FILE_SUM; i++) sy_file[i] = 0;
     put32(sy_file + SY_FILE_SUM, sy_fnv(sy_file, SY_FILE_SUM));
     s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
@@ -1408,15 +1413,15 @@ UI_SMALL SCREEN static u32 sy_page(const sy_t *s) {
 /* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): test 6: the tone's own setting, TONE and LEVEL (knob -
  * 64, 0 as designed; VALUE and the pads pick the sound); on the SHIFT page (tapped, or SHIFT held): OCTAVE (5 zones,
  * -2..+2), SUSTAIN (0..100) and DYNAMICS (0..100). SY test 15, the TRACK page (every tone): WAIT (0..12 blocks), SENS
- * (0..50 %), GUARD (the upper half on). */
+ * (0..50 %), GUARD (the upper half on). SY test 18: LAW (OFF, SY 1:1, SY 2:1 in thirds) in WAIT's place. */
 UI_SMALL SCREEN static void sy_screen_knob(sy_t *s, u32 k, s32 pos) {
     pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
     if (s->shift_down) s->shift_used |= 2u;            /* SY test 17: before the page (a held SHIFT's turn peeks) */
     u32 tone = sy_tone(s), page = sy_page(s);
     s->turns++;
     if (page == 2u)
-        s->trk[k] = (u8)(k == 0 ? (pos * (s32)(SY_WAIT_MAX + 1u)) >> 7 : k == 1u ? (pos * (s32)(SY_SENS_MAX + 1u)) >> 7 :
-                         (pos * 3) >> 7);              /* test 16: GUARD OFF / ON / PICK in thirds */
+        s->trk[k] = (u8)(k == 1u ? (pos * (s32)(SY_SENS_MAX + 1u)) >> 7 : (pos * 3) >> 7);   /* test 16: GUARD OFF / */
+                                                       /*   ON / PICK in thirds; test 18: LAW OFF / 1:1 / 2:1 too */
     else if (!page)
         s->knob[tone][k == 0 ? 1 : k == 1u ? 0 : 2] = (s8)(pos - 64);
     else if (k == 0)
@@ -1608,8 +1613,8 @@ UI_SMALL SCREEN static char *put_signed(char *p, s32 v) {
     return put_u(p, (u32)(v < 0 ? -v : v));
 }
 
-static const char *const SY_LABELS[9] = {0, "TONE", "LEVEL", "OCTAVE", "SUSTAIN", "DYNAMICS", "WAIT MS", "SENS",
-                                        "GUARD"};
+static const char *const SY_LABELS[9] = {0, "TONE", "LEVEL", "OCTAVE", "SUSTAIN", "DYNAMICS", "LAW", "SENS",
+                                        "GUARD"};   /* SY test 18: LAW where WAIT MS was */
 
 /* Test 6: a knob's offset from 64 (-64..63) as -50..+50, and a position (0..127) as 0..100 with 64 at 50. */
 UI_SMALL SCREEN static s32 sy_pm50(s32 d) { return d >= 0 ? (d * 50 + 31) / 63 : -((-d * 50 + 32) / 64); }
@@ -1617,7 +1622,7 @@ UI_SMALL SCREEN static u32 sy_pct(u32 pos) { return pos <= 64u ? (pos * 50u + 32
 
 /* A knob column's name and value (test 6): the tone's own setting and TONE (-50..+50), LEVEL (0..100, 50 as
  * designed); the SHIFT page: OCTAVE (-2..+2), SUSTAIN and DYNAMICS (0..100); SY test 15, TRACK: WAIT in ms (0..16),
- * SENS (0..50), GUARD (OFF / ON). */
+ * SENS (0..50), GUARD (OFF / ON); SY test 18: LAW (OFF / 1:1 / 2:1) in WAIT's place. */
 EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
     const sy_t *s = &sy;
     u32 tone = sy_tone(s), i = col + 3u * sy_page(s);
@@ -1640,7 +1645,7 @@ EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
     else if (i == 5)
         p = put_u(p, s->dynk[tone] ? s->dynk[tone] - 1u : SYV_DYN_DESIGN[tone]);
     else if (i == 6)
-        p = put_u(p, (s->trk[0] * 4u + 1u) / 3u);       /* test 15: blocks of 1.33 ms, in ms */
+        p = put_str(p, s->trk[0] >= 2u ? "2:1" : s->trk[0] ? "1:1" : "OFF");   /* SY test 18: LAW */
     else if (i == 7)
         p = put_u(p, s->trk[1]);
     else
@@ -1877,6 +1882,120 @@ EXPORT UI_SMALL void syn_ui(void) {
     }
 }
 
+/* ---- SY test 18: the crash catcher ----
+ * SY test 17 froze the unit (a steady high pitch until the power was pulled: the CPU stopped and the audio DMA looped
+ * its last buffer); the emulator never made it happen. The builder points the ITCM vector table's HardFault,
+ * MemManage, BusFault and UsageFault entries at sy_fault: it keeps the stacked PC, LR and xPSR and the SCB's fault
+ * registers in sy_crash (a slot no boot row writes), cleans them out of the D-cache and resets the SP (SYSRESETREQ)
+ * instead of hanging. After the reboot crash_ui shows them once, in a popup: a photo of it names the spot. A hang
+ * that is not a fault (a loop with the interrupts off) still freezes. */
+#define CRASH_MAGIC 0x48535243u                                 /* "CRSH" */
+#define SCB_AIRCR (*(volatile u32 *)0xE000ED0Cu)
+#define SCB_CFSR (*(volatile u32 *)0xE000ED28u)
+#define SCB_HFSR (*(volatile u32 *)0xE000ED2Cu)
+#define SCB_MMFAR (*(volatile u32 *)0xE000ED34u)
+#define SCB_BFAR (*(volatile u32 *)0xE000ED38u)
+#define SCB_DCCMVAC (*(volatile u32 *)0xE000EF68u)              /* D-cache clean by address */
+#define CRASH_WORDS 12u                                         /* exc .. page */
+#define CRASH_WAIT_MS 4000u                                     /* after the boot, before the popup */
+#define CRASH_POPUP_MS 12000
+
+EXPORT __attribute__((section(".sycrash"))) volatile crash_t sy_crash;
+
+__attribute__((section(".sytext"), noinline)) static u32 crash_sum(const volatile crash_t *c) {
+    const volatile u32 *w = (const volatile u32 *)c;
+    u32 h = FNV;
+    for (u32 i = 0; i < CRASH_WORDS; i++) {
+        u32 v = w[i];
+        for (u32 b = 0; b < 4u; b++) {
+            h = (h ^ (v & 0xFFu)) * 16777619u;
+            v >>= 8;
+        }
+    }
+    return h;
+}
+
+/* The fault, from sy_fault: sp the stacked frame (r0-r3, r12, LR, PC, xPSR), ret the EXC_RETURN. The frame is read only
+ * from a stack in DTCM/OCRAM or SDRAM (a wild stack pointer reads as 0). */
+EXPORT __attribute__((section(".sytext"), noinline, noreturn)) void sy_fault_c(const u32 *sp, u32 ret) {
+    volatile crash_t *c = &sy_crash;
+    u32 ipsr, a = (u32)sp;
+    __asm__ volatile("mrs %0, ipsr" : "=r"(ipsr));
+    u32 ok = (a & 3u) == 0u && ((a >= 0x20000000u && a <= 0x202FFFE0u) || (a >= 0x80000000u && a <= 0x83FFFFE0u));
+    c->exc = ipsr & 0x1FFu;
+    c->pc = ok ? sp[6] : 0u;
+    c->lr = ok ? sp[5] : 0u;
+    c->psr = ok ? sp[7] : 0u;
+    c->sp = a;
+    c->cfsr = SCB_CFSR;
+    c->hfsr = SCB_HFSR;
+    c->mmfar = SCB_MMFAR;
+    c->bfar = SCB_BFAR;
+    c->ret = ret;
+    c->blocks = sy_block.blocks;
+    c->page = (u32)(s32)PAGE;
+    c->sum = crash_sum(c);
+    c->magic = CRASH_MAGIC;
+    __asm__ volatile("dsb" ::: "memory");
+    for (u32 p = (u32)c & ~31u; p < (u32)c + sizeof(crash_t); p += 32u)
+        SCB_DCCMVAC = p;
+    __asm__ volatile("dsb\n\tisb" ::: "memory");
+    SCB_AIRCR = 0x05FA0004u;                                    /* VECTKEY, SYSRESETREQ */
+    __asm__ volatile("dsb" ::: "memory");
+    for (;;) {
+    }
+}
+
+/* The vectors' target: the frame from the stack the fault came from (EXC_RETURN bit 2: PSP, else MSP). */
+EXPORT __attribute__((section(".sytext"), naked)) void sy_fault(void) {
+    __asm__ volatile("tst lr, #4\n\t"
+                     "ite eq\n\t"
+                     "mrseq r0, msp\n\t"
+                     "mrsne r0, psp\n\t"
+                     "mov r1, lr\n\t"
+                     "b sy_fault_c\n\t");
+}
+
+UI_SMALL SCREEN static char *put_hex(char *p, u32 v) {
+    for (int s = 28; s >= 0; s -= 4) {
+        u32 d = (v >> s) & 0xFu;
+        *p++ = (char)(d < 10u ? '0' + d : 'A' + d - 10u);
+    }
+    return p;
+}
+
+/* After the boot (CRASH_WAIT_MS of UI ticks): a crash kept, once, in a popup on a stock page with no other up:
+ * "SY CRASH 3" (the exception), PC, LR, CFSR and the fault address (BFAR, else MMFAR). */
+UI_SMALL SCREEN static void crash_ui(int elapsed) {
+    static u32 waited, done;
+    static char text[TEXT_MAX];
+    if (done) return;
+    volatile crash_t *c = &sy_crash;
+    if (c->magic != CRASH_MAGIC || c->sum != crash_sum(c)) {
+        done = 1;
+        return;
+    }
+    if (waited < CRASH_WAIT_MS) {
+        waited += elapsed > 0 ? (u32)elapsed : 1u;
+        return;
+    }
+    if ((u32)PAGE >= STOCK_PAGES || POPUP_PENDING >= 0 || POPUP_SHOWN) return;
+    char *p = put_str(text, "SY CRASH ");
+    p = put_u(p, c->exc);
+    p = put_str(p, "\nPC ");
+    p = put_hex(p, c->pc);
+    p = put_str(p, "\nLR ");
+    p = put_hex(p, c->lr);
+    p = put_str(p, "\nCF ");
+    p = put_hex(p, c->cfsr);
+    p = put_str(p, "\nAD ");
+    p = put_hex(p, (c->cfsr & 0x8000u) ? c->bfar : c->mmfar);
+    *p = 0;
+    POPUP_POST(text, CRASH_POPUP_MS);
+    c->magic = 0;
+    done = 1;
+}
+
 /* Bounce's ui bridge (the popup tick, UI task, every millisecond) calls this in place of bnc_ui. */
 EXPORT void diag_ui(int elapsed) {
     ((void (*)(int))BNC_UI)(elapsed);
@@ -1884,6 +2003,7 @@ EXPORT void diag_ui(int elapsed) {
     tune_ui();
     syn_ui();
     sy_ui();
+    crash_ui(elapsed);                                          /* SY test 18 */
 }
 
 /* Every RX block: pairs 0 and 1's peaks, and pair 0 as (L + R) / 2 for the tracker (32-byte frames, 64 of them).

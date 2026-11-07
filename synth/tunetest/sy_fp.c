@@ -205,23 +205,41 @@ static u32 sy_own(sy_block_t *b) {
             }
         }
     }
+    for (u32 k = 0; k < SY_BANDS; k++) {            /* SY test 18: a band struck (awake, its energy at SY_RISE x */
+        if (b->e[k] >= SY_E_FLOOR && b->e[k] >= SY_RISE * b->es[k])   /* es, a follower over about 32 blocks) in */
+            b->struck[k] = (u8)SY_STRUCK;           /*   the last SY_STRUCK blocks: a string picked there, the pick */
+        else if (b->struck[k])                      /*   seen or not */
+            b->struck[k]--;
+        b->es[k] = b->es[k] + (b->e[k] - b->es[k]) * SY_ES_K;
+        if (!own[k]) b->fresh[k] = 0;
+        b->oage[k] = own[k] ? (u8)(b->oage[k] < 255u ? b->oage[k] + 1u : 255u) : 0u;
+    }
     {                                               /* test 5's FUND: a whole multiple of a lower sounding band */
         u8 keep[SY_BANDS];
         for (u32 k = 0; k < SY_BANDS; k++) {
             keep[k] = own[k];
             if (!own[k]) continue;
-            for (u32 j = 0; j < k; j++) {
+            s32 cut = -1;                           /* the lowest band it is a multiple of */
+            u32 ringing = 1;                        /* SY test 18: every one of those only ringing (owned SY_OLD */
+            for (u32 j = 0; j < k; j++) {           /*   blocks or more, not struck lately, not spared itself) */
                 if (!own[j]) continue;
                 float r = b->per[j] / b->per[k];
                 s32 h = (s32)(r + 0.5f);
                 if (h >= 2 && h <= SY_HARM_MAX && __builtin_fabsf(r - (float)h) < SY_HARM_TOL * (float)h &&
                     !(b->e[j] < SY_FUND_REL * b->e[k])) {   /* test 6: not a pick's ring under a note */
-                    keep[k] = 0;
-                    if (b->e[k] > lmax[j]) lmax[j] = b->e[k];
-                    b->fund_cut++;
-                    break;
+                    if (cut < 0) cut = (s32)j;
+                    if (b->struck[j] || b->fresh[j] || b->oage[j] < SY_OLD) ringing = 0;
                 }
             }
+            if (cut < 0) continue;
+            if (ringing && (b->fresh[k] || b->struck[k])) {   /* SY test 18: struck while those only ring (a note's */
+                b->fresh[k] = 1;                         /*   partials come with it): a string of its own, spared */
+                continue;                                /*   while it owns (test 17 muted an open B or E picked */
+            }                                            /*   over a ringing low E: its 3rd and 4th partials) */
+            keep[k] = 0;
+            b->fresh[k] = 0;
+            if (b->e[k] > lmax[cut]) lmax[cut] = b->e[k];
+            b->fund_cut++;
         }
         for (u32 k = 0; k < SY_BANDS; k++)
             own[k] = keep[k];
@@ -275,16 +293,17 @@ u32 sy_fp_step(sy_t *s) {
     kn.oct = (u8)s->oct[t];
     kn.sus = s->susk[t];
     kn.dyn = s->dynk[t];
-    kn.wait = s->trk[0];                                /* SY test 15: the TRACK page (every tone) */
+    kn.wait = 0;                                        /* SY test 15: the TRACK page (every tone); test 18: its */
+    kn.law = s->trk[0] <= 2u ? s->trk[0] : 0u;          /*   first setting is LAW (WAIT is gone: 0) */
     kn.sens = s->trk[1];
     kn.guard = s->trk[2];
     {
         s32 since = (s32)b->blocks - b->last_pick;      /* SY test 16: blocks since the last pick */
         kn.since = (u8)(since > 255 ? 255 : since);
     }
-    kn.pad[0] = kn.pad[1] = 0;
+    kn.pad[0] = 0;
     float mgt = (s->stopping || req != b->tone) ? 0.0f : 1.0f;
-    float mg = syv_block(&syv_state, &SYV_TONE[t], &kn, b->amp, b->per, b->e, b->nper, SYV_VREF, b->mg, mgt,
+    float mg = syv_block(&syv_state, &SYV_TONE[t], &kn, b->amp, b->per, b->e, b->struck, SYV_VREF, b->mg, mgt,
                          SY_FADE, SY_OUT_SCALE, s->out);
     b->mg = mg;
     if (req != b->tone && mg <= 0.0f && !s->stopping) {     /* faded out: the new tone, from rest */

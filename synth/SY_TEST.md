@@ -1,4 +1,4 @@
-# SY synth tests 1 to 17: a polyphonic guitar synth, the way BOSS's SY pedals do it
+# SY synth tests 1 to 18: a polyphonic guitar synth, the way BOSS's SY pedals do it
 
 The user asked (2026-11-04) for the guitar synth to work "however boss sy-1/200/300/1000 does it with guitar input".
 Guitar synth tests 1 to 6 (`TUNE_TEST.md`) find one note and play it on the Sound Generator, which has four voices
@@ -919,6 +919,49 @@ the notes:
 
 **Emulator checks:** 360 pass on `release/sy-synth-test17`.
 
+## SY synth test 18 (sy-synth-test18): every string plays, a crash catcher, and the SY loudness law
+
+Test 17 on the unit (FAT BASS, guitar on the Isolator): "most didn't sound", then a freeze with a steady high pitch
+until the power was pulled. On the model guitar (open strings picked 0.6 s apart and left ringing, and softly over a
+ringing low E) the twin showed why: the input's pick detector misses picks over ringing strings, a mono note moved to
+a new string only on a pick or at 1.5x its level, the pick's envelopes never opened again after their release without a
+pick, and FUND muted an open B or E picked over a ringing low E (its 3rd and 4th partials).
+
+- **Strikes (sy_fp.c, sy_ref.py):** a band is struck while its energy is at 2x a follower over about 32 blocks
+  (`ES_K` 1/32) and awake; the strike lasts 32 blocks (43 ms). A note's own partials rise with it; a string picked over
+  others ringing rises alone. The voice engine gets the strikes in place of `nper` (unused since test 15).
+- **FUND spares a struck string:** a whole multiple of lower sounding bands that only ring (each owned 32 blocks or
+  more, not struck, not spared itself) is a string of its own while it owns (`fresh`). A multiple of a band struck with
+  it is still its partial: B3 sounds over a ringing E2, B4 (B3's octave) does not.
+- **Envelopes:** a string beginning softly after the pick's envelopes have released opens them again (the amp as the
+  tone's, the filter at its sustain, no sweep).
+- **Mono:** a struck band counts as picked for a start from silence once it has sounded 8 blocks reading steadily (a
+  mute's click strikes many bands at once). A struck band begun 60 ms or more after the note took its string
+  (`B_STRUM`: a strum's later strings leave the note on its first) takes the note at 0.3x the note's level now, once
+  settled (`B_CONF` 8 blocks, `STABLE`), unless it sits an octave, an octave and a fifth or two octaves over a band
+  struck lately with -20 dB of its energy (a new low string's partials own before its own band). Takeovers by the
+  newest string attack as a pick's do (legato tones glide).
+- **TRACK page:** CTRL 1 is LAW (OFF, 1:1, 2:1 in thirds) in WAIT's place; WAIT is 0. The file keeps LAW in WAIT's
+  byte marked 0x80, OFF as 0 (a test 15-17 file's WAIT reads OFF, and a file with LAW OFF is byte for byte test 17's). LAW follows the SY-1000's per-voice volume step (DSP row b47e,
+  decoded 2026-11-07): a band at a fraction r of the loudest of its five bands plays at r^2 of that one's volume under
+  both readings of its divide step. 1:1 multiplies a voice's level by r (the band's level over the five's loudest):
+  the synth follows the guitar dB for dB. 2:1 multiplies it by the band's level over a full pick's (at most 2): a square
+  law, 2 dB of synth per dB of guitar, its neighbours' r^2 coming from the square itself.
+- **The crash catcher:** the ITCM vector table's HardFault, MemManage, BusFault and UsageFault entries (the reset
+  handler sets VTOR to 0 from its literals at 0x60080044) point at `sy_fault`, which keeps the stacked PC, LR, xPSR,
+  the stack, CFSR, HFSR, MMFAR, BFAR, EXC_RETURN, the SY blocks and the page in `sy_crash` (0x83FE7F80, the SY slot's
+  top: no boot row writes it), cleans its D-cache lines and writes SYSRESETREQ. After the reboot the UI tick shows
+  `SY CRASH n` (the exception: 3 HardFault, 4 MemManage, 5 BusFault, 6 UsageFault), PC, LR, CF (CFSR) and AD (BFAR, or
+  MMFAR) once, 4 s in, for 12 s. Not caught: a hang that is not a fault, and anything the reset does not keep (SDRAM
+  across a SYSRESETREQ is kept on this SoC as far as is known, but unverified).
+
+On the model guitar (FAT BASS's note band 60 ms after each pick): all six strings right when stopped, let go or left
+ringing; softly over ringing strings the D string reads its octave for about 100 ms before it settles. On the user's
+clean take (score17 / score18, test 17 -> 18): PUNCH BASS heard 135/136 both, attacks 130 -> 143, short 4 -> 10,
+attacks in the chord part 16 -> 62, attacks after let-gos 119 -> 131; POLY PAD heard 133 -> 132, attacks 1420 -> 1455,
+chord attacks 207 -> 207, chord voices 3.52 -> 4.14 (strings at a fifth or an octave now sound), after let-gos 1191 ->
+1224. Starts as test 10's (median +0 ms). LAW 2:1 is about 5 dB quieter at the peaks (soft playing gets softer).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -941,6 +984,9 @@ the notes:
 - Test 14 on the unit: "no better"; replaced by test 15.
 - Test 15 on the unit: "works better", subtle clicks in chords, extra notes on release; replaced by test 16.
 - Test 16 on the unit: a SHIFT flash, a freeze (cause unknown, not reproduced), "trackign still bad"; replaced by test 17.
-- Test 17: whether it tracks like test 10 on the unit, and how the tones compare with test 11's.
+- Test 17 on the unit: "most didn't sound" (FAT BASS, open strings), then a freeze with a steady high pitch;
+  replaced by test 18.
+- Test 18: whether every string sounds on the unit; which LAW feels like an SY; whether the crash catcher's record
+  survives the reset (a crash would show it).
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

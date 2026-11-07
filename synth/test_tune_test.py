@@ -74,7 +74,7 @@ import struct
 import sys
 from pathlib import Path
 
-from unicorn import UC_HOOK_CODE
+from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_WRITE
 from unicorn import arm_const as ar
 
 import test_nam_test as base
@@ -1701,16 +1701,17 @@ def sy_tone_checks(img, man):
           f'block at one a cycle)')
     report['sy']['tones'] = dict(worst_step_instructions=worst, peaks=peaks,
                                  names=[t['name'] for t in sy_voices.VOICES])
-    # 1b. SY test 15: the TRACK page set (WAIT 4, SENS 20, GUARD on) on a poly, a mono and an SG tone: the module's
-    #     output = sy_ref.py's with the same settings, value for value, and not test 11's (the settings reach the notes).
+    # 1b. SY test 15: the TRACK page set (SY test 18: LAW 2:1 / 1:1 in WAIT's place, SENS 20, GUARD on) on a poly, a mono
+    #     and an SG tone: the module's output = sy_ref.py's with the same settings, value for value, and not test 11's
+    #     (the settings reach the notes).
     tmism, tdiff, tworst = [], {}, 0
-    for tone, guard in ((0, 1), (7, 2), (18, 2)):                     # SY test 16: GUARD 2 is PICK
+    for tone, guard, law in ((0, 1, 2), (7, 2, 1), (18, 2, 2)):       # SY test 16: GUARD 2 is PICK
         mt = SyMachine(img, man)
         mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
-        mt.uc.mem_write(sym['sy'] + mt.sl.trk, bytes([4, 20, guard, 0]))
+        mt.uc.mem_write(sym['sy'] + mt.sl.trk, bytes([law, 20, guard, 0]))
         mt.start()
         eng = sy_ref.Engine(tone)
-        eng.trk = [4, 20, guard]
+        eng.trk = [law, 20, guard]
         plain = sy_ref.Engine(tone)
         differs = 0
         for b, values in enumerate(blocks):
@@ -1728,7 +1729,8 @@ def sy_tone_checks(img, man):
                 tmism.append((tone, b))
         tdiff[sy_voices.VOICES[tone]['name']] = differs
     check(not tmism and all(v > 0 for v in tdiff.values()) and tworst <= SY_STEP_MAX,
-          f'SY test 15: with the TRACK page set (WAIT 4, SENS 20, GUARD ON; PICK on the last two: test 16) the module\'s '
+          f'SY test 15: with the TRACK page set (LAW 2:1 / 1:1 / 2:1 (SY test 18), SENS 20, GUARD ON; PICK on the last '
+          f'two: test 16) the module\'s '
           f'output = sy_ref.py\'s with the same settings, value for value (POLY PAD, LADDER LEAD, SG PLUCK x '
           f'{len(blocks)} blocks; first differences '
           f'{tmism[:3]}), unlike the settings at 0 in blocks {tdiff}; the most instructions a step takes {tworst}')
@@ -2115,13 +2117,13 @@ def sy_screen_checks(img, man):
     t_writes = [w for w in m.files.writes if w[0] == SY_PATH]
     t_file = t_writes[-1][1] if t_writes else b''
     texts3 = [[d[3] for d in c if d[0] == 'text'] for c in cols3]
-    check(page_t == 2 and t_before == [0, 0, 0, 0] and trk == [12, 25, 2, 0] and guard_off == 0 and page_back == 0 and
-          guard_on == (1, ['GUARD', 'ON']) and texts3 == [['WAIT MS', '16'], ['SENS', '25'], ['GUARD', 'PICK']] and
-          len(t_file) == 136 and list(t_file[129:132]) == [12, 25, 2],
-          f'SY test 15: SHIFT\'s third tap shows the TRACK page (every tone): CTRL 1 WAIT 0..12 blocks (in ms: 127 '
-          f'shows 16), CTRL 2 SENS 0..50 (64: 25), CTRL 3 GUARD in thirds (SY test 16: OFF, ON, PICK); the next tap '
-          f'goes back to the first page; the file keeps them in its spare bytes 129-131 ({texts3}, {trk}, '
-          f'{list(t_file[129:132]) if t_file else None})')
+    check(page_t == 2 and t_before == [0, 0, 0, 0] and trk == [2, 25, 2, 0] and guard_off == 0 and page_back == 0 and
+          guard_on == (1, ['GUARD', 'ON']) and texts3 == [['LAW', '2:1'], ['SENS', '25'], ['GUARD', 'PICK']] and
+          len(t_file) == 136 and list(t_file[129:132]) == [0x82, 25, 2],
+          f'SY test 15: SHIFT\'s third tap shows the TRACK page (every tone): CTRL 1 (SY test 18) LAW in thirds (OFF, '
+          f'1:1, 2:1), CTRL 2 SENS 0..50 (64: 25), CTRL 3 GUARD in thirds (SY test 16: OFF, ON, PICK); the next tap '
+          f'goes back to the first page; the file keeps them in its spare bytes 129-131, LAW marked 0x80 ({texts3}, '
+          f'{trk}, {list(t_file[129:132]) if t_file else None})')
     foot = m.draw_footer()
     texts = [[d[3] for d in c if d[0] == 'text'] for c in cols + cols2]
     t3 = m.sy()
@@ -2538,6 +2540,80 @@ def entry_checks(parent_img, img, sym):
     report['entries'] = out
 
 
+def crash_checks(parent_img, img, man):
+    """SY test 18, the crash catcher: the four fault vectors -> sy_fault; the handler (entered with a fake stacked
+    frame, EXC_RETURN 0xFFFFFFF9: MSP) keeps the frame and the SCB's fault registers in sy_crash with its FNV-1a sum,
+    cleans the record's D-cache lines, writes SYSRESETREQ and writes nothing else but its own stack; after a 'reboot'
+    (a fresh machine with the record kept) the UI tick shows it once in a popup after CRASH_WAIT_MS, and a fresh machine
+    without one shows nothing."""
+    sym = man['symbols']
+    fault, crash = sym['sy_fault'], sym['sy_crash']
+    vec = [Machine(i).get(a, '<I') for i in (parent_img, img) for a in (0xC, 0x10, 0x14, 0x18)]
+    check(vec[:4] == [0x8003C921, 0x800406A9, 0x80036119, 0x800437D1] and vec[4:] == [fault | 1] * 4 and
+          crash == 0x83FE7F80,
+          f'SY test 18: the ITCM vector table\'s HardFault, MemManage, BusFault and UsageFault entries -> sy_fault '
+          f'({[hex(v) for v in vec]}); sy_crash at the SY slot\'s top ({crash:#x})')
+    m = SyMachine(img, man)
+    frame = 0x20280000 - 0x100                                 # a stack in OCRAM, as the SP's tasks have
+    words = [0x10, 0x11, 0x12, 0x13, 0x1C, 0x12345679, 0x8001234A, 0x21000000]
+    m.uc.mem_write(frame, struct.pack('<8I', *words))
+    scb = {0xE000ED28: 0x00008200, 0xE000ED2C: 0x40000000, 0xE000ED34: 0, 0xE000ED38: 0xDEADBEE0}
+    for a, v in scb.items():
+        m.put(a, v, '<I')
+    writes, stop = [], []
+
+    def on_write(uc, access, address, size, value, _):
+        writes.append((address, size, value & 0xFFFFFFFF))
+        if address == 0xE000ED0C:
+            stop.append(value & 0xFFFFFFFF)
+            uc.emu_stop()
+    h = m.uc.hook_add(UC_HOOK_MEM_WRITE, on_write)
+    m.uc.reg_write(ar.UC_ARM_REG_SP, frame)
+    m.uc.reg_write(ar.UC_ARM_REG_LR, 0xFFFFFFF9)
+    m.uc.emu_start(fault | 1, 0, count=200000)
+    m.uc.hook_del(h)
+    rec = struct.unpack('<14I', m.bytes(crash, 56))
+
+    def fnv(ws):
+        x = 2166136261
+        for w in ws:
+            for b in struct.pack('<I', w):
+                x = ((x ^ b) * 16777619) & 0xFFFFFFFF
+        return x
+    page = m.get(base.PAGE, '<h')
+    want = [0, 0x8001234A, 0x12345679, 0x21000000, frame, 0x00008200, 0x40000000, 0, 0xDEADBEE0, 0xFFFFFFF9,
+            m.get(m.sym['sy_block'] + m.sl.started + 4, '<I'), page & 0xFFFFFFFF]
+    cleans = sorted(v for a, s, v in writes if a == 0xE000EF68)
+    other = [(hex(a), s) for a, s, v in writes if not (crash <= a < crash + 56 or a in (0xE000EF68, 0xE000ED0C) or
+                                                        frame - 0x100 <= a < frame)]
+    check(stop == [0x05FA0004] and list(rec[:12]) == want and rec[12] == fnv(want) and rec[13] == 0x48535243 and
+          cleans == [0x83FE7F80, 0x83FE7FA0] and not other,
+          f'SY test 18: sy_fault keeps the stacked PC, LR, xPSR, the stack, CFSR, HFSR, MMFAR, BFAR, EXC_RETURN, the '
+          f'SY blocks and the page in sy_crash with its FNV-1a sum and the magic, cleans its two D-cache lines '
+          f'({[hex(c) for c in cleans]}), then writes SYSRESETREQ ({[hex(v) for v in stop]}); nothing else written '
+          f'but its stack ({other[:4]}; record {[hex(v) for v in rec]})')
+    kept = m.bytes(crash, 56)
+    shown = []
+    for record in (kept, None):
+        r = SyMachine(img, man)
+        if record is not None:
+            r.uc.mem_write(crash, record)
+        r.popups()
+        texts = []
+        for k in range(6):
+            r.call(r.sym['diag_ui'], 1000)
+            t = r.posted()
+            if t is not None:
+                texts.append((k, t))
+                r.popups()
+        shown.append((texts, r.get(crash + 52, '<I')))
+    expect = 'SY CRASH 0\nPC 8001234A\nLR 12345679\nCF 00008200\nAD DEADBEE0'
+    check(shown[0] == ([(4, expect)], 0) and shown[1][0] == [],
+          f'SY test 18: after a reboot the UI tick shows the kept crash once, 4 s in ({shown[0][0]}), and clears its '
+          f'magic; without one nothing shows ({shown[1][0]})')
+    report['crash'] = dict(handler=hex(fault), record=hex(crash), popup=expect)
+
+
 # ---------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
@@ -2567,6 +2643,7 @@ def main():
         synth_checks(img, man, kit_sym)
     if 'sy' in only:
         sy_checks(parent_img, img, man, kit_sym)
+        crash_checks(parent_img, img, man)                    # SY test 18
     if 'meter' in only:
         entry_checks(parent_img, img, sym)
         base.arithmetic(img, man)

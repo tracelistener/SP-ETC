@@ -242,11 +242,11 @@ def build_host(out_dir, zig, gains=None):
 #include "{(HERE / 'sy_voice.c').as_posix()}"
 __declspec(dllexport) float syv_block_host(syv_state_t *s, const syv_patch_t *p, const syv_knobs_t *k,
                                            const float *tg, const float *per, const float *e,
-                                           const unsigned char *nper, float vref, float mg, float mgt, float fade,
+                                           const unsigned char *struck, float vref, float mg, float mgt, float fade,
                                            float scale, int *out) {{
     unsigned int old = _mm_getcsr();
     _mm_setcsr((old & ~0x6000u) | 0x8040u);
-    float r = syv_block(s, p, k, tg, per, e, nper, vref, mg, mgt, fade, scale, out);
+    float r = syv_block(s, p, k, tg, per, e, struck, vref, mg, mgt, fade, scale, out);
     _mm_setcsr(old);
     return r;
 }}
@@ -268,7 +268,8 @@ class _Knobs(ctypes.Structure):
     _fields_ = [('tone', ctypes.c_int8), ('p2', ctypes.c_int8), ('level', ctypes.c_int8), ('oct', ctypes.c_uint8),
                 ('sus', ctypes.c_uint8), ('dyn', ctypes.c_uint8), ('wait', ctypes.c_uint8), ('sens', ctypes.c_uint8),
                 ('guard', ctypes.c_uint8), ('since', ctypes.c_uint8),
-                ('pad', ctypes.c_uint8 * 2)]   # SY test 15: the TRACK page; 16: since, blocks since the last pick
+                ('law', ctypes.c_uint8),       # SY test 15: the TRACK page; 16: since, blocks since the last pick;
+                ('pad', ctypes.c_uint8 * 1)]   # 18: LAW (0 off, 1 SY 1:1, 2 SY 2:1)
 
 
 _DLLS = {}
@@ -295,19 +296,20 @@ class Host:
     def tone(self, i):
         return self.lib.syv_tone(i)
 
-    def set_knobs(self, tone=0, p2=0, level=0, oct=0, sus=0, dyn=0, wait=0, sens=0, guard=0, since=255):
+    def set_knobs(self, tone=0, p2=0, level=0, oct=0, sus=0, dyn=0, wait=0, sens=0, guard=0, since=255, law=0):
         self.knobs.tone, self.knobs.p2, self.knobs.level = tone, p2, level
         self.knobs.oct, self.knobs.sus, self.knobs.dyn = oct, sus, dyn
         self.knobs.wait, self.knobs.sens, self.knobs.guard = wait, sens, guard   # SY test 15: the TRACK page
         self.knobs.since = since                                                 # SY test 16
+        self.knobs.law = law                                                     # SY test 18
 
-    def block(self, tone_index, tg, per, e, nper, vref=None, mg=1.0, mgt=1.0, fade=1.0, scale=1.0):
-        """One block from the bands' levels, periods (12 kHz samples), energies and periods counted since each woke
-        (SY test 12): (64 ints, the fade after it)."""
+    def block(self, tone_index, tg, per, e, struck, vref=None, mg=1.0, mgt=1.0, fade=1.0, scale=1.0):
+        """One block from the bands' levels, periods (12 kHz samples), energies and, SY test 18, the blocks left of
+        each band's strike (tests 12-17: periods counted since each woke, unused): (64 ints, the fade after it)."""
         a = (ctypes.c_float * 49)(*map(float, tg))
         f = (ctypes.c_float * 49)(*map(float, per))
         g = (ctypes.c_float * 49)(*map(float, e))
-        n8 = (ctypes.c_uint8 * 49)(*[min(int(v), 255) for v in nper])
+        n8 = (ctypes.c_uint8 * 49)(*[min(int(v), 255) for v in struck])
         mg = self.lib.syv_block_host(self.state, self.tone(tone_index), ctypes.byref(self.knobs), a, f, g, n8,
                                      ctypes.c_float(VREF if vref is None else vref), ctypes.c_float(mg),
                                      ctypes.c_float(mgt), ctypes.c_float(fade), ctypes.c_float(scale), self.out)
