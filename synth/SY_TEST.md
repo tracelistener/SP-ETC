@@ -962,6 +962,62 @@ attacks in the chord part 16 -> 62, attacks after let-gos 119 -> 131; POLY PAD h
 chord attacks 207 -> 207, chord voices 3.52 -> 4.14 (strings at a fifth or an octave now sound), after let-gos 1191 ->
 1224. Starts as test 10's (median +0 ms). LAW 2:1 is about 5 dB quieter at the peaks (soft playing gets softer).
 
+## SY synth test 19 (sy-synth-test19): single notes from the note tracker
+
+Test 18 on the unit: no crash, but single notes "not smooth": extra notes, and late or missing notes (asked: the
+single-note tones were worst); LAW 2:1 "too quiet to use". On the user's clean take the twin showed two kinds of extra
+note on the mono tones:
+
+- **At the pick:** the bands put a low string's overtones first (its own band owns 21-31 ms after the pick on the low
+  strings, 9-15 ms on the high ones; the octave, twelfth and up own before it), and the mono note played them: 109 of
+  the take's 136 notes went through wrong pitches (+12, +19, +24, +28 ...) on the way, 1.4 s in all.
+- **At let-go:** the note moved on to what rang after it: the fret under the lifted finger (a semitone down, 26
+  times), an open B or E, the octave; 73 stretches, 8.5 s, up to 290 ms each. Those bands began at 0.06x the playing's
+  level (median), the played notes at 1.0x.
+
+The SG tracker (YIN, tune_fp.c, the guitar synth's) reads a note's pitch from the waveform's period: its first voiced
+analysis after a pluck has the right note in 123 of 128 notes (the others a semitone flat, mostly), 17-19 ms after the
+pluck on the low strings (12-15 ms on the high ones), before the band.
+
+- **The tracker runs for a mono tone:** tune_ui runs it while the SY engine plays one (`sy_block.mono`, set by each
+  step), as for the readout or the SG page; syn_ui plays the Sound Generator only on its page, not in the SY screen.
+  Each analysis leaves its nearest note and voiced/clean flags in `tt_block.ycode` (padding before); sy_fp.c hands the
+  voices the newest one when it is new (`tt.res.analyses` against `sy_block.yan`), the blocks since the tracker's pluck
+  and its own note (`syn_note`), in the knobs (`ynote`, `yflag`, `ysince`, `ysyn`). tune_rx runs before sy_rx in a wake,
+  so the SY sees the block's analysis. The twin: `sy_ref.Engine.yin` (a tune_ref.Tracker) and `yin_word`.
+- **A note starts on its pluck's first voiced analysis** (`Y_PRE` 3 blocks to `Y_WIN` 60 after the pluck), with an
+  attack; over a sounding note it takes over when clean or read twice (a semitone away: read twice, its band sounding:
+  a re-pick's first period reads flat). Its band may not sound yet: it waits for it (`ypend`, up to `Y_PEND` 40 blocks
+  from the last reading of it) at the band's centre and the loudest band's level. A clean reading a tone or less off it
+  within the window puts it right (`Y_FIX`). The pick's envelopes restart on the note's attack, not the input's pick.
+- **It moves where the tracker's own note moves** (its lock; its legato rule: three clean readings, not a harmonic's
+  jump, at 0.4x its level), no attack: slides, hammer-ons, pull-offs, and not a let-go's lower fret, which the tracker
+  sees as quieter and keeps its note. A note whose band stops with a band a tone or less away sounding waits `Y_RIDE`
+  (20 blocks) for that move. A bend follows its band (test 17's `follow`) only up from the note's fret (`yband`).
+- **The bands decide only what the tracker leaves:** no band starts a note (only the tracker's pluck), and a band takes
+  a note over only from a pluck the tracker found nothing for in `Y_WIN` (a soft string under a loud one).
+- **Without the tracker** (a start's first steps until the UI tick, or SLOW): the bands as test 18, a move or a start
+  without a pick needing 0.4x the playing's level (`M_MOVE`; a pick 0.2x), the young note's blip path off with the
+  tracker.
+- **LAW 2:1** multiplies by the band's level over half a full pick's (a medium pick plays as LAW OFF).
+- **A dropout every 7.16 s (since test 4):** `syn_live` compared `DWT_CYCCNT - hold_at` (32 bits: round every 7.16 s
+  at 600 MHz) with the 20 ms settle, so for 20 ms of every 7.16 s it read unsettled, and a UI tick there stopped the
+  synths: the SY engine faded out and started again from rest (its bands' filters cleared), the SG synth let its note
+  go. DM-404 showed it as the tracker restarting on its own; the suite reproduced it (test 18: a tick 2^32 cycles after
+  the hold stops the engine). `route_hold` now keeps a settled hold `HOLD_SETTLE` behind the clock, so the difference
+  never comes round (UI ticks are milliseconds apart).
+- **The tracker's grace:** running for the SY engine (the readout hidden) its first 2 steps after a start are not held
+  to SLOW, as the engine's own (DM-404 timed its cold first step over a block and stopped it).
+- Space: `b_start` and the move are one copy each now (the notes' slot was full: 5,568 of 5,632 bytes).
+
+On the user's clean take (FAT BASS; the other mono tones the same): 0 of 136 notes with a wrong pitch from the pick
+(test 18: 109); let-go extras 73 -> 10 (8.5 s -> 0.7 s; most of the 10 are the next note starting before the tracker's
+own lock); wrong pitch inside notes 1.3 s -> 0.2 s (short bends up at note tails); none missing (test 18: 1); at the
+note's pitch by the band's time (median +0 ms, 90% within 4 ms, the worst +13 ms). On the model guitar (strings left
+ringing, picked as the last is let go, picked softly over a ringing low E, stopped): no wrong pitch on the way; each
+string -20..+9 ms against its band (the low strings sooner), except a soft string under a loud one (+31 ms: the tracker
+reads the loud one; the bands take it at 80 ms).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -986,7 +1042,9 @@ chord attacks 207 -> 207, chord voices 3.52 -> 4.14 (strings at a fifth or an oc
 - Test 16 on the unit: a SHIFT flash, a freeze (cause unknown, not reproduced), "trackign still bad"; replaced by test 17.
 - Test 17 on the unit: "most didn't sound" (FAT BASS, open strings), then a freeze with a steady high pitch;
   replaced by test 18.
-- Test 18: whether every string sounds on the unit; which LAW feels like an SY; whether the crash catcher's record
-  survives the reset (a crash would show it).
+- Test 18 on the unit: no crash; single notes "not smooth": extra notes, late or missing notes; LAW 2:1 too quiet;
+  replaced by test 19. Whether the crash catcher's record survives the reset (no crash since).
+- Test 19: whether single notes are clean on the unit (no extra notes at the pick or let-go), whether they feel late
+  on the low strings, and the tracker and the engine's cycles together on the unit (the readout's SY line).
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

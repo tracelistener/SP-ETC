@@ -109,7 +109,8 @@ typedef struct __attribute__((aligned(32))) {
     u32 sub_lock;                           /* the synth's note came from the subtraction (held through murk) */
     u32 stops, drops, sub_locks, blocked;   /* plucks whose level fell (let-gos), fast drops let go, notes the
                                                subtraction found, moves too quiet to play */
-    u32 pad6;
+    u32 ycode;                              /* SY test 19: the newest analysis for the SY engine's mono tones: its
+                                               nearest note (0..126) | 0x100 voiced | 0x200 clean (was padding) */
     float d_last[TT_T6MAX + 1];             /* the last analysis' difference function */
     float d_base[TT_T6MAX + 1];             /* the last one whose samples came before the pending pluck */
     float dsub[TT_T6MAX + 1];               /* the difference function less d_base */
@@ -254,6 +255,8 @@ typedef struct __attribute__((aligned(32))) {
     u8 fresh[SY_BANDS];                     /*   a string struck at a multiple of a lower one ringing: FUND spares it
                                                while it owns */
     u8 oage[SY_BANDS];                      /*   blocks it has owned in a row (to 255) */
+    u32 yan;                                /* SY test 19: the tracker's analyses seen (a new one: its word is fresh) */
+    u32 mono;                               /*   the tone playing is mono: tune_ui runs the tracker for its notes */
 } sy_block_t;
 
 /* SY test 18: the crash catcher's record (section .sycrash: the top of the SY slot, which no boot row writes, so it

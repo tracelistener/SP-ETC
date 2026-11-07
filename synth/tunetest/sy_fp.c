@@ -301,6 +301,19 @@ u32 sy_fp_step(sy_t *s) {
         s32 since = (s32)b->blocks - b->last_pick;      /* SY test 16: blocks since the last pick */
         kn.since = (u8)(since > 255 ? 255 : since);
     }
+    {   /* SY test 19: a mono tone's notes from the SG tracker (YIN), while it runs (tune_ui runs it for one); its step
+         * came first this wake (diag_rx_c: tune_rx, then sy_rx) */
+        const tt_block_t *y = &tt_block;
+        const u32 run = SYV_TONE[t].mono && tt.state == TT_RUN && tt.req && y->started;
+        const u32 an = tt.res.analyses, fresh = run && an != b->yan, code = y->ycode;
+        b->yan = an;
+        b->mono = SYV_TONE[t].mono;
+        kn.ynote = (u8)(fresh && (code & 0x100u) ? (code & 0x7Fu) + 1u : 0u);
+        kn.yflag = (u8)((run ? 0x80u : 0u) | (fresh ? 1u : 0u) | (fresh && (code & 0x200u) ? 2u : 0u));
+        s32 ys = (s32)y->blk - 1 - y->onset_blk;
+        kn.ysince = (u8)(!run ? 255 : ys < 0 ? 0 : ys > 255 ? 255 : ys);
+        kn.ysyn = (u8)(run && y->syn_note >= 0 && y->syn_note <= 126 ? y->syn_note + 1 : 0);
+    }
     kn.pad[0] = 0;
     float mgt = (s->stopping || req != b->tone) ? 0.0f : 1.0f;
     float mg = syv_block(&syv_state, &SYV_TONE[t], &kn, b->amp, b->per, b->e, b->struck, SYV_VREF, b->mg, mgt,

@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test18'
+REVISION = 'sy-synth-test19'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1125,7 +1125,23 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 18: test 17 on the unit (FAT BASS, open strings): "most didn\'t sound", then a '
+        description='SY synth test 19: test 18 on the unit: no crash, single notes "not smooth": extra notes, late '
+                    'or missing notes; LAW 2:1 too quiet. The mono tones\' notes now come from the SG tracker (YIN), '
+                    'which runs while the SY engine plays one: a note starts on its pluck\'s first voiced analysis '
+                    '(the bands put a low string\'s overtones first: test 18 played them on 109 of the user\'s 136 '
+                    'notes; YIN reads the note 17-19 ms after the pluck on the low strings, against the band\'s '
+                    '21-31 ms), it moves without an attack where the tracker\'s own note moves (slides, hammer-ons, '
+                    'its let-go rule: a let-go\'s lower fret no longer plays), a bend follows its band only up from '
+                    'the note; the bands give its pitch and level. On the take: 0 of 136 notes with a wrong pitch from '
+                    'the pick (test 18: 109), let-go extra notes 73 -> 10 (8.5 s -> 0.7 s, mostly the next note '
+                    'early), none missing, starts at the band\'s time or before. Without the tracker (its first steps, '
+                    'or SLOW) the bands as test 18, a move needing 0.4x the playing\'s level. LAW 2:1 x2 (a medium pick '
+                    'as LAW OFF). A bug since SY test 4: syn_live compared DWT_CYCCNT - hold_at (32 bits, round every '
+                    '7.16 s) with the 20 ms settle, so a UI tick there stopped the synths every 7.16 s (the SY engine '
+                    'faded out and started again from rest; DM-404 showed the tracker restarting); route_hold keeps a '
+                    'settled hold 20 ms behind the clock. The tracker running for the SY engine has the engine\'s '
+                    'grace (its first 2 steps not held to SLOW: DM-404\'s cold first step). '
+                    'SY synth test 18: test 17 on the unit (FAT BASS, open strings): "most didn\'t sound", then a '
                     'freeze with a steady high pitch until unplugged. Fixes: a string the pick detector misses (it '
                     'misses picks over ringing strings) still plays: a band the analysis sees struck (its energy at 2x '
                     'its last 43 ms) counts as picked; the pick\'s envelopes open again for a string after their '

@@ -127,6 +127,9 @@
 #define KEY_UP_FN ((void (*)(const s16 *))0x8003ADA1u)
 #define SY_BAR_X0 57                                             /* the bar's PRM part (the item box x 73..95) */
 #define SY_GRACE 2u                                              /* SY test 8: steps after a start not held to SLOW */
+#define TT_GRACE 8u                                              /* SY test 19: the tracker's, run for the SY engine
+                                                                    (two analyses: each of its 4 phases runs its own
+                                                                    code first; DM-404 stopped it on its 4th step) */
 #define LOOPER_PAGE 0x27                                         /* SY test 10: the looper (MARK with MARK = Looper) */
 #define LOOPER_ON (*(volatile const u8 *)0x82E0B92Cu)            /* looper mode on: the SG page's REC goes to it */
 #define SY_BAR_X1 127
@@ -593,7 +596,9 @@ EXPORT void tune_rx(void) {
      * mixer + tracker took over 9/10 of one. What the window has so far is published, to be read. */
     u32 tot = tt_account(t, dt, budget);
     t->hot = tot > budget / 10u * 9u ? t->hot + 1u : 0u;
-    if (dt > budget || t->hot >= 2u) {
+    /* SY test 19: running for the SY engine (the readout hidden), its first TT_GRACE steps after a start are not held
+     * to SLOW, as the engine's own first steps (cold code: DM-404 timed the tracker's first steps over a block) */
+    if ((meter.shown || tt_block.blk > TT_GRACE) && (dt > budget || t->hot >= 2u)) {
         t->state = TT_SLOW;
         t->slow_cycles = tot;
         if (t->w_n) tt_publish(t);
@@ -1087,13 +1092,19 @@ UI_SMALL static void route_hold(tt_t *t, u32 now) {
         BARRIER();
         DT1_SEND(BMC, ROUTING, 0, (s32)t->routing);
     }
+    /* SY test 19: once settled the hold stays settled. syn_live's DWT_CYCCNT - hold_at is a 32-bit count, which comes
+     * round every 7.16 s at 600 MHz: in tests 4-18 it read under HOLD_SETTLE for 20 ms each time, and the synths
+     * stopped (the SY engine faded out and started again from rest, the SG synth let its note go). Kept HOLD_SETTLE
+     * behind the clock, it never comes round. */
+    if (t->hold && now - t->hold_at >= HOLD_SETTLE) t->hold_at = now - HOLD_SETTLE;
     if (t->grace && now - t->grace_at >= REC_GRACE) t->grace = 0;
     t->rec_mix = (t->hold || t->grace) && t->routing != ROUTING_EXTIN;
     t->rec_ext = t->hold && t->routing == ROUTING_EXTIN;
 }
 
 /* Every UI tick: the tracker on while the readout is shown, or on the Sound Generator page with EXT SOURCE on (and the
- * hold). Every 0.1 s: the input FX, EXT SOURCE and ROUTING. */
+ * hold); SY test 19: or while the SY engine plays a mono tone (its notes are the tracker's; syn_ui plays the Sound
+ * Generator only on its page, not in the SY screen). Every 0.1 s: the input FX, EXT SOURCE and ROUTING. */
 EXPORT UI_SMALL void tune_ui(void) {
     tt_t *t = &tt;
     u32 now = DWT_CYCCNT;
@@ -1105,7 +1116,8 @@ EXPORT UI_SMALL void tune_ui(void) {
         t->routing = (u32)SYS_GET(SYSPRM, ROUTING, -1);
     }
     route_hold(t, now);
-    u32 want = meter.shown || (PAGE == SG_PAGE && !sy.mode && syn_live(t));   /* test 5: not in the SY screen */
+    u32 want = meter.shown || (PAGE == SG_PAGE && !sy.mode && syn_live(t)) ||   /* test 5: not in the SY screen */
+               (sy.req && sy.state == SY_RUN && sy_block.mono);                /* SY test 19 */
     if (!want) t->req = 0;
     if (want && !t->req && t->state == TT_OFF) tune_start(t);
 }

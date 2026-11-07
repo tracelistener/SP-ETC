@@ -412,6 +412,8 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     r->freq10 = (u32)(y.freq * 10.0f + 0.5f);
     r->cents = round_s((midi - (float)note) * 100.0f);
     r->quality = y.aper >= 1.0f ? 0u : (u32)((1.0f - y.aper) * 100.0f + 0.5f);
+    b->ycode = (voiced ? 0x100u : 0u) | (y.clean <= CLEAN_APER ? 0x200u : 0u) |   /* SY test 19: for the SY */
+               (u32)(note < 0 ? 0 : note > 126 ? 126 : note);                     /*   engine's mono tones */
     if (pre) {
         end(t);
         return;

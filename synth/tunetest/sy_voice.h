@@ -48,7 +48,13 @@ typedef struct {
     syv_s8 tone, p2, level;
     syv_u8 oct, sus, dyn, wait, sens, guard, since;   /* SY test 16: GUARD 2 = PICK; since: blocks since the input's
                                                        last pick (255: long ago) */
-    syv_u8 law, pad[1];              /* SY test 18: the TRACK page's LAW (0 off, 1 SY 1:1, 2 SY 2:1); WAIT is 0 */
+    syv_u8 law;                      /* SY test 18: the TRACK page's LAW (0 off, 1 SY 1:1, 2 SY 2:1); WAIT is 0 */
+    syv_u8 ynote;                    /* SY test 19, a mono tone's notes from the SG tracker (YIN): its analysis this
+                                        block, if voiced, as its nearest note + 1 (0: none, or not voiced), */
+    syv_u8 yflag;                    /*   bit 0: an analysis this block, 1: it read clean, 7: the tracker runs, */
+    syv_u8 ysince;                   /*   blocks since the tracker's last pluck (255: long ago), */
+    syv_u8 ysyn;                     /*   its own note (the SG's: its plucks' locks, its moves) + 1, 0 none */
+    syv_u8 pad[1];
 } syv_knobs_t;
 
 /* P2 kinds (CTRL 1): what it moves */
@@ -75,6 +81,9 @@ typedef struct {
     syv_s32 took;                    /* SY test 18: the block it last took a string (a start, a mono takeover) */
     syv_s8 band;
     syv_u8 gate, off, young, fast, nh, trig, soft, glide;   /* soft, glide: SY test 17 */
+    syv_u8 ypend;                    /* SY test 19: started by the tracker before its band sounded */
+    syv_s8 yband;                    /* SY test 19: the band the tracker put it on (its fret: a bend goes up from it) */
+    syv_s32 yat;                     /* SY test 19: the block the tracker last read it */
 } syv_note_t;
 
 typedef struct {                     /* the note manager's word to the voices, per block */
@@ -94,7 +103,10 @@ typedef struct {
     float pkh;                       /* SY test 16: the held peak of the loudest band (-20 dB in 0.6 s): SENS's level */
     float ga, gf;                    /* SY test 17: the pick's amp and filter envelopes (every voice's) */
     syv_u8 gastg, gfstg, pick, anygate;   /*   their stages; a pick this block; a voice's band sounding */
-    syv_u8 since, gpad[3];           /*   blocks since the input's pick (255: long ago) */
+    syv_u8 since;                    /*   blocks since the input's pick (255: long ago) */
+    syv_u8 yact, yprev, ymono;       /* SY test 19: the tracker's pluck acted on; the note its last analysis read (+ 1,
+                                        0 not voiced); the notes are the tracker's this block */
+    syv_u8 ysyn, ypad[3];            /* SY test 19: the tracker's own note last block (+ 1) */
     syv_s32 gat;                     /* SY test 18: the block the envelopes last (re)started */
     syv_s32 blk;
     float dcx, dcy;

@@ -465,6 +465,9 @@ class Engine:
         self.trk = [0, 0, 0]                             # SY test 15: the TRACK page: WAIT, SENS, GUARD (every tone);
                                                          # test 18: LAW, SENS, GUARD
         self._host = None                                # SY test 11: the voices (sy_voices.Host)
+        self.ykn = (0, 0, 255, 0)                        # SY test 19: the SG tracker's word (ynote, yflag, ysince, ysyn)
+        self.yin = None                                  # SY test 19: the tracker (tune_ref.Tracker) a mono tone's
+        self.yan = 0                                     #   notes come from, while it runs (tune_ui); analyses seen
         self.hold = np.zeros(NB, np.int64)               # test 6: blocks a band sounds on after it stopped owning
         self.ehold = np.zeros(NB, F32)
         self.es = np.zeros(NB, F32)                      # SY test 18: each band's energy over about 32 blocks
@@ -481,12 +484,34 @@ class Engine:
             self._host = voices().Host(host_dll())
         return self._host
 
+    def yin_word(self, ins16):
+        """SY test 19: the SG tracker's step (while it runs: self.yin, a tune_ref.Tracker; tune_ui runs it for a mono
+        tone) and its word for the voices, as sy_fp.c reads it: tt.res.analyses (a new one: fresh), tt_block's ycode,
+        onset_blk and syn_note."""
+        y = self.yin
+        if y is not None:
+            y.step(ins16)
+        run = y is not None and bool(voices().VOICES[self.tone].get('mono'))
+        an = y.res['analyses'] if y is not None else self.yan
+        fresh = run and an != self.yan
+        self.yan = an
+        if not run:
+            self.ykn = (0, 0, 255, 0)
+            return
+        code = y.ycode
+        ys = y.blk - 1 - y.onset_blk
+        self.ykn = ((code & 0x7F) + 1 if fresh and (code & 0x100) else 0,
+                    0x80 | (1 if fresh else 0) | (2 if fresh and (code & 0x200) else 0),
+                    0 if ys < 0 else min(ys, 255),
+                    y.syn_note + 1 if 0 <= y.syn_note <= 126 else 0)
+
     def step(self, ins16, stopping=False, tone_req=None, bpm100=12000):
         """One block: 64 int16 (pair 0, (L + R) >> 1) -> 64 values for the DRY pair (int, truncated), and whether
         the engine is still running (False once a stop has faded). SY test 11: the analysis here, the voices the host
         build of sy_voice.c (the module's C)."""
         if tone_req is None:
             tone_req = self.tone
+        self.yin_word(ins16)                            # SY test 19: the tracker's step comes first (tune_rx)
         x48 = np.asarray(ins16, np.int64).astype(F32) * G['IN_SCALE']
         z = self.dz
         x12 = np.zeros(SUB, F32)
@@ -634,7 +659,7 @@ class Engine:
         h = self.host()
         law = int(self.trk[0]) if int(self.trk[0]) <= 2 else 0   # SY test 18: TRACK's first setting is LAW (WAIT 0)
         h.set_knobs(*[int(v) for v in self.knobs[t]], int(self.octs[t]), int(self.suss[t]), int(self.dyns[t]),
-                    0, int(self.trk[1]), int(self.trk[2]), min(self.blocks - self.last_pick, 255), law)
+                    0, int(self.trk[1]), int(self.trk[2]), min(self.blocks - self.last_pick, 255), law, *self.ykn)
         mgt = F32(0) if stopping or tone_req != self.tone else F32(1)
         res, mg = h.block(t, tg, per, e, self.struck, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
                           scale=float(G['OUT_SCALE']))   # SY test 18: the strikes (tests 12-17: nper, unused)

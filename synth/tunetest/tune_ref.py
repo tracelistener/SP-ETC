@@ -114,6 +114,7 @@ class Tracker:
         self.res['note'] = -1
         self.analyses = []          # (block, voiced, freq, aperiodicity, nearest note, clean, from the subtraction)
         self.syn, self.syn_note, self.syn_sends = 0, -1, 0      # tt.syn: seq << 16 | vel << 8 | (note + 1), 0 none
+        self.ycode = 0                                          # SY test 19: the newest analysis, for the SY engine
         self.pluck_ref, self.syn_strays = 0.0, 0
         self.voiced_level, self.syn_holds = 0.0, 0
         self.pick_peak, self.clicks = 0.0, 0                    # clicks: plucks only the click test heard
@@ -302,6 +303,8 @@ class Tracker:
         r['freq10'] = int(freq * 10 + 0.5)
         r['cents'] = round_s((midi - note) * 100)
         r['quality'] = 0 if aper >= 1 else int((1 - aper) * 100 + 0.5)
+        self.ycode = ((0x100 if voiced else 0) | (0x200 if clean <= CLEAN_APER else 0) |   # SY test 19: for the SY
+                      min(max(note, 0), 126))                                            # engine's mono tones
         self.analyses.append((blk, voiced, freq, aper, note, clean, sub))
         if pre:
             return

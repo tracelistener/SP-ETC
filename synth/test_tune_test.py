@@ -1734,6 +1734,86 @@ def sy_tone_checks(img, man):
           f'output = sy_ref.py\'s with the same settings, value for value (POLY PAD, LADDER LEAD, SG PLUCK x '
           f'{len(blocks)} blocks; first differences '
           f'{tmism[:3]}), unlike the settings at 0 in blocks {tdiff}; the most instructions a step takes {tworst}')
+    # 1c. SY test 19: a mono tone's notes from the SG tracker. FAT BASS on the six open strings, each picked as the last
+    #     is let go: once the engine plays the mono tone, tune_ui starts the tracker; then each block (tune_rx, then
+    #     sy_rx, as diag_rx_c) the module's output = sy_ref.py's with tune_ref.py's tracker (from the same block),
+    #     value for value; every string's note by 40 ms after its pick, no other pitch on the way; the tracker and the
+    #     engine together within a block's instructions.
+    import numpy as np
+    ynotes = (40, 45, 50, 55, 59, 64)
+    yx = np.zeros(int((0.2 + 0.5 * len(ynotes) + 0.6) * 48000))
+    for i, n in enumerate(ynotes):
+        at = int((0.2 + 0.5 * i) * 48000)
+        sg = ref.guitar(ref._hz(n), 0.53, amp=0.3, seed=i, B=ref._stiff(n))
+        sg[-1440:] *= np.linspace(1, 0, 1440)
+        yx[at:at + len(sg)] += sg[:len(yx) - at]
+    yblocks = ref.to_blocks(np.clip(ref.hiss(yx, 1), -1, 1))
+    my = SyMachine(img, man)
+    my.put(sym['sy'] + my.sl.tone_req, 8, '<I')
+    my.start()
+    eng = sy_ref.Engine(8)
+    ymism, ytop, ybands, yrun = [], 0, [], []
+    for b, values in enumerate(yblocks):
+        my.feed(values)
+        h = my.uc.hook_add(UC_HOOK_CODE, every) if b % 16 == 8 else None
+        counter[0] = 0
+        my.call(sym['tune_rx'])
+        my.call(sym['sy_rx'])
+        if h is not None:
+            my.uc.hook_del(h)
+            ytop = max(ytop, counter[0])
+        if b == 0:
+            my.call(sym['tune_ui'])                                    # the engine plays a mono tone: the tracker
+        got = list(struct.unpack('<64i', my.bytes(sym['sy'] + my.sl.out, 256)))
+        want, _ = eng.step(values, bpm100=my.sy()['bpm100'])
+        if b == 0:
+            eng.yin = ref.Tracker()                                    #   runs from the next block
+        if got != want:
+            ymism.append(b)
+        yrun.append(eng.ykn[1] >= 0x80)
+        nb_, ng_ = struct.unpack_from('<bB', eng.host().state, 6 * 160 + 84)   # n[0]'s band and gate (6 voices
+        ybands.append(40 + nb_ if ng_ and nb_ >= 0 else -1)                    #   of 160 bytes before the notes)
+    ylate, yother = [], []
+    for i, n in enumerate(ynotes):
+        i0 = int((0.2 + 0.5 * i) * 48000) // 64
+        seq = ybands[i0:i0 + 120]
+        at = seq.index(n) if n in seq else None
+        ylate.append(None if at is None else round(at * 64 / 48.0))
+        prev = ynotes[i - 1] if i else -1
+        yother += [v for v in seq[:at if at is not None else 120] if v not in (-1, n, prev)]
+    tst = my.tt()
+    check(not ymism and all(v is not None and v <= 40 for v in ylate) and not yother and all(yrun[2:]) and
+          tst['state'] == TT_RUN and ytop <= SY_STEP_MAX,
+          f'SY test 19: FAT BASS with the tracker (tune_ui runs it for a mono tone): the module\'s output = sy_ref.py\'s '
+          f'with tune_ref.py\'s tracker, value for value ({len(yblocks)} blocks; first differences {ymism[:3]}); each '
+          f'open string\'s note {ylate} ms after its pick, no other pitch on the way ({yother[:6]}); the tracker '
+          f'running ({tst["steps"]} steps); tracker + engine at most {ytop} instructions a block')
+    report['sy']['yin_mono'] = dict(blocks=len(yblocks), mismatches=ymism[:20], note_ms=ylate, other=yother[:20],
+                                    tracker_steps=tst['steps'], worst_block_instructions=ytop)
+    # 1d. SY test 19: the cycle counter's wrap. syn_live compared DWT_CYCCNT - hold_at (32 bits: round every 7.16 s at
+    #     600 MHz) with the 20 ms settle, so in tests 4-18 a UI tick 2^32 cycles after the hold found it unsettled and
+    #     stopped the synth (DM-404: the tracker restarting on its own). UI ticks every 0.5 s for 7 s, then one 1 ms
+    #     into that window: the engine plays on (no stop, no restart).
+    mw = SyMachine(img, man)
+    mw.start()
+    for _ in range(8):
+        mw.step()
+    sent = mw.tt()['hold_at']
+    for k in range(14):
+        mw.cyc += 300_000_000
+        mw.call(sym['tune_ui'])
+        mw.call(sym['syn_ui'])
+        mw.call(sym['sy_ui'])
+        mw.step()
+    mw.cyc = sent + (1 << 32) + 600_000
+    mw.call(sym['tune_ui'])
+    mw.call(sym['syn_ui'])
+    mw.call(sym['sy_ui'])
+    for _ in range(12):
+        sw = mw.step()
+    check(sw['state'] == SY_RUN and sw['stops'] == 0 and sw['starts'] == 1 and mw.tt()['hold'] == 1,
+          f'SY test 19: a UI tick 2^32 cycles after the hold (7.16 s at 600 MHz; tests 4-18 stopped the synth there) '
+          f'leaves the engine playing (state {sw["state"]}, starts {sw["starts"]}, stops {sw["stops"]})')
     # 2. Test 5: a tone change while playing, from the screen (the Sound Generator page in SY mode): VALUE steps SOUND
     #    1 -> 9; out over 8 blocks, the new tone from rest, in over 8, value for value.
     mc = ScreenMachine(img, man, page=SG_PAGE)
