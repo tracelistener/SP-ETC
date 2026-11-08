@@ -1,4 +1,4 @@
-# SY synth test 21: test 20 without the reboots
+# SY synth test 22: test 21's crash, found and fixed
 
 A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, and the quieter Sound Generator and kits) plus the
 guitar synth. Not for sharing. To go back, patch v9.52 again.
@@ -8,19 +8,17 @@ guitar synth. Not for sharing. To go back, patch v9.52 again.
 | SP404MKII_APP1.bin ({{APP1_SIZE}} bytes) | `{{APP1_SHA256}}` |
 | SP404MKII_APP0.bin (stock 5.52) | `{{APP0_SHA256}}` |
 
-What's new since test 20:
+What's new since test 21:
 
-- **The reboots.** Test 20's crash catcher restarted the SP on any fault, including a harmless kind the stock firmware
-  ignores. Test 21 ignores that kind too. The synth's code is back in test 19's memory places, where it never
-  crashed. Every pick still attacks, as in test 20.
-- **If the synth itself goes wrong, only the synth stops**, not the SP: it goes quiet and a box with **SY CRASH**
-  shows. EXT SOURCE off, then open the guitar synth screen again, and it plays again.
-- Any other crash still restarts the SP, and the SY CRASH box shows about 4 seconds after it boots.
-- The box stays up 30 seconds. A photo of it shows me where it stopped.
+- **The crash is fixed.** Your SY CRASH numbers pointed at the very end of one of the synth's routines. At power-on
+  the SP copies the synth's code into memory in 4-byte pieces, and that part of the code ran 2 bytes past a whole
+  piece, so its last instruction, the one that returns, was never copied. The synth ran on into whatever was left in
+  memory. Test 20 had the same fault, which is why it rebooted. The emulator missed it because its memory starts
+  empty; the checks now copy exactly the way the SP does.
+- Nothing else changes: test 20's note logic (every pick attacks) and test 21's safety net stay.
 
 1. Volume low. FAT BASS (pad 9): a bass line with repeated notes (E E G A A ...), then a chromatic run up one string.
 2. SYNC LEAD (pad 7): a few phrases, some notes picked twice in a row.
-3. Play as long as test 20 took to crash, or longer.
+3. POLY PAD (pad 1): a few chords.
 
-Tell me: any restart, or the synth stopping (a photo of the SY CRASH box if one shows)? Does every pick sound? Any
-extra notes?
+Tell me: any SY CRASH box or restart (a photo if so)? Does every pick sound? Any extra notes?

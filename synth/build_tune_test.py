@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test21'
+REVISION = 'sy-synth-test22'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -847,17 +847,17 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fd
     (folder / 'tune_test.ld').write_text(f'''ENTRY(meter_mix_entry)
 SECTIONS {{
  . = {base:#x};
- .text : {{ KEEP(*tune_test.o(.text.meter_mix_entry)) KEEP(*tune_test.o(.text*)) tt_integer_end = .; {fp_keep} *(EXCLUDE_FILE(*sy_voice.o) .text*) KEEP(*(.symain)) }}
- .rodata : ALIGN(4) {{ KEEP(*(.rodata.tt_layout)) KEEP(*(.rodata.sy_layout)) *(EXCLUDE_FILE(*sy_voice.o) .rodata*) }}
- .data : ALIGN(4) {{ *(.data*) }}
+ .text : {{ KEEP(*tune_test.o(.text.meter_mix_entry)) KEEP(*tune_test.o(.text*)) tt_integer_end = .; {fp_keep} *(EXCLUDE_FILE(*sy_voice.o) .text*) KEEP(*(.symain)) . = ALIGN(4); }}
+ .rodata : ALIGN(4) {{ KEEP(*(.rodata.tt_layout)) KEEP(*(.rodata.sy_layout)) *(EXCLUDE_FILE(*sy_voice.o) .rodata*) . = ALIGN(4); }}
+ .data : ALIGN(4) {{ *(.data*) . = ALIGN(4); }}
  .bss : ALIGN(32) {{ *(.bss*) *(COMMON) }}
- .syvnotes {SYV_NOTES[0]:#x} : {{ KEEP(*(.syvnotes)) }}
- .syvbss {SYV_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.syvbss)) }}
- .sybss {SY_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.sybss)) }}
- .sytext {SY_TEXT[0]:#x} : {{ KEEP(*(.sytext)) }}
+ .syvnotes {SYV_NOTES[0]:#x} : {{ KEEP(*(.syvnotes)) . = ALIGN(4); }}
+ .syvbss {SYV_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.syvbss)) . = ALIGN(4); }}
+ .sybss {SY_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.sybss)) . = ALIGN(4); }}
+ .sytext {SY_TEXT[0]:#x} : {{ KEEP(*(.sytext)) . = ALIGN(4); }}
  .sycrash {CRASH[0]:#x} (NOLOAD) : {{ KEEP(*(.sycrash)) }}
- .syvtext {SYV_TEXT[0]:#x} : {{ KEEP(*(.syvtext)) *sy_voice.o(.text*) }}
- .syvdata {SYV_DATA[0]:#x} : {{ KEEP(*(.syvdata)) *sy_voice.o(.rodata*) }}
+ .syvtext {SYV_TEXT[0]:#x} : {{ KEEP(*(.syvtext)) *sy_voice.o(.text*) . = ALIGN(4); }}
+ .syvdata {SYV_DATA[0]:#x} : {{ KEEP(*(.syvdata)) *sy_voice.o(.rodata*) . = ALIGN(4); }}
  /DISCARD/ : {{ *(.ARM.exidx*) *(.ARM.extab*) *(.comment) *(.note*) *(.ARM.attributes) }}
 }}
 ''', encoding='ascii', newline='\n')
@@ -1108,12 +1108,19 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     table = append(img, b'', 16)
     sy_lo, sy_hi = compile_module.sy_bss
     syv_lo, syv_hi = syv['bss']
-    for row in rows + [[FLASH + file_at, base, len(code), COPY], [FLASH + sytext_at, sytext[0], len(sytext[1]), COPY],
-                       [0, sy_lo, sy_hi - sy_lo, ZERO],
-                       [FLASH + syv_at, syv['text'][0], len(syv['text'][1]), COPY],
-                       [FLASH + syvn_at, syv['notes'][0], len(syv['notes'][1]), COPY],
-                       [FLASH + syvd_at, syv['data'][0], len(syv['data'][1]), COPY],
-                       [0, syv_lo, syv_hi - syv_lo, ZERO]]:
+    ours = [[FLASH + file_at, base, len(code), COPY], [FLASH + sytext_at, sytext[0], len(sytext[1]), COPY],
+            [0, sy_lo, sy_hi - sy_lo, ZERO],
+            [FLASH + syv_at, syv['text'][0], len(syv['text'][1]), COPY],
+            [FLASH + syvn_at, syv['notes'][0], len(syv['notes'][1]), COPY],
+            [FLASH + syvd_at, syv['data'][0], len(syv['data'][1]), COPY],
+            [0, syv_lo, syv_hi - syv_lo, ZERO]]
+    # SY test 22: the stock copy and zero handlers (0x600800e4, 0x60080100) move whole words only: a row's last
+    # size % 4 bytes never arrive. Tests 20 and 21's .syvnotes was 5,526 bytes, so b_start's closing bx lr stayed
+    # behind and the unit ran on into stale SDRAM (SY CRASH 6, PC 0x83fd8f96). The sections end word-aligned now.
+    for row in ours:
+        if row[2] % 4 or row[1] % 4:
+            raise ValueError(f'boot row to {row[1]:#x}, {row[2]} bytes: not whole words (the stock copy drops the rest)')
+    for row in rows + ours:
         img += struct.pack('<4I', *row)
     struct.pack_into('<2I', img, 0x80, table - 0x80, len(img) - 0x80)
     if FLASH + len(img) > FLASH_END:
@@ -1125,7 +1132,15 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 21: test 20 on the unit: "it crashes and reboots" (test 18\'s crash catcher resets '
+        description='SY synth test 22: test 21 on the unit: "crashes immediately after playing guitar", SY CRASH 6, PC '
+                    '83FD8F96, LR 83FD8905, CF 00010000 (an undefined instruction). 0x83fd8f96 is the end of the note '
+                    'manager (.syvnotes, 5,526 bytes since test 20), right after b_start\'s closing bx lr, and LR is '
+                    'bands_poly\'s call of b_start. The stock boot copy (0x600800e4) moves 16-, 8- and 4-byte pieces, so '
+                    'a row\'s last size % 4 bytes never arrive: that bx lr stayed in flash, and the unit ran on into stale '
+                    'SDRAM (DM-404 and the suite start with zeroed memory, which runs as movs r0, r0, so neither saw it; '
+                    'test 19\'s .syvnotes was 5,568 bytes). Every section this build adds now ends on a whole word, the '
+                    'builder refuses a row that does not, and the suite leaves a row\'s tail bytes as udf #254. Nothing '
+                    'else changes. SY synth test 21: test 20 on the unit: "it crashes and reboots" (test 18\'s crash catcher resets '
                     'the SP on a fault). Test 20\'s note logic is unchanged: on the host, built with bounds, '
                     'alignment and overflow traps, it ran the user\'s take on all 20 tones and 27 TRACK settings and '
                     '8 million blocks of random tracker events and bands without a fault or a bad value, and DM-404 '

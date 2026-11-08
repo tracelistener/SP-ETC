@@ -1110,6 +1110,33 @@ step stopped where render begins, its frame stacked as the core would, sy_fault_
 sy_rx's caller with r4-r11, s0-s31, FPSCR and sp as they were, the engine and the tracker SLOW, no reset, the next
 block idle, the popup at the next UI tick).
 
+## SY synth test 22 (sy-synth-test22): test 21's crash, found
+
+Test 21 on the unit: "crashes immediately after playing guitar", with the popup: `SY CRASH 6`, PC `83FD8F96`, LR
+`83FD8905`, CF `00010000`, AD `00000000`. A UsageFault (6) for an undefined instruction (CFSR UNDEFINSTR), at the first
+byte past the note manager (`.syvnotes`, 0x83fd7a00, 5,526 bytes since test 20): right after `b_start`'s closing
+`bx lr`, with LR still `bands_poly`'s return from its call of `b_start`. So that `bx lr` never ran.
+
+- **The stock boot copy drops a row's last 1-3 bytes.** The scatter-load copy handler (0x600800e4, armlink's
+  `__scatterload_copy`) moves 16-byte pieces, then 8 if bit 3 of the size is set and 4 if bit 2 is: bits 1 and 0 are
+  never copied (the zero handler at 0x60080100 the same). A 5,526-byte row moves 5,524 bytes; `b_start`'s `bx lr`
+  (the last two) stayed in flash, and the CPU ran on into whatever the SDRAM held there, on the first note that started
+  a voice. Test 19's `.syvnotes` was 5,568 bytes (whole words); test 20 moved `repick` and `pow_k` out and made it
+  5,526, so test 20's reboots were this too (test 18's catcher reset the SP on the fault; test 21's caught it live).
+  Test 21's two suspects (code past 0x83feee80, imprecise bus errors) were not it.
+- **Why nothing caught it:** DM-404 runs the stock copy, but QEMU's SDRAM starts zeroed: 0x0000 is `movs r0, r0`, so
+  the CPU slid through the zeros into the next row's code at 0x83fd9000 (a v9.52 bridge into stock code), which
+  happened to return to `bands_poly`. The suite's `Machine` (test_nam_test.py) copied every row whole.
+- **The fix:** every output section this build adds ends with `. = ALIGN(4)` (`.syvnotes` is 5,528 bytes; the
+  others were whole words already), and the builder refuses a row it adds whose size or address is not whole words.
+  The image is test 21's but for three bytes: the two of padding and the row's size.
+- **The suite copies as the unit does now:** `Machine` writes a copy or zero row's whole words only and leaves its last
+  size % 4 bytes as `udf #254`. On test 21's image the SY checks then stop with an invalid instruction, as the unit
+  did; a new static check asks that every row this build adds is whole words.
+- **v9.52's own rows:** three of the parent's copy rows are not whole words either: kits save (0x83fd5000, 6,781
+  bytes), note repeat (0x83fdc000, 5,373) and chromatic scales (0x83fd7000, 2,478). Their last bytes are zeros (data),
+  so one or two stale bytes there are left as they were found; worth padding in the published builder too.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -1138,8 +1165,9 @@ block idle, the popup at the next UI tick).
   replaced by test 19. Whether the crash catcher's record survives the reset (no crash since).
 - Test 19 on the unit: "missed notes still on fat bass and sync lead, no matter what settings"; replaced by test 20.
 - Test 20 on the unit: "it crashes and reboots" (the popup not reported); replaced by test 21.
-- Test 21: whether the reboots are gone; if not, the SY CRASH popup's PC, LR, CF and AD. Whether every pick sounds on
-  the unit, repeats and semitone steps included; whether hammer-ons and slides should attack too (they glide); the
-  tracker and the engine's cycles together on the unit (the readout's SY line).
+- Test 21 on the unit: SY CRASH 6 at once on playing, PC 83FD8F96: the boot copy's dropped tail (test 22).
+- Test 22: whether every pick sounds on the unit, repeats and semitone steps included (test 20's note logic, never
+  heard yet); whether hammer-ons and slides should attack too (they glide); the tracker and the engine's cycles
+  together on the unit (the readout's SY line). Whether the three v9.52 rows' stale last bytes matter anywhere.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

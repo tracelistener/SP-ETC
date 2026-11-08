@@ -148,15 +148,23 @@ class Machine:
         self.cyc, self.cyc_step, self.dwt_ctrl, self.dwt_writes = 0, 0, 1, []
         uc.mmio_map(0xE0001000, 0x1000, self._dwt_read, None, self._dwt_write, None)
         uc.mem_write(FLASH, image)
+        # The stock copy (0x600800e4) and zero (0x60080100) handlers move 16-, 8- and 4-byte pieces: a row's last
+        # size % 4 bytes are never written, so on the unit they keep whatever the SDRAM held (SY test 22: test 20 and
+        # 21's note manager ended 2 bytes past a whole word, and its last instruction, b_start's bx lr, never arrived).
+        # Here those bytes read as udf #254 (0xdefe), so code or data that needs them fails as it would on the unit.
         for load, dst, size, handler in scatter(image):
+            whole, left = size & ~3, size & 3
             if handler == COPY:
-                uc.mem_write(dst, image[load - FLASH:load - FLASH + size])
+                uc.mem_write(dst, image[load - FLASH:load - FLASH + whole])
             elif handler == DECOMPRESS:
                 uc.mem_write(dst, decompress(image[load - FLASH:], size))
+                left = 0
             elif handler == ZERO:
-                uc.mem_write(dst, bytes(size))
+                uc.mem_write(dst, bytes(whole))
             else:
                 raise ValueError(f'unknown scatter handler {handler:#x}')
+            if left:
+                uc.mem_write(dst + whole, (b'\xfe\xde' * 2)[:left])
         uc.reg_write(ar.UC_ARM_REG_C1_C0_2, uc.reg_read(ar.UC_ARM_REG_C1_C0_2) | (0xF << 20))
         uc.reg_write(ar.UC_ARM_REG_FPEXC, 0x40000000)
         uc.mem_write(RET, b'\x00\xbf\x00\xbf')

@@ -156,6 +156,10 @@ def static_checks(out, man, parent_img, img):
           'scatter table = parent rows + the module row + the screen code\'s row (SY test 5, .sytext in the SY slot) + '
           'sy_block\'s zero row (SY test 3) + SY test 11\'s voice engine: three copy rows (its code, its notes, its '
           'constants) and its state\'s zero row, each inside its slot')
+    # SY test 22: the stock copy and zero handlers (0x600800e4, 0x60080100) move 16-, 8- and 4-byte pieces and drop a
+    # row's last size % 4 bytes; tests 20 and 21 lost b_start's closing bx lr that way
+    check(all(r['size'] % 4 == 0 and r['address'] % 4 == 0 for r in man['rows_added']),
+          'every boot row this build adds is whole words (the stock copy drops a row\'s last size % 4 bytes)')
     module = img[man['module_file_offset']:man['module_file_offset'] + man['module_size']]
     check(sha(module) == man['module_sha256'] and man['module_base'] + man['module_size'] <= man['module_limit'],
           f"module bytes match the manifest and end below {man['module_limit']:#x}")
