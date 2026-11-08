@@ -90,6 +90,8 @@ float wave_eval(u32 type, float p, float d, float dt, float r);
 #define AM_SOFT 0.99847f            /*   a soft start's rise: 1 - 1/653 a sample (about 20 ms) */
 #define AM_QUICK 0.97917f           /*   a picked voice's gate: 1 - 1/48 a sample (the attack is the pick's) */
 #define OFF_MAX 3                   /*   a voice in full rides this many blocks of its band off; a young one none */
+#define P_RIDE 60                   /* SY test 23, GUARD PICK on a chord tone: a voice rides its band's gaps this long
+                                       (80 ms: partials of a held chord beat and dip), unless the string stopped */
 #define G_RIDE 20                   /* SY test 16, GUARD on a mono tone: a note rides its band's gaps this long, */
 #define G_END 0.1f                  /*   unless the band's energy falls under this x its last (the string stopped) */
 /* SY test 18: a band the analysis saw struck (sy_fp.c: its energy at 2 x its last 32 blocks', in the last 32) as it
@@ -442,6 +444,7 @@ SYV_NOTES static void bands_poly(syv_state_t *s, const syv_patch_t *p, const flo
     const s32 blk = s->blk;
     const float *rc4 = blk >= 4 ? s->rc_prev[blk & 3] : rc;
     const u32 wait = kn->wait <= 12u ? kn->wait : 12u, guard = kn->guard != 0u;
+    const u32 pickg = kn->guard >= 2u;                 /* SY test 23: GUARD PICK (was ON's twin on a chord tone) */
     const float sens = (float)(kn->sens <= 50u ? kn->sens : 50u) * 0.01f;
     const u32 since = kn->since;
     u8 on[SYV_BANDS];
@@ -464,15 +467,20 @@ SYV_NOTES static void bands_poly(syv_state_t *s, const syv_patch_t *p, const flo
             continue;
         }
         n->off++;
+        if (pickg && n->off <= P_RIDE && !(e[n->band] < G_END * n->elast))   /* SY test 23: PICK: it rides the gap */
+            continue;
         if (n->young || n->off > OFF_MAX) {
             n->gate = 0;
             n->rel = blk;
-            n->fast = (u8)(blk - n->born < B_AGE);
+            n->fast = (u8)(!pickg && blk - n->born < B_AGE);   /* SY test 23: PICK: its own release, no 10 ms cut */
         }
     }
     for (u32 k = 0; k < SYV_BANDS; k++) {              /* the bands beginning (their run's (WAIT + 1)th block) */
         if (!on[k] || s->run[k] != wait + 1u || ((taken >> k) & 1ull)) continue;
         if (sens > 0.0f && tg[k] < sens * s->pkh) continue;
+        const u32 picked = since <= B_WIN + wait;
+        if (pickg && !picked && !s->onset[k]) continue;   /* SY test 23: PICK: a new voice needs a pick or its own
+                                                             string struck (not a held chord's partial flickering) */
         s32 w = -1;
         for (u32 v = 0; v < nv && w < 0; v++) {        /* a voice's partial moving on to this band */
             const syv_note_t *n = &s->n[v];
@@ -493,7 +501,7 @@ SYV_NOTES static void bands_poly(syv_state_t *s, const syv_patch_t *p, const flo
                 if (w < 0 || b_level(&s->n[v], tg) < b_level(&s->n[w], tg)) w = (s32)v;
             if ((guard ? B_GUARD : 1.0f) * b_level(&s->n[w], tg) >= tg[k]) continue;
         }
-        b_start(&s->n[w], (s32)k, tg, rc, e, blk, since <= B_WIN + wait);
+        b_start(&s->n[w], (s32)k, tg, rc, e, blk, picked);
         taken |= 1ull << k;
     }
     for (u32 v = 0; v < nv; v++) {                     /* the pitch, the level, settling, re-picks */

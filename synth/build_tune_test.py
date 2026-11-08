@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test22'
+REVISION = 'sy-synth-test23'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1132,7 +1132,16 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 22: test 21 on the unit: "crashes immediately after playing guitar", SY CRASH 6, PC '
+        description='SY synth test 23: test 22 on the unit (no crash) with the guitar fed in over USB (USB In: LINE '
+                    'IN) and the synth recorded back: it matched the twin. Held low chords clicked because the chord '
+                    'tones\' 6 voices turned over about 70 times a second (partials a semitone apart beat; each band '
+                    'dip ended a voice, each partial flicker started one). GUARD PICK on a chord tone now holds the '
+                    'voices: a voice rides its band\'s gaps P_RIDE (60) blocks unless the string stopped (energy '
+                    'under G_END x its last), ends with its own release (no 10 ms cut), and a new voice needs the '
+                    'input\'s pick or its own string struck. On the user\'s second recording (bridge and neck '
+                    'pickups): voice changes 70 -> 14 a second, POLY PAD clicks 118 -> 12 (bridge chords) and 90 -> '
+                    '32 (neck), SG FM BELL 76 -> 13 and 41 -> 30; single notes unchanged. GUARD OFF and ON are test '
+                    '22\'s. SY synth test 22: test 21 on the unit: "crashes immediately after playing guitar", SY CRASH 6, PC '
                     '83FD8F96, LR 83FD8905, CF 00010000 (an undefined instruction). 0x83fd8f96 is the end of the note '
                     'manager (.syvnotes, 5,526 bytes since test 20), right after b_start\'s closing bx lr, and LR is '
                     'bands_poly\'s call of b_start. The stock boot copy (0x600800e4) moves 16-, 8- and 4-byte pieces, so '

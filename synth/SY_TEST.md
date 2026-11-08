@@ -1137,6 +1137,39 @@ byte past the note manager (`.syvnotes`, 0x83fd7a00, 5,526 bytes since test 20):
   bytes), note repeat (0x83fdc000, 5,373) and chromatic scales (0x83fd7000, 2,478). Their last bytes are zeros (data),
   so one or two stale bytes there are left as they were found; worth padding in the published builder too.
 
+## SY synth test 23 (sy-synth-test23): GUARD PICK holds a chord's voices
+
+Test 22 on the unit: no crash. "POLY PAD sounds nice, but lower chords like G major 7 click; less with SENS up and
+GUARD on", and notes missed on the leads and the SG FM tones. Tested on the unit itself this time: the guitar played
+in over USB (SYSTEM, GENERAL, USB In: LINE IN mixes it before the input FX, where the synth listens) and the unit's
+output recorded back (the dry passes at unity, so the synth is the recording minus the dry, timed against it).
+
+- **The unit matches the twin.** SYNC LEAD on the take: every note attacked, at its pitch. On model lines picked note
+  to note the envelopes match the twin's (0.95-0.998 on the leads); the picks differ in 6 of 138, borderline.
+- **The chord clicks are the voices turning over.** On a held low G major 7 (G2 F#3 B3 D4) the twin's 6 voices
+  change about 200 times in 2.6 s: partials a semitone apart beat (G3 against F#3, F#4 against G4, C#5 against D5),
+  each band dip ends a young voice with a 10 ms cut and each flicker starts one; the top band's partials blip on and
+  off. On the user's second recording (`Documents/SP404/testttt.wav`: bridge then neck pickup, notes then chords)
+  the voices change 64-70 times a second in the chords. LAW 1:1 changes none of it (it scales levels, 47 clicks
+  against 46 on the model chords).
+- **GUARD PICK on a chord tone** (it was ON's twin there): a voice rides its band's gaps `P_RIDE` (60) blocks unless
+  the string stopped (its energy under `G_END` x its last), ends with its own release, and a new voice needs the
+  input's pick (`B_WIN`) or its own band struck (`onset`). On the second recording: voice changes 70 -> 14 a second;
+  POLY PAD clicks 118 -> 12 (bridge chords), 90 -> 32 (neck); SG FM BELL 76 -> 13, 41 -> 30; single notes as before
+  (real picks attacked on SG FM BELL 99 -> 102 of 139). GUARD ON with SENS 20 (what the user tried): 83 and 47.
+- **Tried and left out:** attacks for a new voice on a struck band (for the FM tones' note-to-note picks): 7 more of
+  139 real picks attacked, but 30-46 legato or noise onsets attacked too.
+- **Still missed:** picks at the level of the note before. On the second recording, of about 320 picks with a click
+  or a louder string, SYNC LEAD attacks all but about 30: 26 are the same note picked again while it sounds. The
+  tracker's click test (a block's energy over 2 kHz at 2 x the most of the 15 before) misses them while the note
+  before still rings; a mean-based test catches few (11-19 of 106) and fires on legato; the voices' dip-and-rise
+  re-pick rule on the band level catches none (the band level is too smooth). Next.
+
+Tools (session scratchpad `sy22/loop`, `sy22/rec2`): `sploop.exe` (plays a WAV to the SP's USB audio and records its
+return, Windows MME), `score_run.py`, `analyze_lines.py`, `compare_twin.py`, `analyze_clicks.py`; `dump_rec.py`
+(the twin's analysis and tracker once over a recording, in parallel) and `replay.py` (the host DLL's voices on it:
+picks attacked, voice changes, clicks).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -1166,8 +1199,9 @@ byte past the note manager (`.syvnotes`, 0x83fd7a00, 5,526 bytes since test 20):
 - Test 19 on the unit: "missed notes still on fat bass and sync lead, no matter what settings"; replaced by test 20.
 - Test 20 on the unit: "it crashes and reboots" (the popup not reported); replaced by test 21.
 - Test 21 on the unit: SY CRASH 6 at once on playing, PC 83FD8F96: the boot copy's dropped tail (test 22).
-- Test 22: whether every pick sounds on the unit, repeats and semitone steps included (test 20's note logic, never
-  heard yet); whether hammer-ons and slides should attack too (they glide); the tracker and the engine's cycles
-  together on the unit (the readout's SY line). Whether the three v9.52 rows' stale last bytes matter anywhere.
+- Test 22 on the unit: no crash; held low chords click (test 23); notes missed on the leads and FM tones, mostly
+  repeats at the level of the note before (still open).
+- Test 23: whether GUARD PICK's held chords lose a chord note the user plays; the remaining clicks (about one a strum:
+  the attacks themselves?). Whether the three v9.52 rows' stale last bytes matter anywhere.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.
