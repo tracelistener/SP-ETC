@@ -664,6 +664,11 @@ EXPORT void sy_rx(void) {
     u32 budget = meter.budget ? meter.budget : NOMINAL;
     u32 t0 = DWT_CYCCNT;
     u32 next = sy_fp_call(sy_fp_step, s, &tt_block.stack[STACK_BYTES / 4]);   /* test 2: the tracker's stack */
+    if (next == SY_SLOW) {                     /* SY test 21: the step faulted (sy_recover): stopped, its block not */
+        s->state = SY_SLOW;                    /*   played (the step never returns SY_SLOW itself) */
+        s->fresh = 0;
+        return;
+    }
     u32 dt = DWT_CYCCNT - t0;
     s->steps++;
     s->fresh = 1;
@@ -1910,7 +1915,7 @@ EXPORT UI_SMALL void syn_ui(void) {
 #define SCB_DCCMVAC (*(volatile u32 *)0xE000EF68u)              /* D-cache clean by address */
 #define CRASH_WORDS 12u                                         /* exc .. page */
 #define CRASH_WAIT_MS 4000u                                     /* after the boot, before the popup */
-#define CRASH_POPUP_MS 12000
+#define CRASH_POPUP_MS 30000                                    /* SY test 21: 30 s (was 12), for a photo */
 
 EXPORT __attribute__((section(".sycrash"))) volatile crash_t sy_crash;
 
@@ -1927,20 +1932,28 @@ __attribute__((section(".sytext"), noinline)) static u32 crash_sum(const volatil
     return h;
 }
 
+EXPORT volatile u32 sy_crash_live;                              /* SY test 21: faults a step came back from */
+
 /* The fault, from sy_fault: sp the stacked frame (r0-r3, r12, LR, PC, xPSR), ret the EXC_RETURN. The frame is read only
- * from a stack in DTCM/OCRAM or SDRAM (a wild stack pointer reads as 0). */
-EXPORT __attribute__((section(".sytext"), noinline, noreturn)) void sy_fault_c(const u32 *sp, u32 ret) {
+ * from a stack in DTCM/OCRAM or SDRAM (a wild stack pointer reads as 0).
+ * SY test 21: a fault in an FPU step (the tracker's or the SY engine's: thread mode on the process stack, its frame on
+ * the steps' own stack under the block tune_fp_call / sy_fp_call keep there) does not reset the SP: the frame returns
+ * to sy_recover (r0 the saved block, Thumb, no IT state), which hands the step's caller back its registers and
+ * SY_SLOW. The SY engine stops (sy_rx), so does the tracker (here); EXT SOURCE off and on starts them again. The
+ * record is kept as for a reset and crash_ui shows it at once (sy_crash_live). Any other fault resets as before. */
+EXPORT __attribute__((section(".sytext"), noinline)) void sy_fault_c(u32 *sp, u32 ret) {
     volatile crash_t *c = &sy_crash;
     u32 ipsr, a = (u32)sp;
     __asm__ volatile("mrs %0, ipsr" : "=r"(ipsr));
     u32 ok = (a & 3u) == 0u && ((a >= 0x20000000u && a <= 0x202FFFE0u) || (a >= 0x80000000u && a <= 0x83FFFFE0u));
+    u32 cfsr = SCB_CFSR, hfsr = SCB_HFSR;
     c->exc = ipsr & 0x1FFu;
     c->pc = ok ? sp[6] : 0u;
     c->lr = ok ? sp[5] : 0u;
     c->psr = ok ? sp[7] : 0u;
     c->sp = a;
-    c->cfsr = SCB_CFSR;
-    c->hfsr = SCB_HFSR;
+    c->cfsr = cfsr;
+    c->hfsr = hfsr;
     c->mmfar = SCB_MMFAR;
     c->bfar = SCB_BFAR;
     c->ret = ret;
@@ -1948,6 +1961,18 @@ EXPORT __attribute__((section(".sytext"), noinline, noreturn)) void sy_fault_c(c
     c->page = (u32)(s32)PAGE;
     c->sum = crash_sum(c);
     c->magic = CRASH_MAGIC;
+    const u32 lo = (u32)&tt_block.stack[0], saved = (u32)&tt_block.stack[STACK_BYTES / 4] - FP_SAVED;
+    if ((ret & 0xFFFFFF0Fu) == 0xFFFFFF0Du && ok && a >= lo && a + 32u <= saved) {
+        sp[0] = saved;                                          /* r0: the block sy_recover unwinds */
+        sp[6] = (u32)sy_recover & ~1u;                          /* pc */
+        sp[7] = 0x01000000u;                                    /* xPSR: Thumb, no IT, no exception */
+        tt.state = TT_SLOW;
+        SCB_CFSR = cfsr;                                        /* its status bits cleared (write one to clear) */
+        SCB_HFSR = hfsr;
+        sy_crash_live++;
+        __asm__ volatile("dsb" ::: "memory");
+        return;                                                 /* EXC_RETURN: to sy_recover */
+    }
     __asm__ volatile("dsb" ::: "memory");
     for (u32 p = (u32)c & ~31u; p < (u32)c + sizeof(crash_t); p += 32u)
         SCB_DCCMVAC = p;
@@ -1958,9 +1983,30 @@ EXPORT __attribute__((section(".sytext"), noinline, noreturn)) void sy_fault_c(c
     }
 }
 
-/* The vectors' target: the frame from the stack the fault came from (EXC_RETURN bit 2: PSP, else MSP). */
+/* The vectors' target: the frame from the stack the fault came from (EXC_RETURN bit 2: PSP, else MSP).
+ * SY test 21 (test 20 on the unit: "it crashes and reboots"): the four stock handlers are each a bare "bx lr" (the
+ * startup enables MemManage with the MPU; DM-404 took an undefined instruction as a UsageFault, 6): an imprecise bus
+ * error alone (a buffered write the bus refused, found later; CFSR = IMPRECISERR, HFSR = FORCED, or 0 when it comes as
+ * a BusFault) returns there and the SP carries on, where test 18's catcher reset it. That one now does as stock: its
+ * bits cleared (write one to clear), back to the code it stopped (r2, r3 come back from the stacked frame). Every
+ * other fault (stock's own handler would spin on it: the freeze of test 17) goes to sy_fault_c. */
 EXPORT __attribute__((section(".sytext"), naked)) void sy_fault(void) {
-    __asm__ volatile("tst lr, #4\n\t"
+    __asm__ volatile("movw r2, #0xed28\n\t"            /* CFSR */
+                     "movt r2, #0xe000\n\t"
+                     "ldr r3, [r2]\n\t"
+                     "cmp r3, #0x400\n\t"               /* IMPRECISERR alone */
+                     "bne 1f\n\t"
+                     "ldr r3, [r2, #4]\n\t"             /* HFSR: FORCED alone (or nothing) */
+                     "bics r3, r3, #0x40000000\n\t"
+                     "bne 1f\n\t"
+                     "mov r3, #0x400\n\t"
+                     "str r3, [r2]\n\t"                 /* clear IMPRECISERR */
+                     "mov r3, #0x40000000\n\t"
+                     "str r3, [r2, #4]\n\t"             /* clear FORCED */
+                     "dsb\n\t"
+                     "bx lr\n"                          /* as stock: carry on */
+                     "1:\n\t"
+                     "tst lr, #4\n\t"
                      "ite eq\n\t"
                      "mrseq r0, msp\n\t"
                      "mrsne r0, psp\n\t"
@@ -1977,21 +2023,29 @@ UI_SMALL SCREEN static char *put_hex(char *p, u32 v) {
 }
 
 /* After the boot (CRASH_WAIT_MS of UI ticks): a crash kept, once, in a popup on a stock page with no other up:
- * "SY CRASH 3" (the exception), PC, LR, CFSR and the fault address (BFAR, else MMFAR). */
+ * "SY CRASH 3" (the exception), PC, LR, CFSR and the fault address (BFAR, else MMFAR). SY test 21: a fault a step came
+ * back from (sy_crash_live moved) the same way as soon as such a page is up. */
 UI_SMALL SCREEN static void crash_ui(int elapsed) {
-    static u32 waited, done;
+    static u32 waited, done, live;
     static char text[TEXT_MAX];
-    if (done) return;
     volatile crash_t *c = &sy_crash;
-    if (c->magic != CRASH_MAGIC || c->sum != crash_sum(c)) {
-        done = 1;
-        return;
+    if (done) {                                 /* SY test 21: a fault a step came back from (no reset): at once */
+        if (sy_crash_live == live || (u32)PAGE >= STOCK_PAGES || POPUP_PENDING >= 0 || POPUP_SHOWN) return;
+        live = sy_crash_live;
+        if (c->magic != CRASH_MAGIC || c->sum != crash_sum(c)) return;
+    } else {
+        if (c->magic != CRASH_MAGIC || c->sum != crash_sum(c)) {
+            done = 1;
+            live = sy_crash_live;
+            return;
+        }
+        if (waited < CRASH_WAIT_MS) {
+            waited += elapsed > 0 ? (u32)elapsed : 1u;
+            return;
+        }
+        if ((u32)PAGE >= STOCK_PAGES || POPUP_PENDING >= 0 || POPUP_SHOWN) return;
+        live = sy_crash_live;
     }
-    if (waited < CRASH_WAIT_MS) {
-        waited += elapsed > 0 ? (u32)elapsed : 1u;
-        return;
-    }
-    if ((u32)PAGE >= STOCK_PAGES || POPUP_PENDING >= 0 || POPUP_SHOWN) return;
     char *p = put_str(text, "SY CRASH ");
     p = put_u(p, c->exc);
     p = put_str(p, "\nPC ");

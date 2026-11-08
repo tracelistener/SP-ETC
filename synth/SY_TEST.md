@@ -1061,6 +1061,55 @@ are missed, and strings left ringing together under a new one. ACID BASS (a lega
 user's take every one of the tracker's 130 note-ons attacks (test 19: 125); let-go extras 10 -> 3; no note with a wrong
 pitch from the pick; at pitch by the band's time as test 19.
 
+## SY synth test 21 (sy-synth-test21): test 20 without the reboots
+
+Test 20 on the unit: "it crashes and reboots" (no more said; the popup's record not seen). The reboot is test 18's crash
+catcher: the firmware writes SYSRESETREQ nowhere else, and its watchdogs are off from the boot on (SystemInit at
+0x60080120 clears WDOG1/WDOG2's enable and unlocks and disables the RTWDOG; nothing turns them on again).
+
+What test 20's code was checked against:
+
+- **The note logic.** sy_voice.c built for the host with UBSan traps (bounds, local bounds, alignment, float casts,
+  shifts, signed overflow) and checks after every block (each note's band and tracker band in range, every voice and
+  note float finite): the user's take with the tracker twin's events on all 20 tones with 27 settings each (LAW, GUARD,
+  SENS, TONE, P2, OCTAVE, SUSTAIN, DYNAMICS), then 400 runs of 20,000 blocks with random tracker events (notes 0-127,
+  wild flags, seq jumps, the tracker stopping and starting), random knobs and random bands (zero and huge periods):
+  no trap, no bad value. The band analysis (sy_fp.c) and the tracker (tune_fp.c) index only within their arrays.
+- **DM-404 with the take streamed into the input** (`dm21.py`, kept 25-45 ms ahead of what the unit plays out): the
+  release build went SLOW in the emulator 4 s in (its cycle counts are host time); a build with SLOW off played the
+  whole take on FAT BASS and then on SYNC LEAD, the engine and the tracker running throughout, no fault.
+
+Two things set test 20 apart from test 19, which ran without a crash:
+
+- **Its code reached memory no test had run code in:** `pow_k` and `repick` moved into the voices' slot took its
+  code to 0x83feefdc (test 19: 0x83feee80). The slot is checked free in the input (rows and references), but nothing on
+  the unit had run there. Now the two are at the module slot's end (FPU side, section `.symain`; the module 44,432
+  bytes, where tests 8-10 ran 45,032), and the voices' code is test 19's byte for byte but the calls to `pow_k`.
+- **The stock fault handlers are each a bare `bx lr`** (HardFault 0x8003c920, MemManage 0x800406a8, BusFault
+  0x80036118, UsageFault 0x800437d0; the startup's MPU setup at 0x600803dc / 0x60080516 enables MemManage, and DM-404
+  took an undefined instruction as a UsageFault). A precise fault returns to its own instruction and faults again
+  forever (test 17's freeze); an imprecise bus error (a buffered write the bus refused, reported later) goes on, as if
+  nothing happened. Test 18's catcher reset the SP on those too. Now `sy_fault` first checks CFSR = IMPRECISERR
+  (0x400) alone and HFSR = FORCED alone or 0 (a HardFault, or a BusFault of its own): it clears them (write one to
+  clear) and returns as stock does. Anything else keeps its record and resets as before; the popup after the reboot
+  stays up 30 s (was 12).
+
+And a fault in the synth itself no longer resets the SP. The tracker's and the engine's steps run on their own stack
+(tune_fp_call / sy_fp_call), which now keeps the caller's r4-r11, sp and lr, its FPSCR and d0-d15 in a fixed block
+under the stack's top (`FP_SAVED`, 176 bytes; was r4, r5, sp, lr and d0-d15). A fault in thread mode on the process
+stack whose frame lies on that stack under the block (`sy_fault_c`) keeps the record as before, then points the
+frame at `sy_recover` (stacked PC; xPSR Thumb with no IT state; r0 the block), clears CFSR and HFSR, sets the tracker
+SLOW and counts the fault (`sy_crash_live`); the exception return runs `sy_recover`, which restores the caller's
+registers and returns SY_SLOW as from the call: sy_rx stops the engine (that block not played). EXT SOURCE off ends
+the SLOW as before. `crash_ui` shows such a record at once (the boot's record still 4 s after the boot). Any other fault
+resets as before.
+
+Checks: the suite (new crash checks: CFSR 0x400 with HFSR FORCED or 0 returns at the handler's `bx lr`, writing only
+CFSR and HFSR; 0x8400, HFSR VECTTBL and a precise or instruction fault keep the record and reset; a strum playing, a
+step stopped where render begins, its frame stacked as the core would, sy_fault_c then the exception return: back in
+sy_rx's caller with r4-r11, s0-s31, FPSCR and sp as they were, the engine and the tracker SLOW, no reset, the next
+block idle, the popup at the next UI tick).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -1088,7 +1137,9 @@ pitch from the pick; at pitch by the band's time as test 19.
 - Test 18 on the unit: no crash; single notes "not smooth": extra notes, late or missing notes; LAW 2:1 too quiet;
   replaced by test 19. Whether the crash catcher's record survives the reset (no crash since).
 - Test 19 on the unit: "missed notes still on fat bass and sync lead, no matter what settings"; replaced by test 20.
-- Test 20: whether every pick sounds on the unit, repeats and semitone steps included; whether hammer-ons and slides
-  should attack too (they glide); the tracker and the engine's cycles together on the unit (the readout's SY line).
+- Test 20 on the unit: "it crashes and reboots" (the popup not reported); replaced by test 21.
+- Test 21: whether the reboots are gone; if not, the SY CRASH popup's PC, LR, CF and AD. Whether every pick sounds on
+  the unit, repeats and semitone steps included; whether hammer-ons and slides should attack too (they glide); the
+  tracker and the engine's cycles together on the unit (the readout's SY line).
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

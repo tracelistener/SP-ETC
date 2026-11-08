@@ -2744,7 +2744,125 @@ def crash_checks(parent_img, img, man):
     check(shown[0] == ([(4, expect)], 0) and shown[1][0] == [],
           f'SY test 18: after a reboot the UI tick shows the kept crash once, 4 s in ({shown[0][0]}), and clears its '
           f'magic; without one nothing shows ({shown[1][0]})')
-    report['crash'] = dict(handler=hex(fault), record=hex(crash), popup=expect)
+    # SY test 21: an imprecise bus error alone (CFSR = IMPRECISERR, HFSR = FORCED) returns as the stock handler (bx lr)
+    # does: its two status bits cleared, no record, no reset; with anything more it resets as above.
+    import capstone
+    from unicorn import UcError
+    md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
+    fa = fault & ~1                                            # the symbol carries the Thumb bit
+    code = Machine(img).bytes(fa, 0x60)
+    bx = next(i.address for i in md.disasm(code, fa) if i.mnemonic == 'bx' and i.op_str == 'lr')
+    outcomes = []
+    for cfsr, hfsr in ((0x400, 0x40000000), (0x400, 0x0), (0x8400, 0x40000000), (0x400, 0x40000002),
+                       (0x100, 0x40000000)):
+        m3 = SyMachine(img, man)
+        m3.uc.mem_write(frame, struct.pack('<8I', *words))
+        for a, v in {0xE000ED28: cfsr, 0xE000ED2C: hfsr, 0xE000ED34: 0, 0xE000ED38: 0}.items():
+            m3.put(a, v, '<I')
+        w3, last = [], []
+
+        def on_w3(uc, access, address, size, value, _):
+            w3.append((address, size, value & 0xFFFFFFFF))
+            if address == 0xE000ED0C:
+                uc.emu_stop()
+        h3 = m3.uc.hook_add(UC_HOOK_MEM_WRITE, on_w3)
+        hc = m3.uc.hook_add(UC_HOOK_CODE, lambda uc, a, s, _: last.append(a), begin=fa, end=fa + 0x60)
+        m3.uc.reg_write(ar.UC_ARM_REG_SP, frame)
+        m3.uc.reg_write(ar.UC_ARM_REG_LR, 0xFFFFFFFD)
+        try:
+            m3.uc.emu_start(fault | 1, 0, count=200000)
+        except UcError:
+            pass
+        m3.uc.hook_del(h3)
+        m3.uc.hook_del(hc)
+        resets = [v for a, s, v in w3 if a == 0xE000ED0C]
+        scb = [(hex(a), hex(v)) for a, s, v in w3 if a in (0xE000ED28, 0xE000ED2C)]
+        rec3 = struct.unpack('<14I', m3.bytes(crash, 56))
+        outcomes.append((hex(cfsr), hex(hfsr), bool(resets), scb, rec3[13] == 0x48535243, last[-1:] == [bx]))
+    want3 = [('0x400', '0x40000000', False, [('0xe000ed28', '0x400'), ('0xe000ed2c', '0x40000000')], False, True),
+             ('0x400', '0x0', False, [('0xe000ed28', '0x400'), ('0xe000ed2c', '0x40000000')], False, True),
+             ('0x8400', '0x40000000', True, [], True, False),
+             ('0x400', '0x40000002', True, [], True, False),
+             ('0x100', '0x40000000', True, [], True, False)]
+    check(outcomes == want3,
+          f'SY test 21: an imprecise bus error alone (CFSR 0x400, HFSR FORCED or 0) goes on as stock\'s bare return '
+          f'does (bx lr at {bx:#x}, CFSR and HFSR cleared, no record, no reset); with a precise one, VECTTBL or an '
+          f'instruction fault it keeps the record and resets ({outcomes})')
+    # SY test 21: a fault inside an FPU step comes back without a reset. A strum playing (110 blocks), then a step
+    # stopped where render begins (deep in sy_rx -> sy_fp_call -> sy_fp_step -> syv_block), its frame stacked under the
+    # step's SP as the core would (thread mode, process stack: EXC_RETURN 0xFFFFFFFD); sy_fault_c (as sy_fault branches
+    # to it, on another stack) points the frame at sy_recover; the exception return (the frame popped into the
+    # registers) runs sy_recover, back into sy_rx after its call, which stops the engine and returns. Every register
+    # the caller had (r4-r11, s0-s31, FPSCR, sp) as it was; the record kept, no reset; the popup at the next UI tick.
+    mf = SyMachine(img, man)
+    mf.start()
+    sig = ref.to_blocks(sy_strum('Am')[0])
+    for b in range(110):
+        mf.step(sig[b])
+    mf.popups()
+    mf.call(mf.sym['diag_ui'], 1)                              # crash_ui has looked once: no record at the boot
+    render = man['functions']['render'][0]
+    rngf = random.Random(21)
+    pattern = [rngf.getrandbits(32) for _ in range(32)]
+    for k in range(32):
+        mf.uc.reg_write(getattr(ar, f'UC_ARM_REG_S{k}'), pattern[k])
+    mf.uc.reg_write(ar.UC_ARM_REG_FPSCR, 0x00400000)
+    gpr = [rngf.getrandbits(32) for _ in range(8)]
+    for k, v in enumerate(gpr):
+        mf.uc.reg_write(getattr(ar, f'UC_ARM_REG_R{k + 4}'), v)
+    for a, v in {0xE000ED28: 0x82, 0xE000ED2C: 0x40000000, 0xE000ED34: 0xDEAD0000, 0xE000ED38: 0}.items():
+        mf.put(a, v, '<I')
+    mf.feed(sig[110])
+    stop = []
+    hr = mf.uc.hook_add(UC_HOOK_CODE, lambda uc, a, s, _: (stop.append(a), uc.emu_stop()), begin=render, end=render)
+    mf.uc.reg_write(ar.UC_ARM_REG_SP, STACK)
+    mf.uc.reg_write(ar.UC_ARM_REG_LR, RET | 1)
+    mf.uc.emu_start(mf.sym['sy_rx'] | 1, RET, count=20_000_000)
+    mf.uc.hook_del(hr)
+    step_sp = mf.uc.reg_read(ar.UC_ARM_REG_SP)
+    frame = step_sp - 32
+    lr_at = mf.uc.reg_read(ar.UC_ARM_REG_LR)
+    mf.uc.mem_write(frame, struct.pack('<8I', *(mf.uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(4)),
+                                       mf.uc.reg_read(ar.UC_ARM_REG_R12), lr_at, render, 0x01000000))
+    wf = []
+    hw = mf.uc.hook_add(UC_HOOK_MEM_WRITE, lambda uc, acc, a, s, v, _: wf.append((a, v & 0xFFFFFFFF)))
+    mf.call(mf.sym['sy_fault_c'], frame, 0xFFFFFFFD, sp=STACK - 0x400)
+    fr = struct.unpack('<8I', mf.bytes(frame, 32))
+    for k, v in enumerate(fr[:4]):                             # the exception return: the frame into the registers
+        mf.uc.reg_write(getattr(ar, f'UC_ARM_REG_R{k}'), v)
+    mf.uc.reg_write(ar.UC_ARM_REG_R12, fr[4])
+    mf.uc.reg_write(ar.UC_ARM_REG_LR, fr[5])
+    mf.uc.reg_write(ar.UC_ARM_REG_SP, frame + 32)
+    mf.uc.emu_start(fr[6] | 1, RET, count=100000)
+    mf.uc.hook_del(hw)
+    tops = mf.sym['tt_block'] + mf.lay.b_stack + 2048           # the steps' stack top
+    back = dict(pc=mf.uc.reg_read(ar.UC_ARM_REG_PC) == RET, sp=mf.uc.reg_read(ar.UC_ARM_REG_SP) == STACK,
+                r4_r11=[mf.uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k + 4}')) for k in range(8)] == gpr,
+                s0_s31=[mf.uc.reg_read(getattr(ar, f'UC_ARM_REG_S{k}')) for k in range(32)] == pattern,
+                fpscr=mf.uc.reg_read(ar.UC_ARM_REG_FPSCR) & 0xF7C0009F == 0x00400000)
+    rec4 = struct.unpack('<14I', mf.bytes(crash, 56))
+    st4 = mf.sy()
+    tts = mf.get(mf.sym['tt'] + 32, '<I')
+    live = mf.get(mf.sym['sy_crash_live'], '<I')
+    resets4 = [v for a, v in wf if a == 0xE000ED0C]
+    scb4 = [(hex(a), hex(v)) for a, v in wf if a in (0xE000ED28, 0xE000ED2C)]
+    steps4 = st4['steps']
+    mf.step(sig[111])                                          # stopped: the next block does nothing
+    mf.popups()
+    mf.call(mf.sym['diag_ui'], 1)
+    shown4 = mf.posted()
+    expect4 = f'SY CRASH 0\nPC {render:08X}\nLR {lr_at:08X}\nCF 00000082\nAD DEAD0000'
+    check(stop == [render] and fr[0] == tops - 176 and fr[6] == mf.sym['sy_recover'] & ~1 and fr[7] == 0x01000000 and
+          all(back.values()) and rec4[13] == 0x48535243 and rec4[1] == render and not resets4 and
+          scb4 == [('0xe000ed28', '0x82'), ('0xe000ed2c', '0x40000000')] and st4['state'] == 2 and tts == 2 and
+          live == 1 and mf.sy()['steps'] == steps4 and shown4 == expect4,
+          f'SY test 21: a fault in an FPU step (here as render begins, the step\'s stack at {step_sp:#x}) comes back '
+          f'without a reset: the frame to sy_recover (r0 the saved block {fr[0]:#x}, xPSR {fr[7]:#x}), the caller\'s '
+          f'registers as they were ({back}), the engine and the tracker SLOW ({st4["state"]}, {tts}), the record kept '
+          f'(PC {rec4[1]:#x}), CFSR and HFSR cleared {scb4}, no reset {resets4}; the next block does nothing; the '
+          f'popup at the next UI tick ({shown4!r})')
+    report['crash'] = dict(handler=hex(fault), record=hex(crash), popup=expect, imprecise_return=hex(bx),
+                           recover=hex(mf.sym['sy_recover']), recovered_popup=shown4)
 
 
 # ---------------------------------------------------------------------------------------------

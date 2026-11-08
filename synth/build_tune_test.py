@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test20'
+REVISION = 'sy-synth-test21'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -200,9 +200,9 @@ EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', '
            'sy_fp_step', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file', 'sy_feed', 'sy_dt1', 'sy_route_dt1',
            'sy_event', 'sy_shown', 'sy_col_draw', 'sy_foot_draw', 'sy_sg_poll', 'sy_bar_name', 'sy_bar_text',
            'sy_bar_poll', 'sy_bar_name_c', 'sy_bar_text_c', 'sy_bar_poll_c', 'sy_col_text', 'sy_foot_text',
-           'sy_fault', 'sy_fault_c', 'sy_crash')
+           'sy_fault', 'sy_fault_c', 'sy_crash', 'sy_recover', 'sy_crash_live')   # SY test 21: the last two
 DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file',
-        'sy_crash')
+        'sy_crash', 'sy_crash_live')
 
 # Exact instructions at and around every site (capstone text).
 GUARDS = [
@@ -847,7 +847,7 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fd
     (folder / 'tune_test.ld').write_text(f'''ENTRY(meter_mix_entry)
 SECTIONS {{
  . = {base:#x};
- .text : {{ KEEP(*tune_test.o(.text.meter_mix_entry)) KEEP(*tune_test.o(.text*)) tt_integer_end = .; {fp_keep} *(EXCLUDE_FILE(*sy_voice.o) .text*) }}
+ .text : {{ KEEP(*tune_test.o(.text.meter_mix_entry)) KEEP(*tune_test.o(.text*)) tt_integer_end = .; {fp_keep} *(EXCLUDE_FILE(*sy_voice.o) .text*) KEEP(*(.symain)) }}
  .rodata : ALIGN(4) {{ KEEP(*(.rodata.tt_layout)) KEEP(*(.rodata.sy_layout)) *(EXCLUDE_FILE(*sy_voice.o) .rodata*) }}
  .data : ALIGN(4) {{ *(.data*) }}
  .bss : ALIGN(32) {{ *(.bss*) *(COMMON) }}
@@ -1125,7 +1125,22 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 20: test 19 on the unit: "missed notes still on fat bass and sync lead, no matter '
+        description='SY synth test 21: test 20 on the unit: "it crashes and reboots" (test 18\'s crash catcher resets '
+                    'the SP on a fault). Test 20\'s note logic is unchanged: on the host, built with bounds, '
+                    'alignment and overflow traps, it ran the user\'s take on all 20 tones and 27 TRACK settings and '
+                    '8 million blocks of random tracker events and bands without a fault or a bad value, and DM-404 '
+                    'played the take on FAT BASS and SYNC LEAD to the end. Two things differ from test 19, which ran '
+                    'without a crash: test 20 ran the voices\' code to 0x83feefdc, past where any earlier test had '
+                    '(0x83feee80), and the stock firmware\'s fault handlers are a bare return (an imprecise bus error, '
+                    'a buffered write the bus refused, goes on there; test 18\'s catcher resets). Now the voices\' slot '
+                    'is test 19\'s again (pow_k and repick in the module\'s own slot, where tests 8-10 ran), an '
+                    'imprecise bus error alone carries on as stock (its status bits cleared), a fault inside the '
+                    'tracker\'s or the engine\'s step (on their own stack) no longer resets the SP: the step '
+                    'unwinds to its caller (sy_recover: the caller\'s registers kept in a block under the stack\'s '
+                    'top), the synth and the tracker stop (SLOW, until EXT SOURCE goes off) and the popup shows at '
+                    'once; any other fault still resets with its record, the popup now up 30 s. SY synth test 20: '
+                    'test 19 on the unit: '
+                    '"missed notes still on fat bass and sync lead, no matter '
                     'what settings". Test 19 gave a pick an attack only from silence or on a reading of another note; '
                     'over a note still sounding the tracker\'s lock moved the note without one, and a note picked '
                     'again on its own pitch never had one. On lines picked note to note (each pick cutting the note '

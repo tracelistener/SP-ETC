@@ -42,24 +42,44 @@ _Static_assert(SYV_TONES == SY_NTONES, "sy_t's settings hold every tone");
 /* SY test 11: the voices' state, in a slot of its own (.syvbss: a boot zero row) */
 syv_state_t syv_state __attribute__((section(".syvbss")));
 
-/* fn(arg) on the stack that ends at stack_top (8-byte aligned), with FPSCR and d0-d15 saved on it. */
+/* fn(arg) on the stack that ends at stack_top (8-byte aligned), with FPSCR and d0-d15 saved on it. SY test 21: and the
+ * caller's r4-r11, in the same FP_SAVED bytes under the top as tune_fp_call (r4-r12 (its sp), lr; FPSCR, a pad;
+ * d0-d15), which sy_recover unwinds to after a fault in the step. */
 __attribute__((naked, used)) u32 sy_fp_call(u32 (*fn)(sy_t *), sy_t *arg, void *stack_top) {
     __asm__ volatile(
         "mov r12, sp\n"
         "mov sp, r2\n"
-        "push {r4, r5, r12, lr}\n"
-        "vmrs r4, fpscr\n"
+        "push {r4-r12, lr}\n"
+        "vmrs r3, fpscr\n"
+        "push {r3, r4}\n"
         "vpush {d0-d15}\n"
-        "bic r5, r4, #0x00c00000\n"            /* round to nearest */
+        "bic r5, r3, #0x00c00000\n"            /* round to nearest */
         "orr r5, r5, #0x03000000\n"            /* default NaN, flush to zero */
         "vmsr fpscr, r5\n"
         "mov r5, r0\n"
         "mov r0, r1\n"
         "blx r5\n"
         "vpop {d0-d15}\n"
-        "vmsr fpscr, r4\n"
-        "pop {r4, r5, r12, lr}\n"
+        "pop {r3, r4}\n"
+        "vmsr fpscr, r3\n"
+        "pop {r4-r12, lr}\n"
         "mov sp, r12\n"
+        "bx lr\n");
+}
+
+/* SY test 21: where a fault in an FPU step goes on (sy_fault_c sets the stacked PC here and r0 to the saved block,
+ * stack_top - FP_SAVED): the caller's d0-d15, FPSCR, r4-r11 and sp back, and back to it as from the call with SY_SLOW
+ * (sy_rx stops the engine on it; sy_fault_c stops the tracker, whose return tune_rx does not read). */
+_Static_assert(SY_SLOW == 2 && FP_SAVED == 176u, "sy_recover's constants");
+__attribute__((naked, used)) void sy_recover(void) {
+    __asm__ volatile(
+        "mov sp, r0\n"
+        "vpop {d0-d15}\n"
+        "pop {r3, r4}\n"
+        "vmsr fpscr, r3\n"
+        "pop {r4-r12, lr}\n"
+        "mov sp, r12\n"
+        "movs r0, #2\n"
         "bx lr\n");
 }
 

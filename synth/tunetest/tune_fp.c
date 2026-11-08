@@ -126,23 +126,27 @@ static const float BQ[2][5] = {
     {0.010120933875441551f, 0.020241867750883102f, 0.010120933875441551f, -1.8121154308319092f, 0.8525991439819336f},
 };
 
-/* fn(arg) on the stack that ends at stack_top (8-byte aligned), with FPSCR and d0-d15 saved on it. */
+/* fn(arg) on the stack that ends at stack_top (8-byte aligned), with FPSCR and d0-d15 saved on it. SY test 21: and the
+ * caller's r4-r11, in FP_SAVED bytes under the top (r4-r12 (its sp), lr; FPSCR, a pad; d0-d15), the same as
+ * sy_fp_call's, which sy_recover (sy_fp.c) unwinds to after a fault in the step. */
 __attribute__((naked, used)) u32 tune_fp_call(u32 (*fn)(tt_t *), tt_t *arg, void *stack_top) {
     __asm__ volatile(
         "mov r12, sp\n"
         "mov sp, r2\n"
-        "push {r4, r5, r12, lr}\n"
-        "vmrs r4, fpscr\n"
+        "push {r4-r12, lr}\n"
+        "vmrs r3, fpscr\n"
+        "push {r3, r4}\n"
         "vpush {d0-d15}\n"
-        "bic r5, r4, #0x00c00000\n"            /* round to nearest */
+        "bic r5, r3, #0x00c00000\n"            /* round to nearest */
         "orr r5, r5, #0x03000000\n"            /* default NaN, flush to zero */
         "vmsr fpscr, r5\n"
         "mov r5, r0\n"
         "mov r0, r1\n"
         "blx r5\n"
         "vpop {d0-d15}\n"
-        "vmsr fpscr, r4\n"
-        "pop {r4, r5, r12, lr}\n"
+        "pop {r3, r4}\n"
+        "vmsr fpscr, r3\n"
+        "pop {r4-r12, lr}\n"
         "mov sp, r12\n"
         "bx lr\n");
 }

@@ -12,6 +12,8 @@ typedef signed char s8;
 
 #define FRAMES 64u                          /* frames an RX block (48 kHz) */
 #define STACK_BYTES 2048u                   /* the FPU side's own stack (tune_fp_call) */
+#define FP_SAVED 176u                       /* SY test 21: what tune_fp_call and sy_fp_call keep under its top: the
+                                               caller's r4-r11, sp and lr, its FPSCR and a pad, d0-d15 */
 #define TT_RING 512u                        /* the input at 12 kHz: 42.7 ms */
 #define TT_W6 100u                          /* the analysis at 6 kHz: window, lags 1..TT_T6MAX */
 #define TT_T6MIN 4u                         /* 1,500 Hz */
@@ -275,9 +277,11 @@ typedef struct {
 extern sy_t sy;
 extern sy_block_t sy_block;
 extern volatile crash_t sy_crash;
+extern volatile u32 sy_crash_live;                 /* SY test 21: faults an FPU step came back from (the SP kept on) */
 
 /* sy_fp.c */
 u32 sy_fp_call(u32 (*fn)(sy_t *), sy_t *arg, void *stack_top);
 u32 sy_fp_step(sy_t *s);
+void sy_recover(void);                             /* SY test 21: a faulted FPU step's way back to its caller */
 
 #endif

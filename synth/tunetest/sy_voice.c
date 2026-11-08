@@ -45,11 +45,16 @@ float wave_eval(u32 type, float p, float d, float dt, float r);
 #define SYV_TEXT
 #define SYV_NOTES
 #define SYV_DATA
+#define SYV_MAIN
 #else
 #define WAVE_EVAL ((float (*)(u32, float, float, float, float))0x83F80401u)
 #define SYV_TEXT __attribute__((section(".syvtext"), noinline))
 #define SYV_NOTES __attribute__((section(".syvnotes"), noinline))   /* each in its own slot: not inlined */
 #define SYV_DATA __attribute__((section(".syvdata"), noinline))
+/* SY test 21: in the module's own slot, the FPU side (its free top: tests 8-10 ran on the unit to 0x83fd3fe8). Test 20
+ * put these two in the voices' slot and so ran its code to 0x83feefdc, past where any test before had (0x83feee80);
+ * the voices' slot is test 19's again. */
+#define SYV_MAIN __attribute__((section(".symain"), noinline))
 #endif
 
 #define FS 48000.0f
@@ -173,7 +178,7 @@ SYV_DATA static float syv_log2(float x) {
 
 /* a^inv for a retention factor 0 < a < 1: near 1 through ln(1 - d) and e^y as series (exact enough for the long
  * times SUSTAIN scales), else through log2 */
-SYV_TEXT static float pow_k(float a, float inv) {   /* SY test 20: in the voices' slot (the notes' was full) */
+SYV_MAIN static float pow_k(float a, float inv) {   /* SY test 21: in the module's slot (the notes' is full) */
     float d = 1.0f - a;
     if (d <= 0.0f) return 1.0f;
     if (d < 0.05f) {
@@ -350,7 +355,7 @@ SYV_DATA static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs
 /* a period (12 kHz samples) in cents from A4: 1200 log2(12000 / 440) - 1200 log2(period) */
 static inline float cents_of_period(float per) { return 5723.26449f - 1200.0f * syv_log2(maxf(per, 1.0f)); }
 
-SYV_TEXT static u32 repick(syv_note_t *n, float lv, s32 blk) {   /* SY test 20: as pow_k */
+SYV_MAIN static u32 repick(syv_note_t *n, float lv, s32 blk) {   /* SY test 21: as pow_k */
     u32 w = n->nh % 9u;                                /* a ring of the last nine levels, this one included */
     n->hist[w] = lv;
     if (n->nh < 255u) n->nh++;
