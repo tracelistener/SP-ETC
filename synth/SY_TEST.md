@@ -1018,6 +1018,49 @@ ringing, picked as the last is let go, picked softly over a ringing low E, stopp
 string -20..+9 ms against its band (the low strings sooner), except a soft string under a loud one (+31 ms: the tracker
 reads the loud one; the bands take it at 80 ms).
 
+## SY synth test 20 (sy-synth-test20): every pick attacks
+
+Test 19 on the unit: "missed notes still on fat bass and sync lead. no matter what settings". The take test 19 was tuned
+on is mostly notes let go before the next pick, and there every note started from silence. Played note to note (each
+pick cutting the note before on its string, the way a bass line or a lead goes), test 19 gave many picks no attack:
+the note only slid to the new pitch, which on FAT BASS (its filter sweep) or SYNC LEAD (its sync sweep) sounds like a
+missed note. On model lines (riffs with repeats, chromatic runs up and down, leads, 16ths, string crossings, staccato,
+uneven picks, through the twin with the tracker) 77 of 126 picks attacked, 37 slid in:
+
+- **A note picked again on its own pitch** never attacked: the readings found the note sounding (nothing to do: "a
+  re-pick is the band's"), and the tracker's lock on the same note leaves `syn_note` as it was, which was all the SY
+  saw.
+- **A semitone step** needed two readings and its band sounding; the band of a low string sounds 21-31 ms after the
+  pick, and the tracker's lock (two clean readings) came first and moved the note, no attack.
+- **A first reading of the string before** (its window, 29 ms on a low string, still mostly the old note) started that
+  note again from silence, and then the right one slid in.
+
+Now:
+
+- **Every pluck owes an attack** (`yowe`, from the pluck until it has one or `Y_WIN` passes). From silence: its first
+  voiced reading, unless it reads the note before within `Y_OLD` (12 blocks) of the pluck. Over a note sounding: a
+  reading of another note when clean (a semitone too) or read twice; an octave, a fifth or a fourth off only twice
+  (`y_odd`: YIN's own slips; the 16th-note model read a fifth up once, clean). Else the tracker's note-on for it.
+- **The tracker's note-ons:** `ysyn` alone missed a lock on the same note. sy_fp.c now passes its count too (`yseq`,
+  the low byte of `tt.syn >> 16`, bumped by every note-on, the same note included), in the knobs' last byte. A note-on
+  while the pluck owes its attack attacks (y_start; a legato tone glides), the same note too: a re-pick the tracker's
+  level rule passed (its stray plucks do not lock). After that its note-ons move the note, no attack, as in test 19
+  (slides, hammer-ons).
+- **The bands' re-pick is off with the tracker:** a new pick's ring in the band of a note let go but still held by its
+  band struck that note again (5 of 8 staccato notes had two attacks: the old note, then the new).
+- **The note ends when the tracker lets go of it** (its level falling fast, or long unvoiced). Test 19 rang on while
+  the band did: 42 ms a note on the take. When the tracker lets go the band is at 12% of the note's peak (median; over
+  half 4 times in 125, all at real let-gos in the take).
+- Space: `repick` and `pow_k` moved to the voices' slot (the notes' was full); notes 5,526 of 5,632 bytes, voices 8,156
+  of 8,192.
+
+On the model lines 139 of 150 picks attack at their pitch on FAT BASS, SYNC LEAD, LADDER LEAD and PUNCH BASS (test 19:
+77 of 126 on the first 10 lines), none twice. The other 11: picks the tracker never hears in the model (it has no pick
+click; a pick at the level of the note it cuts makes no level jump), which slide in on the tracker's legato rule or
+are missed, and strings left ringing together under a new one. ACID BASS (a legato tone, as designed) slides. On the
+user's take every one of the tracker's 130 note-ons attacks (test 19: 125); let-go extras 10 -> 3; no note with a wrong
+pitch from the pick; at pitch by the band's time as test 19.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -1044,7 +1087,8 @@ reads the loud one; the bands take it at 80 ms).
   replaced by test 18.
 - Test 18 on the unit: no crash; single notes "not smooth": extra notes, late or missing notes; LAW 2:1 too quiet;
   replaced by test 19. Whether the crash catcher's record survives the reset (no crash since).
-- Test 19: whether single notes are clean on the unit (no extra notes at the pick or let-go), whether they feel late
-  on the low strings, and the tracker and the engine's cycles together on the unit (the readout's SY line).
+- Test 19 on the unit: "missed notes still on fat bass and sync lead, no matter what settings"; replaced by test 20.
+- Test 20: whether every pick sounds on the unit, repeats and semitone steps included; whether hammer-ons and slides
+  should attack too (they glide); the tracker and the engine's cycles together on the unit (the readout's SY line).
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

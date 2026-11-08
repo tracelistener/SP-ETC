@@ -54,7 +54,7 @@ typedef struct {
     syv_u8 yflag;                    /*   bit 0: an analysis this block, 1: it read clean, 7: the tracker runs, */
     syv_u8 ysince;                   /*   blocks since the tracker's last pluck (255: long ago), */
     syv_u8 ysyn;                     /*   its own note (the SG's: its plucks' locks, its moves) + 1, 0 none */
-    syv_u8 pad[1];
+    syv_u8 yseq;                     /* SY test 20: its note-ons' count (low byte): a pluck's lock on the same note too */
 } syv_knobs_t;
 
 /* P2 kinds (CTRL 1): what it moves */
@@ -106,7 +106,9 @@ typedef struct {
     syv_u8 since;                    /*   blocks since the input's pick (255: long ago) */
     syv_u8 yact, yprev, ymono;       /* SY test 19: the tracker's pluck acted on; the note its last analysis read (+ 1,
                                         0 not voiced); the notes are the tracker's this block */
-    syv_u8 ysyn, ypad[3];            /* SY test 19: the tracker's own note last block (+ 1) */
+    syv_u8 ysyn;                     /* SY test 19: the tracker's own note last block (+ 1) */
+    syv_u8 yseq, yowe, yold;         /* SY test 20: its note-on count seen; its pluck owes an attack; the note before
+                                        the pluck (band + 1, 0 none) */
     syv_s32 gat;                     /* SY test 18: the block the envelopes last (re)started */
     syv_s32 blk;
     float dcx, dcy;

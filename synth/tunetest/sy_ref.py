@@ -465,7 +465,8 @@ class Engine:
         self.trk = [0, 0, 0]                             # SY test 15: the TRACK page: WAIT, SENS, GUARD (every tone);
                                                          # test 18: LAW, SENS, GUARD
         self._host = None                                # SY test 11: the voices (sy_voices.Host)
-        self.ykn = (0, 0, 255, 0)                        # SY test 19: the SG tracker's word (ynote, yflag, ysince, ysyn)
+        self.ykn = (0, 0, 255, 0, 0)                     # SY test 19: the SG tracker's word (ynote, yflag, ysince, ysyn;
+                                                         # test 20: yseq, its note-ons' count)
         self.yin = None                                  # SY test 19: the tracker (tune_ref.Tracker) a mono tone's
         self.yan = 0                                     #   notes come from, while it runs (tune_ui); analyses seen
         self.hold = np.zeros(NB, np.int64)               # test 6: blocks a band sounds on after it stopped owning
@@ -496,14 +497,15 @@ class Engine:
         fresh = run and an != self.yan
         self.yan = an
         if not run:
-            self.ykn = (0, 0, 255, 0)
+            self.ykn = (0, 0, 255, 0, 0)
             return
         code = y.ycode
         ys = y.blk - 1 - y.onset_blk
         self.ykn = ((code & 0x7F) + 1 if fresh and (code & 0x100) else 0,
                     0x80 | (1 if fresh else 0) | (2 if fresh and (code & 0x200) else 0),
                     0 if ys < 0 else min(ys, 255),
-                    y.syn_note + 1 if 0 <= y.syn_note <= 126 else 0)
+                    y.syn_note + 1 if 0 <= y.syn_note <= 126 else 0,
+                    (y.syn >> 16) & 0xFF)                # SY test 20: its note-ons (a re-pick's too)
 
     def step(self, ins16, stopping=False, tone_req=None, bpm100=12000):
         """One block: 64 int16 (pair 0, (L + R) >> 1) -> 64 values for the DRY pair (int, truncated), and whether

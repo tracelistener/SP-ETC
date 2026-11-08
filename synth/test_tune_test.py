@@ -1814,6 +1814,59 @@ def sy_tone_checks(img, man):
     check(sw['state'] == SY_RUN and sw['stops'] == 0 and sw['starts'] == 1 and mw.tt()['hold'] == 1,
           f'SY test 19: a UI tick 2^32 cycles after the hold (7.16 s at 600 MHz; tests 4-18 stopped the synth there) '
           f'leaves the engine playing (state {sw["state"]}, starts {sw["starts"]}, stops {sw["stops"]})')
+    # 1e. SY test 20: a bass line picked note to note (test 19 on the unit: "missed notes still on fat bass and sync
+    #     lead"): E2 E2 G2 A2 A2 B2 A2 G2 twice, a pick every 0.25 s on one string, each cutting the note before. With the
+    #     tracker, the module's output = sy_ref.py's value for value, and every pick gets one attack, at its own pitch
+    #     by 45 ms (test 19: the repeats and some steps came in as a glide, no attack); no attack before the first pick.
+    import math
+    rnotes = [40, 40, 43, 45, 45, 47, 45, 43] * 2
+    rx = np.zeros(int((0.3 + 0.25 * len(rnotes) + 0.6) * 48000))
+    for i, n in enumerate(rnotes):
+        at = int((0.3 + 0.25 * i) * 48000)
+        end = at + int(0.253 * 48000) if i + 1 < len(rnotes) else len(rx)
+        sg = ref.guitar(ref._hz(n), (end - at) / 48000 + 0.01, amp=0.4, seed=i, B=ref._stiff(n))[:end - at]
+        if end < len(rx):
+            sg[-144:] *= np.linspace(1, 0, 144)
+        rx[at:at + len(sg)] += sg
+    rblocks = ref.to_blocks(np.clip(ref.hiss(rx, 0), -1, 1))
+    mr = SyMachine(img, man)
+    mr.put(sym['sy'] + mr.sl.tone_req, 8, '<I')
+    mr.start()
+    eng = sy_ref.Engine(8)
+    ctl = 6 * 4 * 6 + 4 * 6                                            # syv_ctl_t, the state's last member
+    rmism, rtrig, rpitch = [], [], []
+    for b, values in enumerate(rblocks):
+        mr.feed(values)
+        mr.call(sym['tune_rx'])
+        mr.call(sym['sy_rx'])
+        if b == 0:
+            mr.call(sym['tune_ui'])
+        got = list(struct.unpack('<64i', mr.bytes(sym['sy'] + mr.sl.out, 256)))
+        want, _ = eng.step(values, bpm100=mr.sy()['bpm100'])
+        if b == 0:
+            eng.yin = ref.Tracker()
+        if got != want:
+            rmism.append(b)
+        st = eng.host().state.raw
+        cf = struct.unpack_from('<12f', st, len(st) - ctl)               # gate[6], freq[6]
+        rtrig.append(st[len(st) - ctl + 6 * 4 * 6] != 0)                # trig[0]
+        rpitch.append(int(round(69 + 12 * math.log2(cf[6] / 440.0))) if cf[0] > 0 and cf[6] > 0 else -1)
+    rbad, rlate = [], []
+    for i, n in enumerate(rnotes):
+        b0 = int((0.3 + 0.25 * i) * 48000) // 64
+        b1 = int((0.3 + 0.25 * (i + 1)) * 48000) // 64 if i + 1 < len(rnotes) else len(rblocks)
+        att = [b for b in range(b0 - 2, b1 - 2) if rtrig[b]]
+        at = next((b for b in range(b0, b1) if rpitch[b] == n), None)
+        rlate.append(None if not att else round((att[0] - b0) * 64 / 48.0))
+        if len(att) != 1 or at is None or (att[0] - b0) * 64 / 48.0 > 45:
+            rbad.append((i, n, len(att), rlate[-1]))
+    early = sum(rtrig[:int(0.3 * 48000) // 64 - 2])
+    check(not rmism and not rbad and not early,
+          f'SY test 20: FAT BASS on a line picked note to note (E2 E2 G2 A2 A2 B2 A2 G2 x 2, each pick cutting the note '
+          f'before): the module\'s output = sy_ref.py\'s with the tracker, value for value ({len(rblocks)} blocks; first '
+          f'differences {rmism[:3]}); every pick one attack at its pitch, ms after the pick: {rlate} (not so: '
+          f'{rbad[:4]}); attacks before the first pick {early}')
+    report['sy']['line_attacks'] = dict(blocks=len(rblocks), mismatches=rmism[:20], attack_ms=rlate, bad=rbad[:20])
     # 2. Test 5: a tone change while playing, from the screen (the Sound Generator page in SY mode): VALUE steps SOUND
     #    1 -> 9; out over 8 blocks, the new tone from rest, in over 8, value for value.
     mc = ScreenMachine(img, man, page=SG_PAGE)

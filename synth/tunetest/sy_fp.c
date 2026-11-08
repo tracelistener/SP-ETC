@@ -313,8 +313,8 @@ u32 sy_fp_step(sy_t *s) {
         s32 ys = (s32)y->blk - 1 - y->onset_blk;
         kn.ysince = (u8)(!run ? 255 : ys < 0 ? 0 : ys > 255 ? 255 : ys);
         kn.ysyn = (u8)(run && y->syn_note >= 0 && y->syn_note <= 126 ? y->syn_note + 1 : 0);
+        kn.yseq = (u8)(run ? tt.syn >> 16 : 0u);       /* SY test 20: its note-ons (a re-pick's too) */
     }
-    kn.pad[0] = 0;
     float mgt = (s->stopping || req != b->tone) ? 0.0f : 1.0f;
     float mg = syv_block(&syv_state, &SYV_TONE[t], &kn, b->amp, b->per, b->e, b->struck, SYV_VREF, b->mg, mgt,
                          SY_FADE, SY_OUT_SCALE, s->out);

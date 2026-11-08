@@ -272,8 +272,8 @@ class _Knobs(ctypes.Structure):
                 ('ynote', ctypes.c_uint8),     # 18: LAW (0 off, 1 SY 1:1, 2 SY 2:1); 19: the SG tracker's analysis
                 ('yflag', ctypes.c_uint8),     # this block (its note + 1 if voiced), flags (1 an analysis, 2 clean,
                 ('ysince', ctypes.c_uint8),    # 0x80 the tracker runs), blocks since its pluck, its own note
-                ('ysyn', ctypes.c_uint8),      # (the SG's) + 1
-                ('pad', ctypes.c_uint8 * 1)]
+                ('ysyn', ctypes.c_uint8),      # (the SG's) + 1; 20: its note-ons' count (low byte)
+                ('yseq', ctypes.c_uint8)]
 
 
 _DLLS = {}
@@ -301,7 +301,7 @@ class Host:
         return self.lib.syv_tone(i)
 
     def set_knobs(self, tone=0, p2=0, level=0, oct=0, sus=0, dyn=0, wait=0, sens=0, guard=0, since=255, law=0,
-                  ynote=0, yflag=0, ysince=255, ysyn=0):
+                  ynote=0, yflag=0, ysince=255, ysyn=0, yseq=0):
         self.knobs.tone, self.knobs.p2, self.knobs.level = tone, p2, level
         self.knobs.oct, self.knobs.sus, self.knobs.dyn = oct, sus, dyn
         self.knobs.wait, self.knobs.sens, self.knobs.guard = wait, sens, guard   # SY test 15: the TRACK page
@@ -309,6 +309,7 @@ class Host:
         self.knobs.law = law                                                     # SY test 18
         self.knobs.ynote, self.knobs.yflag, self.knobs.ysince = ynote, yflag, ysince   # SY test 19: the tracker
         self.knobs.ysyn = ysyn
+        self.knobs.yseq = yseq & 0xFF                                            # SY test 20
 
     def block(self, tone_index, tg, per, e, struck, vref=None, mg=1.0, mgt=1.0, fade=1.0, scale=1.0):
         """One block from the bands' levels, periods (12 kHz samples), energies and, SY test 18, the blocks left of

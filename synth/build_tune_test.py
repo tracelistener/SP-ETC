@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test19'
+REVISION = 'sy-synth-test20'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1125,7 +1125,22 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 19: test 18 on the unit: no crash, single notes "not smooth": extra notes, late '
+        description='SY synth test 20: test 19 on the unit: "missed notes still on fat bass and sync lead, no matter '
+                    'what settings". Test 19 gave a pick an attack only from silence or on a reading of another note; '
+                    'over a note still sounding the tracker\'s lock moved the note without one, and a note picked '
+                    'again on its own pitch never had one. On lines picked note to note (each pick cutting the note '
+                    'before; the user\'s take was mostly let go between notes) 37 of 126 picks came in as a glide. Now '
+                    'every pluck of the tracker\'s owes an attack until it has one: its first voiced reading from '
+                    'silence (not the note before within 16 ms: that string ringing into the analysis), a reading of '
+                    'another note over one sounding (clean, a semitone too; an octave, a fifth or a fourth off only '
+                    'read twice), or the tracker\'s note-on for it (its count moves: the same note too, a re-pick its '
+                    'level rule passed). The bands\' re-pick is off with the tracker (a new pick\'s ring in a let-go '
+                    'note\'s band struck that note again first: 5 of 8 staccato notes had two attacks), and the note '
+                    'ends when the tracker lets go of it. On the lines 139 of 150 picks attack at their pitch (the '
+                    'rest: picks the tracker never heard in the model, which has no pick click; strings ringing '
+                    'together); on the take every one of the tracker\'s 130 note-ons attacks (test 19: 125), let-go '
+                    'extra notes 10 -> 3. '
+                    'SY synth test 19: test 18 on the unit: no crash, single notes "not smooth": extra notes, late '
                     'or missing notes; LAW 2:1 too quiet. The mono tones\' notes now come from the SG tracker (YIN), '
                     'which runs while the SY engine plays one: a note starts on its pluck\'s first voiced analysis '
                     '(the bands put a low string\'s overtones first: test 18 played them on 109 of the user\'s 136 '

@@ -116,6 +116,15 @@ float wave_eval(u32 type, float p, float d, float dt, float r);
 #define Y_FIX 2                     /*   a clean reading this many semitones or less off the note puts it right */
 #define Y_RIDE 20                   /*   a note whose band stopped, a band a tone or less away sounding, waits this long
                                          for the tracker's move (27 ms; it reads a slide's note in 3 analyses) */
+/* SY test 20 (test 19 on the unit: "missed notes still on fat bass and sync lead, no matter what settings"). Test 19
+ * gave a pick an attack only when nothing sounded, or on a reading of another note (clean, or twice; a semitone: twice
+ * with its band sounding); the tracker's own note (its lock) only moved the note, no attack. On lines picked note to
+ * note (each pick cutting the note before, the user's take was mostly let go between notes) 37 of 126 picks came in
+ * as a glide, no attack: every note picked again on its own pitch, and most semitone steps (the lock came first).
+ * Every pluck of the tracker's now owes an attack (yowe) until it gets one: on a reading, or on the tracker's note-on
+ * for it (its seq moved, the same note included: a re-pick its level rule passed). */
+#define Y_OLD 12                    /*   a reading of the note before this soon after the pluck is that string ringing
+                                         into the analysis (its window is 29 ms on a low string): not a new note */
 
 static const float OCT_MUL[5] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f};
 
@@ -164,7 +173,7 @@ SYV_DATA static float syv_log2(float x) {
 
 /* a^inv for a retention factor 0 < a < 1: near 1 through ln(1 - d) and e^y as series (exact enough for the long
  * times SUSTAIN scales), else through log2 */
-SYV_NOTES static float pow_k(float a, float inv) {
+SYV_TEXT static float pow_k(float a, float inv) {   /* SY test 20: in the voices' slot (the notes' was full) */
     float d = 1.0f - a;
     if (d <= 0.0f) return 1.0f;
     if (d < 0.05f) {
@@ -341,7 +350,7 @@ SYV_DATA static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs
 /* a period (12 kHz samples) in cents from A4: 1200 log2(12000 / 440) - 1200 log2(period) */
 static inline float cents_of_period(float per) { return 5723.26449f - 1200.0f * syv_log2(maxf(per, 1.0f)); }
 
-SYV_NOTES static u32 repick(syv_note_t *n, float lv, s32 blk) {
+SYV_TEXT static u32 repick(syv_note_t *n, float lv, s32 blk) {   /* SY test 20: as pow_k */
     u32 w = n->nh % 9u;                                /* a ring of the last nine levels, this one included */
     n->hist[w] = lv;
     if (n->nh < 255u) n->nh++;
@@ -542,6 +551,13 @@ SYV_NOTES static void y_start(syv_note_t *n, s32 k, const float *tg, const float
     }
 }
 
+/* SY test 20: a reading this many semitones off the note sounding is one of YIN's own slips as often as a new note
+ * (a fourth, a fifth, an octave, a twelfth, two octaves: the 16th-note model read a fifth up once, clean) */
+static inline u32 y_odd(s32 d) {
+    const s32 a = d < 0 ? -d : d;
+    return a == 5 || a == 7 || a == 12 || a == 19 || a == 24;
+}
+
 /* SY test 19: the note to band k, no attack (legato: the pitch glides), as the tracker says (its band may not sound
  * yet: it waits for it at the band's centre) */
 SYV_NOTES static void y_move(syv_note_t *n, s32 k, const u8 *on, const float *tg, const float *rc, const float *e,
@@ -571,11 +587,15 @@ SYV_NOTES static void bands_mono(syv_state_t *s, const syv_patch_t *p, const flo
     syv_note_t *n = &s->n[0];
     const float mv = M_MOVE * s->pkh;                  /* SY test 19: the level a move needs */
     const u32 yrun = (kn->yflag & 0x80u) != 0u;        /* SY test 19: the tracker runs: its notes */
+    if (yrun && !s->ymono) s->yseq = kn->yseq;         /* SY test 20: its note-ons from here on */
     s->ymono = (u8)yrun;
     if (yrun && kn->ysince == 0u) {                    /* the tracker's pluck: its first readings decide the note */
         s->yact = 0;
         s->yprev = 0;
+        s->yowe = 1;                                   /* SY test 20: it owes an attack; the note before it */
+        s->yold = (u8)(n->band >= 0 && (n->gate || blk - n->rel <= Y_WIN) ? n->band + 41 : 0);
     }
+    if (!yrun || kn->ysince > Y_WIN) s->yowe = 0;
     u8 on[SYV_BANDS], onm[SYV_BANDS], onf[SYV_BANDS];
     float lm = 0.0f;
     /* SY test 19: with the tracker's notes a note follows its partial (a bend) only from the tracker's note up (a
@@ -634,42 +654,72 @@ SYV_NOTES static void bands_mono(syv_state_t *s, const syv_patch_t *p, const flo
      * or less off it within Y_WIN of the pluck moves it there, no attack (the first period can read flat). Where the
      * tracker's own note moves (its lock on a pluck; legato: a slide, a hammer-on, a pull-off, read clean three
      * times, not a harmonic's jump, at 0.4 x its level: its let-go rule, which a let-go's lower fret, read clean,
-     * does not pass) the note moves with it, no attack. */
+     * does not pass) the note moves with it, no attack.
+     * SY test 20: a pluck owes an attack (yowe) until it has one. Its first voiced reading from silence starts the
+     * note, unless it reads the note before within Y_OLD of the pluck (that string ringing into the analysis: 16th
+     * notes on the take's model started the note before again, then slid); over a note sounding, a reading of another
+     * note takes over with an attack when clean (an octave, a fifth or a fourth off only twice: YIN's own slips) or
+     * read twice, a semitone too (test 19 wanted its band sounding: the tracker's lock came first, a glide). The
+     * tracker's note-on for the pluck (its seq moves: the same note too, a re-pick its level rule passed) attacks if
+     * the pluck has not; after that its note-ons move the note, no attack, as test 19's. */
     const u32 yv = yrun && (kn->yflag & 1u) ? kn->ynote : 0u;   /* this block's voiced analysis' note + 1 */
-    if (yrun && kn->ysyn != s->ysyn) {
+    if (yrun && s->ysyn && !kn->ysyn) {                /* SY test 20: the tracker let go (its level fell fast: a hand on */
+        if (n->gate && n->band + 41 == (s32)s->ysyn) {   /* the string; or long unvoiced): its note ends (test 19 */
+            n->gate = 0;                               /*   rang on while its band did: a let-go note's held band */
+            n->ypend = 0;                              /*   made a new pick's attack double) */
+            n->rel = blk;
+            n->fast = (u8)(blk - n->born < B_AGE);
+        }
+        s->yowe = 0;                                   /* a pluck's lock as a let-go (the level fell after it) */
+    }
+    if (yrun && kn->yseq != s->yseq) {
         const s32 k = (s32)kn->ysyn - 1 - 40;
         const u32 sounding = n->gate && n->band >= 0;
-        s->ysyn = kn->ysyn;
-        if (kn->ysyn && k >= 0 && k < SYV_BANDS && k != n->band) {
-            if (sounding) {
-                y_move(n, k, on, tg, rc, e, blk);      /* legato: the pitch moves (glide), no attack */
-            } else if (kn->ysince <= Y_WIN + Y_WIN) {  /* a pluck's note the readings missed: it starts */
-                y_start(n, k, tg, rc, e, blk, lm);
+        s->yseq = kn->yseq;
+        if (kn->ysyn && k >= 0 && k < SYV_BANDS) {
+            if (s->yowe) {                             /* SY test 20: its pluck's note, not attacked yet */
+                if (p->retrig || !sounding) {
+                    y_start(n, k, tg, rc, e, blk, lm);
+                } else if (k != n->band) {             /* a legato tone: the pitch moves (glide), no attack */
+                    y_move(n, k, on, tg, rc, e, blk);
+                }
+                s->yowe = 0;
+                s->yact = 2;
+            } else if (k != n->band || !sounding) {
+                if (sounding) {
+                    y_move(n, k, on, tg, rc, e, blk);  /* legato: the pitch moves (glide), no attack */
+                } else if (kn->ysince <= Y_WIN + Y_WIN) {   /* a pluck's note the readings missed: it starts */
+                    y_start(n, k, tg, rc, e, blk, lm);
+                }
+                if (kn->ysince <= Y_WIN) s->yact = 2;
             }
-            if (kn->ysince <= Y_WIN) s->yact = 2;
         }
     }
+    s->ysyn = kn->ysyn;
     if (yv) {
         const s32 k = (s32)yv - 1 - 40;
         const u32 clean = (kn->yflag & 2u) != 0u, twice = yv == s->yprev;
         const u32 sounding = n->gate && n->band >= 0;
+        const s32 d = k - n->band;
         if (k < 0 || k >= SYV_BANDS) {
         } else if (kn->ysince >= Y_PRE && kn->ysince <= Y_WIN) {
-            if (!s->yact) {
+            if (s->yowe) {
                 if (!sounding) {
-                    y_start(n, k, tg, rc, e, blk, lm);
-                    s->yact = 1;
-                } else if (k != n->band && (k - n->band == 1 || n->band - k == 1 ? twice && on[k] : clean || twice)) {
-                    /* a semitone off the note sounding: read twice (a re-pick's first period reads flat) */
+                    if (yv != s->yold || kn->ysince >= Y_OLD) {   /* SY test 20: not the string before */
+                        y_start(n, k, tg, rc, e, blk, lm);
+                        s->yowe = 0;
+                        s->yact = 1;
+                    }
+                } else if (d != 0 && (twice || (clean && !y_odd(d)))) {
                     if (p->retrig) {
                         y_start(n, k, tg, rc, e, blk, lm);
                     } else {                           /* a legato tone: the pitch moves (glide), no attack */
                         y_move(n, k, on, tg, rc, e, blk);
                     }
+                    s->yowe = 0;
                     s->yact = 1;
                 }
-            } else if (s->yact == 1u && clean && sounding && k != n->band && (k - n->band <= Y_FIX) &&
-                       (n->band - k <= Y_FIX)) {
+            } else if (s->yact == 1u && clean && sounding && d != 0 && d <= Y_FIX && -d <= Y_FIX) {
                 y_move(n, k, on, tg, rc, e, blk);      /* a first reading a semitone or two off: put right */
                 s->yact = 2;
             } else if (clean && sounding && k == n->band) {
@@ -745,7 +795,9 @@ SYV_NOTES static void bands_mono(syv_state_t *s, const syv_patch_t *p, const flo
             if (blk - n->start >= PROB && tg[k] >= PROB_HOLD * n->peak && blk >= 4 && absf(rc[k] - rc4[k]) < STABLE)
                 n->young = 0;
         } else {
-            if (repick(n, tg[k], blk) && since <= B_REPICK) {
+            /* SY test 20: not with the tracker's notes (its plucks attack): a new pick's ring in the band of a note
+             * let go struck that note again before the new one came (5 of 8 staccato notes had two attacks) */
+            if (!yrun && repick(n, tg[k], blk) && since <= B_REPICK) {
                 n->trig = 1;
                 n->start = blk;
                 n->peak = tg[k];
