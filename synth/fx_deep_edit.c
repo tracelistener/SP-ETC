@@ -594,6 +594,16 @@ EXPORT u32 fde_key_down(const s16 *ev) {
             fde.value_taken = 1;                       /*   main page only (page 34's and the Sound Generator page's */
             return 1;                                  /*   own handlers keep it) */
         }
+        if (fde.screen) {                              /* test15: an extra screen whose FX screen is gone (page 34, */
+            if (follow() && fde.screen < extra_screens()) {   /* REMAIN + FX on an unlit effect, closes when the */
+                fde.screen++;                          /*   popup opens: DM-404): VALUE steps it, and leaves after */
+                show();                                /*   the last */
+            } else {
+                leave();
+            }
+            fde.value_taken = 1;
+            return 1;
+        }
     }
     return 0;
 }
