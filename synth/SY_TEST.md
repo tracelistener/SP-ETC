@@ -1201,7 +1201,15 @@ picks attacked, voice changes, clicks).
 - Test 21 on the unit: SY CRASH 6 at once on playing, PC 83FD8F96: the boot copy's dropped tail (test 22).
 - Test 22 on the unit: no crash; held low chords click (test 23); notes missed on the leads and FM tones, mostly
   repeats at the level of the note before (still open).
-- Test 23: whether GUARD PICK's held chords lose a chord note the user plays; the remaining clicks (about one a strum:
-  the attacks themselves?). Whether the three v9.52 rows' stale last bytes matter anywhere.
+- Test 23 on the unit: "seems to work quite well" (neck pickup). Loop on the unit, POLY PAD, OFF -> PICK: the
+  recording's bridge chords 86 -> 9 clicks, neck chords 47 -> 36 (32 of them within 150 ms of a strum: the attacks),
+  the model chords 31 -> 2. But PICK drops chord tones: on the model chords (live) C3 in C major 7, G3 and C4 in A
+  minor 7, C#4 in D major 7 (25-47 dB under OFF); in the twin on the recording's bridge chords, notes sounding 300-500
+  ms after a strum: 23 in both, 18 only with OFF, 4 only with PICK (a frozen voice can be a partial: OFF G2 B3 F#4
+  C#5, PICK C#5). Tried in the twin (scratchpad sy22/rec2, sy_voice.c.*): voices free for 200 ms after a pick
+  (P_STRUM), a riding voice taken over by a new band, ending the chord before's riding voices at a pick: each kept
+  the tones but brought the clicks back (60-70), or kept the clicks low but dropped as many notes. Open: choosing the
+  held chord's best bands as the strum settles (lowest, steadiest, loudest) without delaying any start.
+- Whether the three v9.52 rows' stale last bytes matter anywhere.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.
