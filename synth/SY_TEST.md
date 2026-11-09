@@ -1170,6 +1170,67 @@ return, Windows MME), `score_run.py`, `analyze_lines.py`, `compare_twin.py`, `an
 (the twin's analysis and tracker once over a recording, in parallel) and `replay.py` (the host DLL's voices on it:
 picks attacked, voice changes, clicks).
 
+## SY synth test 24 (sy-synth-test24): quicker single notes, and GLITCH
+
+Test 23 on the unit: "seems to work quite well" on the neck pickup. The user asked for single notes sooner, then for
+a setting from these clean voices to test 11's ("very glitchy, artifacts", which test 12 on took out), with LAW and
+GUARD gone ("guard barely does anything") and SENS kept but stronger.
+
+- **The unit's own delay.** The user's single notes (`testttt.wav`, bridge and neck) through the loop on SYNC LEAD:
+  the unit's synth is the twin's (same level, the same picks missed) plus 4.1-4.3 ms (mean per run; three blocks:
+  the block's trip from the sound chip to the main chip and back). Pick to synth on the unit: low strings about
+  25 ms, middle 20, high 16.
+- **The tracker analyses its newest samples, every 2 blocks.** Test 23 took its span at phase 0 and decided at phase
+  3 on it (3 blocks old), every 4 blocks; `TT_EVERY` 2 now takes the span and all 100 lags at the decision. Its pre
+  (an analysis whose samples came before the pluck) is none now, the subtraction's lags `(age + 1) * 8 - W6`, and its
+  count rules keep their times (2n - 1 analyses: `AGREE` 3, `MOVE_AGREE` 5, `RELEASE` 7, `SYN_RELEASE_LONG` 23); the
+  voices' `Y_PRE` 0 and `Y_OLD` 9. On the recording (318 real picks, 283 with a settled note), SYNC LEAD's note-on:
+  low 22.7 -> 17.3 ms, middle 16.0 -> 12.0, high 12.0 -> 6.7 (medians); right at once 243 -> 243; sounding time and
+  note-offs as before (80.0 / 80.2 s, 247 / 249); attacks off any pick 7 -> 6. With the counts unchanged (twice as
+  fast) notes sounded 1.4% less. The tracker's busiest step: 26k -> about 58k instructions (every other block).
+- **A lock on the note sounding waits.** The faster schedule locked a pick on the note already playing at 4 blocks
+  (test 23: 7 at the earliest), when the level after it (`after_peak`, from 4 blocks on) had one block and the first
+  readings were still the ringing string's: an A2 picked four times softer played once, and chords picked string by
+  string lost a string (Am's E3, G's B2: read as the string before, locked as its re-pick). `LOCK_SAME` 7 holds such a
+  lock to test 23's earliest; new notes lock as soon as before (a voice's note starts on its first reading anyway).
+  On the recording: note-ons, right at once and picks without a note unchanged; attacks off any pick 6 -> 8.
+- **A mono note goes on while the tracker holds it.** On the suite's bass line (FAT BASS, E2 E2 G2 A2 A2 B2 A2 G2,
+  each pick cutting the note before) the repeated A2's band split into G#2 and A#2 at its start; the voice rode the
+  gap `Y_RIDE` (27 ms) and ended while every reading was A2, so the B2 pick's first reading (the A2 still in the
+  window, no note sounding) started an A2, which then slid to B2. Now a note whose band stopped goes on while the
+  tracker's own note is that note (its let-go ends it, as test 20 has it): every pick one attack at its pitch,
+  17-35 ms after it. On the recording: note-ons unchanged, sounding 81.6 -> 83.0 s, note-offs 247 -> 245.
+- **TRACK: GLITCH (CTRL 1, 0..100), SENS (CTRL 2, 0..100), VOICES (CTRL 3).** LAW SY 1:1 and GUARD PICK are fixed. The
+  file keeps GLITCH in LAW's byte, unmarked (a test 18-23 file's LAW reads as GLITCH 0), VOICES in GUARD's, marked
+  0x40 (a test 16-23 file's GUARD reads AUTO).
+- **VOICES** (AUTO, MONO, 2..6 in sevenths of the knob): MONO puts a poly tone on the tracker's single notes (sy_fp.c
+  runs the tracker for it; the voices' knobs() make it mono and retriggered), 2..6 caps a tone's voices (a mono tone
+  goes poly). On the recording's single notes SG FM BELL and POLY PAD on MONO start as SYNC LEAD does (17.3 / 12.0 /
+  6.7 ms, the right note at once 243 of 283); on AUTO their first attack comes at 4 ms but on another band (the right
+  note at once 3 of 283, the note moving after it 186 times).
+- **GLITCH** goes from these voices (0: test 23's, value for value on every tone tried) to test 11's. Test 11 gave
+  every band that began a voice with its own envelopes (an attack and a filter sweep), took a voice for it whatever
+  played there, and had no LAW, GUARD or `B_HAND`; tests 17-23 start an unpicked band softly under the pick's shared
+  envelopes. At g: the voice's own envelopes by g, the pick's by 1 - g (the tone's ADSR, or its ENV preset, and its
+  own filter envelope); an unpicked band attacks at (1 - g) x the held peak or more; a new band takes the quietest
+  voice at (1 - g) x its level; `B_HAND` x (1 - g); PICK's ride x (1 - g), its pick rule only under (1 - g) x the held
+  peak; LAW towards 1; re-picks without the input's pick from 0.5; a young voice's end from 10 ms to test 11's 3 ms.
+  A mono tone from 50 plays test 11's own notes (`t11_mono`, its notes_mono: confirmed bands, no tracker). On the
+  recording, POLY PAD (attacks a second, notes / chords; attacks per pick): GLITCH 0 10.6-19.6 / 7.8-8.6, 7.0-8.4;
+  50: 14.5-24.0 / 14.9-17.3, 8.6-10.0; 100: 33.1-37.7 / 46.0-48.2, 11.6-12.8; test 11 itself 30.5-34.3 /
+  42.9-45.5, 10.0-11.4. SYNC LEAD from 50: test 11's numbers exactly (4.9-9.4 attacks a second, 1.1-1.2 per pick).
+- **SENS** reaches the held peak (100; was 50) and gates the tracker's notes too: a mono tone's note starts only with
+  the playing at SENS x its held peak or more (over a sounding note a soft pick glides there, no attack). Tests 15-23
+  had SENS on the bands only, none on these tones' notes.
+- **Room:** `bands_mono`, `t11_mono`, `sg_wave` and the supersaw and FM passes moved to `.syvmore`, the rest of bounce's
+  slot (0x83FEAA00..0x83FED000: its rows end at 0x83fea990, nothing refers past them), a boot row of its own.
+- **The suite:** the tracker's steps by phase 2k / 61k / 2k / 61k (test 23: 15k / 13k / 13k / 26k); a mono tone with the
+  tracker at most 130k instructions a block (`SY_YIN_MAX` 140k; test 23 88k, the heaviest poly tones 113k). A reading
+  under 62.5 Hz (the analysis' last lags) compares C to the twin within 0.5% and 10 cents (59.3 / 59.1 Hz once). GUARD
+  PICK fixed lets PUNCH BASS's note ride its band 27 ms at the end (silence within 0.37 s, was 0.35).
+
+Demos (twin renders of the recording's neck notes and chords, GLITCH 0 / 50 / 100 / test 11): `E:\Claude\sy24_demos`.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.

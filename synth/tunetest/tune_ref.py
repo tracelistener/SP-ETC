@@ -13,17 +13,20 @@ import numpy as np
 
 FRAMES, RING, W6, T6MIN, T6MAX, W12 = 64, 512, 100, 4, 100, 200
 SPAN = W12 + 2 * T6MAX + 4
-SLICE, PEAKS = 25, 32
+PEAKS = 32
+EVERY = 2                                          # SY test 24: an analysis every 2 blocks, on the newest samples
 LEVEL_MIN = 0.0019952622
 P_MIN, P_RATIO, P_FROM, P_TO = 0.0039810717, 2.0, 3, 18   # a pluck: -48 dBFS, twice the peaks 3..18 blocks back
 THRESHOLD, APER_MAX = 0.2, 0.35
-REFRACTORY, AGREE, RELEASE = 24, 2, 4
-REPICK, MOVE_AGREE, MOVE_CENTS = 1.2, 3, 30       # the synth: a pluck on its own note; a move without a pluck
+REFRACTORY, AGREE, RELEASE = 24, 3, 7             # SY test 24: 2n - 1 analyses for test 23's n (2, 4)
+REPICK, MOVE_AGREE, MOVE_CENTS = 1.2, 5, 30       # the synth: a pluck on its own note; a move without a pluck
 CLEAN_APER = 0.15                                 # test 4: only readings this clean count (strings ringing together
                                                   # read murkier); a murky one counts as nothing heard
 CLICK_KEEP = 0.5                                  # a pluck going steady on the note playing: the level it keeps
                                                   # when the pick clicked (else it must rise REPICK)
-SYN_DROP, SYN_RELEASE_LONG = 0.3, 12              # the synth lets go: quieter than the last voiced level, or late
+LOCK_SAME = 7                                     # SY test 24: a pick's lock on the note sounding waits this many
+                                                  # blocks after the pluck (test 23's earliest lock; tune_fp.c)
+SYN_DROP, SYN_RELEASE_LONG = 0.3, 23              # the synth lets go: quieter than the last voiced level, or late
 HARMONIC_JUMPS = (12, 19, 24, 28, 31)
 VEL_FLOOR, VEL_FULL, LEVEL_BLOCKS = 50, 0.4, 13   # test 4: velocity 50..127 by sqrt(peak / VEL_FULL); level window
 HF_FC, HF_RATIO, HF_MIN, HF_FROM, HF_TO = 2000.0, 2.0, 1e-4, 2, 16   # the click: energy over 2 kHz in a block,
@@ -200,16 +203,13 @@ class Tracker:
                 self.base_x = self.ring[idx].copy()
             elif self.lock_pending and pk > self.pick_peak:
                 self.pick_peak = pk                         # the pick's peak, up to its steady note
-        phase = blk & 3
-        if phase == 0:
+        if blk % EVERY == EVERY - 1:                        # SY test 24: every 2 blocks, on the newest samples
             idx = (self.w - 1 - np.arange(SPAN)) & (RING - 1)
             self.span = self.ring[idx].copy()
-        lo = 1 + SLICE * phase
-        x = self.span
-        for k in range(lo, lo + SLICE):
-            a = x[0:2 * W6:2] - x[2 * k:2 * k + 2 * W6:2]
-            self.d6[k] = float(np.dot(a, a))
-        if phase == 3:
+            x = self.span
+            for k in range(1, T6MAX + 1):
+                a = x[0:2 * W6:2] - x[2 * k:2 * k + 2 * W6:2]
+                self.d6[k] = float(np.dot(a, a))
             self.decide(blk)
         self.blk = blk + 1
 
@@ -277,7 +277,8 @@ class Tracker:
         power = float(np.dot(x[:W12], x[:W12])) / W12
         voiced = power >= LEVEL_MIN * LEVEL_MIN and aper < APER_MAX
         age = blk - self.onset_blk
-        pre = age < 3                                       # its samples were taken before the last pluck
+        pre = age < 0                                       # its samples were taken before the last pluck (SY test 24:
+                                                            # none, the span is this block's; test 23: age < 3)
         if pre and self.lock_pending:
             self.d_base = d.copy()
         self.d_last = d.copy()
@@ -286,7 +287,7 @@ class Tracker:
             dnew = d - self.d_base                          # what the pick added
             e_new, e_all = float(np.mean(dnew[50:])), float(np.mean(d[50:]))
             mabs, mn = float(np.mean(np.abs(dnew[1:]))), float(np.min(dnew[1:]))
-            tmax = (age - 2) * 8 - W6                       # lags whose samples all came after the pluck
+            tmax = (age + 1) * 8 - W6                       # lags whose samples all came after the pluck (test 24)
             if e_new >= SUB_MIN * e_all and e_new > 0 and mn >= -SUB_NEG * mabs and tmax >= T6MIN + 2:
                 a2, c2, f2 = self.yin(np.maximum(dnew, 0.0), x, self.base_x, min(tmax, T6MAX), THR_SUB)
                 v2 = power >= LEVEL_MIN * LEVEL_MIN and a2 < APER_MAX
@@ -318,7 +319,7 @@ class Tracker:
             self.agree = self.agree + 1 if self.agree and self.prev_note == note else 1
             self.prev_note = note
             same = self.syn_note >= 0 and note == self.syn_note
-            if self.agree >= AGREE:
+            if self.agree >= AGREE and not (self.lock_pending and same and age < LOCK_SAME):   # SY test 24
                 r['note'] = note
                 if self.lock_pending:
                     v = ms(age)

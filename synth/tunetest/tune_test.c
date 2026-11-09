@@ -257,7 +257,8 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define SY_FILE_MAGIC 0x4E545953u                              /* "SYTN" */
 #define SY_FILE_VERSION 4u                                     /* SY test 11: the 20 tones */
 /* Version 4: magic, version, tone, muted, 20; 60 knob positions, 20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, SY test
- * 15's WAIT, SENS and GUARD (zero in tests 11-14's files: test 11's tracking); FNV-1a of the first 132. Version 3 (tests 6-10, 104 bytes, the sum of the first 100 at 100: the old 15 tones): only
+ * 15's WAIT, SENS and GUARD (zero in tests 11-14's files: test 11's tracking; test 18: LAW in WAIT's byte, marked
+ * 0x80; SY test 24: GLITCH there, unmarked, and VOICES in GUARD's byte, marked 0x40); FNV-1a of the first 132. Version 3 (tests 6-10, 104 bytes, the sum of the first 100 at 100: the old 15 tones): only
  * its bus (byte 98) and SOUND OFF are kept, the new tones start as designed. */
 #define SY_FILE_BYTES 136
 #define SY_FILE_SUM 132
@@ -266,10 +267,10 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define SY_FILE_SUS (SY_FILE_OCT + SY_NTONES)
 #define SY_FILE_DYN (SY_FILE_SUS + SY_NTONES)
 #define SY_FILE_BUS (SY_FILE_DYN + SY_NTONES)
-#define SY_WAIT_MAX 12u                                        /* SY test 15: the TRACK page's ranges */
-#define SY_SENS_MAX 50u
-#define SY_LAW_MAX 2u                                          /* SY test 18: LAW (OFF, SY 1:1, SY 2:1) in place of */
-#define SY_LAW_MARK 0x80u                                      /*   WAIT, its byte marked (a test 15-17 WAIT reads OFF) */
+#define SY_SENS_MAX 100u                                       /* SY test 15: the TRACK page's ranges (24: SENS 0..100, */
+#define SY_GLITCH_MAX 100u                                     /*   GLITCH 0..100 in WAIT's / LAW's byte, unmarked) */
+#define SY_VOICES_MAX 6u                                       /* SY test 24: VOICES (0 the tone's, 1 single notes, 2..6) */
+#define SY_VOICES_MARK 0x40u                                   /*   in GUARD's byte, marked (GUARD 0..2 there reads 0) */
 #define SY_FILE3_BYTES 104
 #define SY_FILE3_SUM 100
 #define FNV 2166136261u
@@ -1257,11 +1258,12 @@ UI_SMALL static void sy_ready(void) {
         u32 bus = sy_file[SY_FILE_BUS];                 /* SY test 7: the synth's bus */
         s->out_bus = (u8)(bus <= 3u ? bus : 0u);
         u32 w = sy_file[SY_FILE_BUS + 1u], se = sy_file[SY_FILE_BUS + 2u];   /* SY test 15: the TRACK page */
-        u32 law = w & ~SY_LAW_MARK;                     /* SY test 18: LAW where WAIT was (unmarked: a WAIT, OFF) */
-        s->trk[0] = (u8)((w & SY_LAW_MARK) && law <= SY_LAW_MAX ? law : 0u);
+        s->trk[0] = (u8)(w <= SY_GLITCH_MAX ? w : 0u);  /* SY test 24: GLITCH in LAW's byte (a test 18-23 file's LAW */
+                                                        /*   is 0 or marked 0x81 / 0x82: GLITCH 0, clean); LAW and */
+                                                        /*   GUARD fixed (SY 1:1, PICK) */
         s->trk[1] = (u8)(se <= SY_SENS_MAX ? se : 0u);
-        u32 g = sy_file[SY_FILE_BUS + 3u];             /* test 16: 0 OFF, 1 ON, 2 PICK */
-        s->trk[2] = (u8)(g <= 2u ? g : 0u);
+        u32 vb = sy_file[SY_FILE_BUS + 3u];             /* SY test 24: VOICES in GUARD's byte, marked (a test 16-23 */
+        s->trk[2] = (u8)((vb & ~7u) == SY_VOICES_MARK && (vb & 7u) <= SY_VOICES_MAX ? vb & 7u : 0u);   /* GUARD: 0) */
     }
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
     s->muted = sy_file[6] & 1u;
@@ -1298,9 +1300,9 @@ UI_SMALL static void sy_save(void) {
         sy_file[SY_FILE_DYN + i] = s->dynk[i];
     }
     sy_file[SY_FILE_BUS] = s->out_bus;                  /* SY test 7 */
-    for (u32 i = 0; i < 3u; i++) sy_file[SY_FILE_BUS + 1u + i] = s->trk[i];   /* SY test 15 */
-    sy_file[SY_FILE_BUS + 1u] = (u8)(s->trk[0] ? SY_LAW_MARK | s->trk[0] : 0u);   /* SY test 18: LAW, marked (OFF: 0, as
-                                                                                  a test 15-17 file's WAIT 0) */
+    sy_file[SY_FILE_BUS + 1u] = s->trk[0];              /* SY test 24: GLITCH in LAW's byte, unmarked (LAW OFF to */
+    sy_file[SY_FILE_BUS + 2u] = s->trk[1];              /*   tests 18-23); SENS; VOICES in GUARD's byte, marked */
+    sy_file[SY_FILE_BUS + 3u] = (u8)(SY_VOICES_MARK | s->trk[2]);   /*   (GUARD OFF to tests 16-23) */
     for (u32 i = SY_FILE_BUS + 4u; i < SY_FILE_SUM; i++) sy_file[i] = 0;
     put32(sy_file + SY_FILE_SUM, sy_fnv(sy_file, SY_FILE_SUM));
     s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
@@ -1430,15 +1432,15 @@ UI_SMALL SCREEN static u32 sy_page(const sy_t *s) {
 /* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): test 6: the tone's own setting, TONE and LEVEL (knob -
  * 64, 0 as designed; VALUE and the pads pick the sound); on the SHIFT page (tapped, or SHIFT held): OCTAVE (5 zones,
  * -2..+2), SUSTAIN (0..100) and DYNAMICS (0..100). SY test 15, the TRACK page (every tone): WAIT (0..12 blocks), SENS
- * (0..50 %), GUARD (the upper half on). SY test 18: LAW (OFF, SY 1:1, SY 2:1 in thirds) in WAIT's place. */
+ * (0..50 %), GUARD (the upper half on). SY test 18: LAW (OFF, SY 1:1, SY 2:1 in thirds) in WAIT's place. SY test 24:
+ * GLITCH (0..100), SENS (0..100) and VOICES (sevenths: the tone's, 1, 2..6); LAW and GUARD fixed. */
 UI_SMALL SCREEN static void sy_screen_knob(sy_t *s, u32 k, s32 pos) {
     pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
     if (s->shift_down) s->shift_used |= 2u;            /* SY test 17: before the page (a held SHIFT's turn peeks) */
     u32 tone = sy_tone(s), page = sy_page(s);
     s->turns++;
     if (page == 2u)
-        s->trk[k] = (u8)(k == 1u ? (pos * (s32)(SY_SENS_MAX + 1u)) >> 7 : (pos * 3) >> 7);   /* test 16: GUARD OFF / */
-                                                       /*   ON / PICK in thirds; test 18: LAW OFF / 1:1 / 2:1 too */
+        s->trk[k] = (u8)(k == 2u ? (pos * 7) >> 7 : (pos * 101) >> 7);   /* SY test 24: GLITCH, SENS 0..100; VOICES */
     else if (!page)
         s->knob[tone][k == 0 ? 1 : k == 1u ? 0 : 2] = (s8)(pos - 64);
     else if (k == 0)
@@ -1630,8 +1632,9 @@ UI_SMALL SCREEN static char *put_signed(char *p, s32 v) {
     return put_u(p, (u32)(v < 0 ? -v : v));
 }
 
-static const char *const SY_LABELS[9] = {0, "TONE", "LEVEL", "OCTAVE", "SUSTAIN", "DYNAMICS", "LAW", "SENS",
-                                        "GUARD"};   /* SY test 18: LAW where WAIT MS was */
+static const char *const SY_LABELS[9] = {0, "TONE", "LEVEL", "OCTAVE", "SUSTAIN", "DYNAMICS", "GLITCH", "SENS",
+                                        "VOICES"};   /* SY test 18: LAW where WAIT MS was; SY test 24: GLITCH, SENS, */
+                                                     /*   VOICES */
 
 /* Test 6: a knob's offset from 64 (-64..63) as -50..+50, and a position (0..127) as 0..100 with 64 at 50. */
 UI_SMALL SCREEN static s32 sy_pm50(s32 d) { return d >= 0 ? (d * 50 + 31) / 63 : -((-d * 50 + 32) / 64); }
@@ -1639,7 +1642,8 @@ UI_SMALL SCREEN static u32 sy_pct(u32 pos) { return pos <= 64u ? (pos * 50u + 32
 
 /* A knob column's name and value (test 6): the tone's own setting and TONE (-50..+50), LEVEL (0..100, 50 as
  * designed); the SHIFT page: OCTAVE (-2..+2), SUSTAIN and DYNAMICS (0..100); SY test 15, TRACK: WAIT in ms (0..16),
- * SENS (0..50), GUARD (OFF / ON); SY test 18: LAW (OFF / 1:1 / 2:1) in WAIT's place. */
+ * SENS (0..50), GUARD (OFF / ON); SY test 18: LAW (OFF / 1:1 / 2:1) in WAIT's place; SY test 24: GLITCH, SENS (0..100)
+ * and VOICES (AUTO: the tone's own, MONO, 2..6). */
 EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
     const sy_t *s = &sy;
     u32 tone = sy_tone(s), i = col + 3u * sy_page(s);
@@ -1662,11 +1666,13 @@ EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
     else if (i == 5)
         p = put_u(p, s->dynk[tone] ? s->dynk[tone] - 1u : SYV_DYN_DESIGN[tone]);
     else if (i == 6)
-        p = put_str(p, s->trk[0] >= 2u ? "2:1" : s->trk[0] ? "1:1" : "OFF");   /* SY test 18: LAW */
+        p = put_u(p, s->trk[0]);                       /* SY test 24: GLITCH */
     else if (i == 7)
         p = put_u(p, s->trk[1]);
+    else if (s->trk[2] >= 2u)                          /* SY test 24: VOICES */
+        p = put_u(p, s->trk[2]);
     else
-        p = put_str(p, s->trk[2] >= 2u ? "PICK" : s->trk[2] ? "ON" : "OFF");
+        p = put_str(p, s->trk[2] ? "MONO" : "AUTO");
     *p = 0;
 }
 

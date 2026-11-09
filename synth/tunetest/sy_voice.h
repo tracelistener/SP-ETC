@@ -46,8 +46,10 @@ typedef struct {
  * loudest band) and GUARD (0 off, 1 on); 0 each is test 11's tracking. */
 typedef struct {
     syv_s8 tone, p2, level;
-    syv_u8 oct, sus, dyn, wait, sens, guard, since;   /* SY test 16: GUARD 2 = PICK; since: blocks since the input's
-                                                       last pick (255: long ago) */
+    syv_u8 oct, sus, dyn, glitch, sens, guard, since;   /* SY test 16: GUARD 2 = PICK; since: blocks since the
+                                                       input's last pick (255: long ago); SY test 24: GLITCH (0..100,
+                                                       WAIT's byte: WAIT was 0 from test 18) from these clean voices to
+                                                       test 11's, SENS 0..100 */
     syv_u8 law;                      /* SY test 18: the TRACK page's LAW (0 off, 1 SY 1:1, 2 SY 2:1); WAIT is 0 */
     syv_u8 ynote;                    /* SY test 19, a mono tone's notes from the SG tracker (YIN): its analysis this
                                         block, if voiced, as its nearest note + 1 (0: none, or not voiced), */
@@ -55,6 +57,8 @@ typedef struct {
     syv_u8 ysince;                   /*   blocks since the tracker's last pluck (255: long ago), */
     syv_u8 ysyn;                     /*   its own note (the SG's: its plucks' locks, its moves) + 1, 0 none */
     syv_u8 yseq;                     /* SY test 20: its note-ons' count (low byte): a pluck's lock on the same note too */
+    syv_u8 voices;                   /* SY test 24, TRACK's CTRL 3: 0 the tone's own, 1 single notes (a poly tone on
+                                        the tracker's notes, each pick attacking), 2..6 at most that many voices */
 } syv_knobs_t;
 
 /* P2 kinds (CTRL 1): what it moves */
@@ -110,6 +114,11 @@ typedef struct {
     syv_u8 yseq, yowe, yold;         /* SY test 20: its note-on count seen; its pluck owes an attack; the note before
                                         the pluck (band + 1, 0 none) */
     syv_s32 gat;                     /* SY test 18: the block the envelopes last (re)started */
+    float gg;                        /* SY test 24: GLITCH this block, 0..1 (0: test 23's voices) */
+    float pend_pk[SYV_BANDS];        /* SY test 24, GLITCH's top half on a mono tone (test 11's notes, t11_mono): */
+    syv_s32 pend_b0[SYV_BANDS];      /*   a band waiting to be a note since this block (-1: none), its peak; */
+    float e_prev[4][SYV_BANDS];      /*   the energies of the last four blocks (a fundamental building up); */
+    syv_u8 t11, pad2[3];             /*   those notes ran last block */
     syv_s32 blk;
     float dcx, dcy;
     syv_u32 cost;                    /* voices rendered in the last block */

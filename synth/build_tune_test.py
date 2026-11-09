@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test23'
+REVISION = 'sy-synth-test24'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -127,8 +127,11 @@ SYV_TEXT = (0x83FED000, 0x83FEF000)
 SYV_NOTES = (0x83FD7A00, 0x83FD9000)
 SYV_BSS = (0x83FE4800, 0x83FE6000)
 SYV_DATA = (0x83FEF100, 0x83FF0000)    # its constants and smaller functions: the free rest of the start fix's slot
-SYV_SLOTS = (SYV_TEXT, SYV_NOTES, SYV_BSS, SYV_DATA)
-SYV_CODE = {'.syvtext': SYV_TEXT, '.syvnotes': SYV_NOTES, '.syvdata': SYV_DATA}
+# SY test 24: the mono notes (and test 11's, GLITCH's top half) and two oscillator passes in the rest of bounce's slot
+# (its rows end at 0x83fea990; nothing in v9.52 refers to 0x83fea990..0x83fed000), making room for GLITCH
+SYV_MORE = (0x83FEAA00, 0x83FED000)
+SYV_SLOTS = (SYV_TEXT, SYV_NOTES, SYV_BSS, SYV_DATA, SYV_MORE)
+SYV_CODE = {'.syvtext': SYV_TEXT, '.syvnotes': SYV_NOTES, '.syvdata': SYV_DATA, '.syvmore': SYV_MORE}
 TX_BRIDGE, RX_BRIDGE, UI_BRIDGE = 0x83FE8000, 0x83FE8030, 0x83FE8080   # bounce-3-test9's bridges
 TX_SITE, RX_SITE, FEED, LOOP, TX_BACK, TICK_REST = 0x0001D090, 0x0001D0C2, 0x0001CA80, 0x0001D05C, 0x0001D09A, 0x8006B95C
 
@@ -856,6 +859,7 @@ SECTIONS {{
  .sybss {SY_BSS[0]:#x} (NOLOAD) : {{ KEEP(*(.sybss)) . = ALIGN(4); }}
  .sytext {SY_TEXT[0]:#x} : {{ KEEP(*(.sytext)) . = ALIGN(4); }}
  .sycrash {CRASH[0]:#x} (NOLOAD) : {{ KEEP(*(.sycrash)) }}
+ .syvmore {SYV_MORE[0]:#x} : {{ KEEP(*(.syvmore)) . = ALIGN(4); }}
  .syvtext {SYV_TEXT[0]:#x} : {{ KEEP(*(.syvtext)) *sy_voice.o(.text*) . = ALIGN(4); }}
  .syvdata {SYV_DATA[0]:#x} : {{ KEEP(*(.syvdata)) *sy_voice.o(.rodata*) . = ALIGN(4); }}
  /DISCARD/ : {{ *(.ARM.exidx*) *(.ARM.extab*) *(.comment) *(.note*) *(.ARM.attributes) }}
@@ -896,7 +900,7 @@ SECTIONS {{
         raise ValueError(f'the voice engine\'s code not at its slots: {[(k, hex(a), len(b)) for k, (a, b) in syv.items()]}')
     if len(read_module.syv_bss) != 1 or read_module.syv_bss[0][0] != SYV_BSS[0] or syms.get('syv_state') != SYV_BSS[0]:
         raise ValueError(f'syv_state not alone at {SYV_BSS[0]:#x}: {read_module.syv_bss} {syms.get("syv_state")}')
-    compile_module.syv = dict(text=syv['.syvtext'], notes=syv['.syvnotes'], data=syv['.syvdata'],
+    compile_module.syv = dict(text=syv['.syvtext'], notes=syv['.syvnotes'], data=syv['.syvdata'], more=syv['.syvmore'],
                               bss=read_module.syv_bss[0], maps=read_module.sytext_maps)
     missing = [n for n in EXPORTS + ('tt_integer_end',) if n not in syms]
     if missing:
@@ -950,7 +954,7 @@ def check_module(code, text, base, integer, sytext=None, syv=None):
     if sytext:
         spans += [(lo, hi, sytext[1], sytext[0]) for lo, hi in code_spans(sytext[2])]
     extra = []                                          # SY test 11: the voice engine's two code sections
-    for name in ('text', 'notes', 'data') if syv else ():
+    for name in ('text', 'notes', 'data', 'more') if syv else ():   # SY test 24: and .syvmore
         at, blob = syv[name]
         sec = (at, at + len(blob), syv['maps'])
         spans += [(lo, hi, blob, at) for lo, hi in code_spans(sec)]
@@ -1105,6 +1109,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     syv_at = append(img, syv['text'][1], 16)                   # SY test 11
     syvn_at = append(img, syv['notes'][1], 16)
     syvd_at = append(img, syv['data'][1], 16)
+    syvm_at = append(img, syv['more'][1], 16)                  # SY test 24
     table = append(img, b'', 16)
     sy_lo, sy_hi = compile_module.sy_bss
     syv_lo, syv_hi = syv['bss']
@@ -1113,6 +1118,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
             [FLASH + syv_at, syv['text'][0], len(syv['text'][1]), COPY],
             [FLASH + syvn_at, syv['notes'][0], len(syv['notes'][1]), COPY],
             [FLASH + syvd_at, syv['data'][0], len(syv['data'][1]), COPY],
+            [FLASH + syvm_at, syv['more'][0], len(syv['more'][1]), COPY],
             [0, syv_lo, syv_hi - syv_lo, ZERO]]
     # SY test 22: the stock copy and zero handlers (0x600800e4, 0x60080100) move whole words only: a row's last
     # size % 4 bytes never arrive. Tests 20 and 21's .syvnotes was 5,526 bytes, so b_start's closing bx lr stayed
@@ -1132,7 +1138,18 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 23: test 22 on the unit (no crash) with the guitar fed in over USB (USB In: LINE '
+        description='SY synth test 24: test 23 on the unit worked "quite well on neck"; the user wanted single '
+                    'notes sooner and a setting from these clean voices to test 11\'s "very glitchy, artifacts". The '
+                    'unit matched the twin plus about 4 ms of its own path (3 blocks). The SG tracker now analyses '
+                    'its newest samples every 2 blocks (test 23: every 4, on samples 3 blocks old), its count rules '
+                    'at the same times (2n - 1): a mono tone\'s notes start 4-5 ms sooner on every string, as often '
+                    'right. TRACK: CTRL 1 GLITCH 0..100 (0 = test 23\'s voices value for value; up: each voice its '
+                    'own envelopes, unpicked bands attack, new bands take voices, GUARD PICK and LAW undone, 3 ms '
+                    'ends; from 50 a mono tone plays test 11\'s own notes), CTRL 2 SENS 0..100 (now the tracker\'s '
+                    'notes too), CTRL 3 VOICES (AUTO, MONO: a poly tone on the tracker\'s single notes, 2..6 a cap); '
+                    'LAW SY 1:1 and GUARD PICK fixed; a lock on the note sounding waits to 7 blocks (LOCK_SAME). '
+                    'SY synth test 23: test 22 on the unit '
+                    '(no crash) with the guitar fed in over USB (USB In: LINE '
                     'IN) and the synth recorded back: it matched the twin. Held low chords clicked because the chord '
                     'tones\' 6 voices turned over about 70 times a second (partials a semitone apart beat; each band '
                     'dip ended a voice, each partial flicker started one). GUARD PICK on a chord tone now holds the '
@@ -1357,10 +1374,13 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
                          what='SY test 11: its note manager (.syvnotes)'),
                     dict(kind='copy', address=syv['data'][0], size=len(syv['data'][1]), file_offset=syvd_at,
                          what='SY test 11: its constants, wave helper and output stage (.syvdata)'),
+                    dict(kind='copy', address=syv['more'][0], size=len(syv['more'][1]), file_offset=syvm_at,
+                         what='SY test 24: the mono notes, test 11\'s (GLITCH), two passes (.syvmore)'),
                     dict(kind='zero', address=syv_lo, size=syv_hi - syv_lo, what='SY test 11: its state (syv_state)')],
         syv=dict(text=dict(slot=list(SYV_TEXT), size=len(syv['text'][1]), sha256=sha(syv['text'][1])),
                  notes=dict(slot=list(SYV_NOTES), size=len(syv['notes'][1]), sha256=sha(syv['notes'][1])),
                  data=dict(slot=list(SYV_DATA), size=len(syv['data'][1]), sha256=sha(syv['data'][1])),
+                 more=dict(slot=list(SYV_MORE), size=len(syv['more'][1]), sha256=sha(syv['more'][1])),
                  state=dict(slot=list(SYV_BSS), used=[syv_lo, syv_hi]),
                  tones=[t['name'] for t in sy_voices.VOICES], gains=sy_voices.VOICE_GAINS, vref=sy_voices.VREF),
         sy_bss=dict(slot=[SY_BSS[0], SY_BSS[1]], used=[sy_lo, sy_hi]),

@@ -88,16 +88,20 @@
 #define THRESHOLD 0.2f                   /* YIN's dip */
 #define APER_MAX 0.35f                   /* voiced below this */
 #define REFRACTORY 24                    /* blocks between plucks */
-#define AGREE 2u                         /* analyses in a row for the steady note */
-#define RELEASE 4u                       /* unvoiced analyses that clear it */
+#define AGREE 3u                         /* analyses in a row for the steady note (SY test 24: twice the analyses, */
+#define RELEASE 7u                       /* unvoiced analyses that clear it      the same times: 2n - 1 for n) */
 #define SEMI_PER_LN 17.312340f           /* 12 / ln 2 */
 #define REPICK 1.2f                      /* a pluck on the note playing without a click: the level must rise this */
 #define CLICK_KEEP 0.5f                  /* with one: keep this part of the reference */
 #define CLEAN_APER 0.15f                 /* only analyses this clean count; murkier ones count as unvoiced */
-#define MOVE_AGREE 3u                    /* the synth moves without a pluck: analyses in a row on the new note, */
+#define MOVE_AGREE 5u                    /* the synth moves without a pluck: analyses in a row on the new note, */
 #define MOVE_CENTS 30                    /* each within this many cents of it */
 #define SYN_DROP 0.3f                    /* the synth lets go once unvoiced and under this part of the last voiced */
-#define SYN_RELEASE_LONG 12u             /* level (a hand on the string), else after this many unvoiced (64 ms) */
+#define LOCK_SAME 7                      /* SY test 24: a pick's lock on the note sounding waits this many blocks after
+                                            the pluck (test 23's earliest lock): the level after it (from 4 blocks on)
+                                            tells a re-pick from the string ringing on, and the first readings can be
+                                            that string's (an A2 picked softer each time, a chord picked string by string) */
+#define SYN_RELEASE_LONG 23u             /* level (a hand on the string), else after this many unvoiced (59 ms) */
 #define VEL_FLOOR 50.0f                  /* velocity = VEL_FLOOR + (127 - VEL_FLOOR) x sqrt(peak / VEL_FULL) */
 #define VEL_FULL 0.4f                    /* (a hard pick, low-passed) */
 #define LEVEL_BLOCKS 13u                 /* the string's level: the highest peak of this many newest blocks */
@@ -374,7 +378,8 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     power *= 1.0f / (float)TT_W12;
     u32 voiced = power >= LEVEL_MIN * LEVEL_MIN && y.aper < APER_MAX;
     s32 age = (s32)blk - b->onset_blk;
-    u32 pre = age < 3, sub = 0;                         /* pre: its samples were taken before the last pluck */
+    u32 pre = age < 0, sub = 0;                         /* pre: its samples were taken before the last pluck (SY test
+                                                           24: none, its span is this block's; test 23: age < 3) */
     if (pre && b->lock_pending)
         copy_d(b->d_base, d);
     copy_d(b->d_last, d);
@@ -390,7 +395,8 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                 e_all += d[k];
             }
         }
-        s32 tmax = (age - 2) * 8 - (s32)TT_W6;          /* lags whose samples all came after the pluck */
+        s32 tmax = (age + 1) * 8 - (s32)TT_W6;          /* lags whose samples all came after the pluck (SY test 24:
+                                                           the span this block's; test 23: age - 2) */
         if (e_new >= SUB_MIN * e_all && e_new > 0.0f && mn >= -SUB_NEG * 0.01f * mabs && tmax >= (s32)TT_T6MIN + 2) {
             for (u32 k = 1; k <= TT_T6MAX; k++)
                 dn[k] = dn[k] > 0.0f ? dn[k] : 0.0f;
@@ -433,7 +439,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         b->agree = b->agree && b->prev_note == note ? b->agree + 1u : 1u;
         b->prev_note = note;
         u32 same = b->syn_note >= 0 && note == b->syn_note;
-        if (b->agree >= AGREE) {
+        if (b->agree >= AGREE && !(b->lock_pending && same && age < LOCK_SAME)) {   /* SY test 24: LOCK_SAME */
             r->note = note;
             if (b->lock_pending) {
                 u32 v = ms((u32)age);
@@ -563,15 +569,13 @@ u32 tune_fp_step(tt_t *t) {
             b->pick_peak = pk;                           /* the pick's peak, up to its steady note */
         }
     }
-    u32 phase = blk & 3u;
-    if (phase == 0u)
+    if ((blk & (TT_EVERY - 1u)) == TT_EVERY - 1u) {     /* SY test 24: every 2 blocks, on the newest samples */
         for (u32 j = 0; j < TT_SPAN; j++)
             b->span[j] = b->ring[(b->w - 1u - j) & RING_MASK];
-    u32 lo = 1u + TT_SLICE * phase;
-    for (u32 k = lo; k < lo + TT_SLICE; k++)
-        b->d6[k] = diff(b->span, 2u, k, TT_W6);
-    if (phase == 3u)
+        for (u32 k = 1; k <= TT_T6MAX; k++)
+            b->d6[k] = diff(b->span, 2u, k, TT_W6);
         decide(t, b, blk);
+    }
     b->blk = blk + 1u;
     return TT_RUN;
 }

@@ -20,7 +20,9 @@ typedef signed char s8;
 #define TT_T6MAX 100u                       /* 60 Hz */
 #define TT_W12 200u                         /* the refinement at 12 kHz: window */
 #define TT_SPAN (TT_W12 + 2u * TT_T6MAX + 4u)   /* the newest samples an analysis reads */
-#define TT_SLICE 25u                        /* lags a block: an analysis takes 4 blocks (5.3 ms) */
+#define TT_EVERY 2u                         /* SY test 24: an analysis every 2 blocks (2.7 ms) on the newest samples, all
+                                               its lags at once (tests 1-23: every 4 blocks, 25 lags a block on a span
+                                               taken 3 blocks before its decision: about 5 ms later on every string) */
 #define TT_PEAKS 32u                        /* block peaks kept for the pluck test */
 #define TT_BASE (TT_W12 + 2u * TT_T6MAX + 8u)   /* test 6: the samples before a pluck kept for the refinement */
 

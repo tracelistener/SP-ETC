@@ -463,7 +463,7 @@ class Engine:
         self.suss = np.zeros(n, np.int64)                # test 5: SUSTAIN (0 as designed, 1..101)
         self.dyns = np.zeros(n, np.int64)                # test 6: DYNAMICS (0 as designed, 1..101)
         self.trk = [0, 0, 0]                             # SY test 15: the TRACK page: WAIT, SENS, GUARD (every tone);
-                                                         # test 18: LAW, SENS, GUARD
+                                                         # test 18: LAW, SENS, GUARD; SY test 24: GLITCH, SENS, (none)
         self._host = None                                # SY test 11: the voices (sy_voices.Host)
         self.ykn = (0, 0, 255, 0, 0)                     # SY test 19: the SG tracker's word (ynote, yflag, ysince, ysyn;
                                                          # test 20: yseq, its note-ons' count)
@@ -485,6 +485,12 @@ class Engine:
             self._host = voices().Host(host_dll())
         return self._host
 
+    def mono_now(self):
+        """SY test 24: whether the tone plays single notes now: VOICES (TRACK's CTRL 3) 1 yes, 2..6 no, 0 the tone's
+        own (sy_fp.c's mono, syv_block's knobs())."""
+        vo = int(self.trk[2]) if int(self.trk[2]) <= 6 else 0
+        return vo == 1 or (vo == 0 and bool(voices().VOICES[self.tone].get('mono')))
+
     def yin_word(self, ins16):
         """SY test 19: the SG tracker's step (while it runs: self.yin, a tune_ref.Tracker; tune_ui runs it for a mono
         tone) and its word for the voices, as sy_fp.c reads it: tt.res.analyses (a new one: fresh), tt_block's ycode,
@@ -492,7 +498,7 @@ class Engine:
         y = self.yin
         if y is not None:
             y.step(ins16)
-        run = y is not None and bool(voices().VOICES[self.tone].get('mono'))
+        run = y is not None and self.mono_now()                # SY test 24: VOICES 1 runs it for a poly tone too
         an = y.res['analyses'] if y is not None else self.yan
         fresh = run and an != self.yan
         self.yan = an
@@ -659,9 +665,10 @@ class Engine:
         fr = (F32(FS12) / per).astype(F32)
         t = self.tone
         h = self.host()
-        law = int(self.trk[0]) if int(self.trk[0]) <= 2 else 0   # SY test 18: TRACK's first setting is LAW (WAIT 0)
+        # SY test 24: TRACK is GLITCH (0..100) and SENS (0..100); LAW SY 1:1 and GUARD PICK fixed (GLITCH undoes them)
         h.set_knobs(*[int(v) for v in self.knobs[t]], int(self.octs[t]), int(self.suss[t]), int(self.dyns[t]),
-                    0, int(self.trk[1]), int(self.trk[2]), min(self.blocks - self.last_pick, 255), law, *self.ykn)
+                    min(int(self.trk[0]), 100), min(int(self.trk[1]), 100), 2, min(self.blocks - self.last_pick, 255),
+                    1, *self.ykn, voices=int(self.trk[2]) if int(self.trk[2]) <= 6 else 0)   # SY test 24: VOICES
         mgt = F32(0) if stopping or tone_req != self.tone else F32(1)
         res, mg = h.block(t, tg, per, e, self.struck, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
                           scale=float(G['OUT_SCALE']))   # SY test 18: the strikes (tests 12-17: nper, unused)

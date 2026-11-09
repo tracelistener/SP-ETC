@@ -313,10 +313,13 @@ u32 sy_fp_step(sy_t *s) {
     kn.oct = (u8)s->oct[t];
     kn.sus = s->susk[t];
     kn.dyn = s->dynk[t];
-    kn.wait = 0;                                        /* SY test 15: the TRACK page (every tone); test 18: its */
-    kn.law = s->trk[0] <= 2u ? s->trk[0] : 0u;          /*   first setting is LAW (WAIT is gone: 0) */
-    kn.sens = s->trk[1];
-    kn.guard = s->trk[2];
+    kn.glitch = s->trk[0] <= 100u ? s->trk[0] : 100u;   /* SY test 15: the TRACK page (every tone); test 24: GLITCH */
+    kn.law = 1u;                                        /*   and SENS, LAW SY 1:1 and GUARD PICK fixed (GLITCH */
+    kn.sens = s->trk[1];                                /*   undoes them towards test 11's voices) */
+    kn.guard = 2u;
+    const u32 vo = s->trk[2] <= 6u ? s->trk[2] : 0u;    /* SY test 24: VOICES (CTRL 3): 1 single notes, 2..6 a cap */
+    const u32 mono = vo == 1u ? 1u : vo >= 2u ? 0u : SYV_TONE[t].mono;   /*   (syv_block's knobs() the same) */
+    kn.voices = (u8)vo;
     {
         s32 since = (s32)b->blocks - b->last_pick;      /* SY test 16: blocks since the last pick */
         kn.since = (u8)(since > 255 ? 255 : since);
@@ -324,10 +327,10 @@ u32 sy_fp_step(sy_t *s) {
     {   /* SY test 19: a mono tone's notes from the SG tracker (YIN), while it runs (tune_ui runs it for one); its step
          * came first this wake (diag_rx_c: tune_rx, then sy_rx) */
         const tt_block_t *y = &tt_block;
-        const u32 run = SYV_TONE[t].mono && tt.state == TT_RUN && tt.req && y->started;
+        const u32 run = mono && tt.state == TT_RUN && tt.req && y->started;
         const u32 an = tt.res.analyses, fresh = run && an != b->yan, code = y->ycode;
         b->yan = an;
-        b->mono = SYV_TONE[t].mono;
+        b->mono = mono;                                 /* SY test 24: VOICES 1 runs it for a poly tone too */
         kn.ynote = (u8)(fresh && (code & 0x100u) ? (code & 0x7Fu) + 1u : 0u);
         kn.yflag = (u8)((run ? 0x80u : 0u) | (fresh ? 1u : 0u) | (fresh && (code & 0x200u) ? 2u : 0u));
         s32 ys = (s32)y->blk - 1 - y->onset_blk;
