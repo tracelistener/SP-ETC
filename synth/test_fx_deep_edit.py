@@ -1450,6 +1450,39 @@ def anypage_checks(img, parent, man, st):
           'test15: with the hidden settings off, or no FX screen up, VALUE is not taken (held until its release)')
 
 
+def gone_checks(img, parent, man, st):
+    """Test15: on the unit page 34 (REMAIN + FX on an unlit effect) closes when the hidden settings' popup opens, its
+    FX screen with it (DM-404): VALUE then steps the extra screens without an FX screen, and leaves after the last."""
+    rt = Runtime(parent)
+    e = man['entries']
+    m, sc = fx_machine(img, man)
+    sc.open()
+    m.bus_effect(1, TAPE_ECHO)
+    m.w32(TOP_PAGE, 0)
+
+    def ev(kind, a1=0, a2=0):
+        m.uc.mem_write(EVENT, struct.pack('<6h', kind, a1, a2, 0, 0, 0))
+        return EVENT
+
+    for _ in range(2):                                  # screen 2, then the first extra screen
+        m.call(e['fde_key_down'], ev(EV_KEY, KEY_VALUE))
+        m.call(e['fde_key_up'], ev(EV_KEY_UP, KEY_VALUE))
+    first = m.state()['screen']
+    m.w32(FX_SHOWN, 0)                                  # the FX screen gone with page 34
+    screens = (len(st.by_fx[TAPE_ECHO]) + 2) // 3
+    seq = []
+    for _ in range(screens):
+        m.clear()
+        took = m.call(e['fde_key_down'], ev(EV_KEY, KEY_VALUE))
+        m.call(e['fde_key_up'], ev(EV_KEY_UP, KEY_VALUE))
+        seq.append((took, m.state()['screen'], m.popups))
+    want = [(1, k, [(screen_text(rt, st, 1, TAPE_ECHO, k), SCREEN_MS)]) for k in range(2, screens + 1)] + \
+        [(1, 0, [(screen_text(rt, st, 1, TAPE_ECHO, screens), GONE_MS)])]
+    check(first == 1 and seq == want,
+          f'test15: an extra screen whose FX screen is gone (page 34 closes when the popup opens): VALUE steps it and '
+          f'leaves after the last, taken ({[(t, s) for t, s, _ in seq]})')
+
+
 def main():
     out = Path(sys.argv[1])
     man = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
@@ -1475,6 +1508,7 @@ def main():
     chip_redraw_checks(img, parent, man, st)
     pointer_checks(img, parent, man, st)
     anypage_checks(img, parent, man, st)
+    gone_checks(img, parent, man, st)
     print(json.dumps(dict(cases=cases[0])))
     print('ALL PASS' if not fails else f'{len(fails)} FAILED')
     sys.exit(1 if fails else 0)

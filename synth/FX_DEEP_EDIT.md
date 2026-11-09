@@ -465,9 +465,13 @@ guitar synth screen they never come.
   handler works the BUS extra screens too, and any key but VALUE and SHIFT leaves one, on any page (TOP's filter did
   both on TOP only). With the hidden settings off, or no FX screen up, VALUE goes on as before. The file is held while
   an FX screen is up on any page; HOLD + VALUE holds an FX screen on any page.
-- **Checked:** `test_fx_deep_edit.py` 106 of 106 (4 new: VALUE, CTRL 1 and leaving with TOP's object gone and only
-  stock's pointer to the screen; VALUE not taken with the settings off or no screen up). The blob is 10,208 bytes
-  (test14: 10,112).
+- **Page 34 closes when a popup opens** (DM-404: the hidden settings' popup came up over the main page, page 34 and
+  its FX screen gone; test14's "HOLD + VALUE on a locked FX screen sent the display to the main screen" on the unit
+  looks the same). So VALUE steps an extra screen whose FX screen is gone, and leaves after the last; the knobs
+  still edit it. Keeping page 34 up would take a change to stock's page 34.
+- **Checked:** `test_fx_deep_edit.py` 107 of 107 (5 new: VALUE, CTRL 1 and leaving with TOP's object gone and only
+  stock's pointer to the screen; VALUE not taken with the settings off or no screen up; VALUE stepping and leaving
+  with the FX screen gone). The blob is 10,304 bytes (test14: 10,112).
 
 ## Not known (the hardware test, or later)
 
