@@ -48,6 +48,20 @@ SOFT_LEVEL, SOFT_HOLD = 0.7, 0.7                 # the 2 blocks' peak at least S
                                                   # click while a pick's attack falls away: an overdriven low E 140 ms
                                                   # after its pick, 0.51); a soft-only pluck plays only with the level
                                                   # now at SOFT_HOLD x its reference (a let-go's falls: nothing)
+# SY test 30 (the user on tests 27-29: lead tones "either missing notes or extra notes sometimes"):
+# - a quick move counts only when the level held over it: the level now at least QUICK_HOLD x the highest peak
+#   QUICK_BACK..QUICK_BACK + QUICK_WIN - 1 blocks back (32-43 ms). On the user's take (every note let go before the
+#   next pick, the fretting finger sliding on as it lets go) test 27's quick moves were mostly that slide, the level
+#   falling 1.3-8.8 dB: 17 extra short notes; a picked fret change brings a pick's energy;
+# - a pick from quiet, softer than the note before, is heard: the jump test wanted JUMP_ENV x the envelope, which the
+#   note before leaves high for half a second (every other note of the take played 12 dB softer: 44 of 120 lost, 8 dB
+#   softer 12, no click to save them on the neck pickup). It is waived when the 21 ms before the block were at most
+#   QUIET_REF x the envelope (the note before has stopped) and the block is QUIET_RATIO x them and QUIET_ENV x the
+#   envelope (44 -> 9, 12 -> 4), and the envelope restarts from the pick (its moves and let-go by its own level).
+# The soft click stays: on a version of the take picked note to note at even strength (each pick over the note before,
+# its fret first) it hears most of the picks the jump and click tests miss (101 of 233 attacked; 59 without it).
+QUICK_HOLD, QUICK_BACK, QUICK_WIN = 1.0, 24, 8
+QUIET_REF, QUIET_RATIO, QUIET_ENV = 0.35, 3.0, 0.2
 # Test 6. The level: a peak follower falling with a 0.3 s time constant (env). Letting a fretted note go (synth
 # test 5 on the unit: "a second note on release") leaves the open string or a touch harmonic far quieter than the
 # note: a move needs the level now (a period's peak) at MOVE_HOLD x env, a pluck's lock PLUCK_HOLD x the level
@@ -130,6 +144,7 @@ class Tracker:
         self.zh6 = [0.0, 0.0]                                   # SY test 25: the soft click's 6 kHz high-pass
         self.hf6 = np.zeros(PEAKS)
         self.softs = 0                                          # plucks only the soft click heard
+        self.quiets = 0                                         # SY test 30: plucks the jump test heard from quiet
         self.w = self.blk = 0
         self.last_onset, self.onset_blk, self.prev_note = -1000, 0, -1
         self.first_pending = self.lock_pending = False
@@ -217,7 +232,10 @@ class Tracker:
         if blk >= P_TO:
             ref = max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(P_FROM, P_TO + 1))
             href = max(self.hfe[(blk - k) & (PEAKS - 1)] for k in range(HF_FROM, HF_TO + 1))
-            jump = pk >= P_MIN and pk >= P_RATIO * ref and (pk >= JUMP_ENV * env_prev or not self.test6)
+            loud = pk >= JUMP_ENV * env_prev or not self.test6
+            quiet = (not loud and ref <= QUIET_REF * env_prev and pk >= QUIET_RATIO * ref and
+                     pk >= QUIET_ENV * env_prev)            # SY test 30: a pick from quiet, softer than the note before
+            jump = pk >= P_MIN and pk >= P_RATIO * ref and (loud or quiet)
             click = self.click and e >= self.hf_min and e >= self.hf_ratio * href and pk >= P_MIN
             soft = False
             if self.click and self.syn_note >= 0:           # SY test 25: the soft click, while a note plays
@@ -231,6 +249,9 @@ class Tracker:
                 self.pluck_click = 2 if not (jump or click) else int(click)   # SY test 25: 2, the soft click only
                 self.pluck_ref = ref
                 self.pick_peak = pk
+                if jump and quiet:
+                    self.quiets += 1
+                    self.env = pk                           # SY test 30: the level starts again from this pick
                 self.last_onset = self.onset_blk = blk
                 self.first_pending = self.lock_pending = True
                 self.agree = 0
@@ -389,9 +410,10 @@ class Tracker:
                     if self.test6 and now < MOVE_HOLD * self.env:
                         self.blocked += 1                   # far quieter than the note: a let-go, not a slide
                     else:
-                        quick = blk - self.old_at <= MOVE_QUICK   # SY test 27: a fret change, not a bend or slide
-                        self.syn_send(note, velocity(self.level(blk)))  # the pitch moved while it plays
-                        self.move_quick = int(quick)
+                        quick = (blk - self.old_at <= MOVE_QUICK and   # SY test 27: a fret change, not a bend or
+                                 now >= QUICK_HOLD * self.win_peak(blk - QUICK_BACK, QUICK_WIN))   # slide; SY test
+                        self.syn_send(note, velocity(self.level(blk)))  # 30: the level held. The pitch moved while
+                        self.move_quick = int(quick)                    # it plays
         else:
             if voiced:
                 self.murky += 1                             # strings ringing together: counts as nothing heard

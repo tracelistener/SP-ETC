@@ -1388,6 +1388,49 @@ lights it there, until off and on); and none on the Sound Generator page, a kit 
 - The guitar synth is test 28's (its module has the same size; only FX deep edit's addresses in it differ). APP1
   `e6a22131...b2dc`, `release/sy-synth-test29`; 397 suite checks pass.
 
+## SY synth test 30 (sy-synth-test30): fewer extra lead notes, GLITCH's pops tamed
+
+The user on tests 27-29: lead tones "either missing notes or extra notes sometimes. good tracking though", chords
+"sound nice though glitches have some fizzy pops that maybe could be tamed".
+
+- **How it was measured** (session scratchpad `sy30`: `trace30.py`, `exp.py`, `oracle.py`). The twin tracker and the
+  host build of the voices on the user's take `testttt.wav`, every attack traced to its call site. The take's real
+  picks are level jumps from far below (`oracle.py`: 241 in its single-note parts; the user lets each note go before
+  the next pick), so extra attacks are the ones away from all of them; a blip is one whose level is 9 dB or more down
+  55-93 ms on. Made from the take to test what it lacks: every other note 8 or 12 dB softer (`alt8`, `alt12`), the
+  notes 285 ms apart (`fast30`), and picked note to note at even strength, each note's fret first for 15 ms (`leg15`,
+  the user's lick; `leg0` without the fret first). Also the first take, `testdry.wav`.
+- **Extra notes:** test 29 made 80 extra attacks on the take, 49 of them blips, nearly all on a let-go: the soft click
+  (test 25) hears the finger leaving the string, and test 27's quick moves the pitch sliding to the next fret as the
+  level falls. A quick move now attacks only when the level held over it (`QUICK_HOLD`, `QUICK_BACK`, `QUICK_WIN`: the
+  level now at least the highest peak 24-31 blocks back; a let-go's falls 1.3-8.8 dB there): 80 -> 59, blips 49 -> 33;
+  notes close together (`fast30`) 62 -> 38. The soft click stays: without it 30 more blips go, but on `leg15` only 59
+  of 233 picks attack instead of 101 (it hears most of the even picks the jump and click tests miss); its attacks
+  waiting for the tracker's lock cut 9 blips and made those picks 6 ms later.
+- **Missing notes:** a pick softer than the note before was lost to the envelope the note before leaves (JUMP_ENV x
+  it, for half a second): `alt12` 44 of 120 soft picks missed, `alt8` 12. The jump test now waives the envelope when
+  the 21 ms before were quiet (`QUIET_REF` 0.35 x it), the block is `QUIET_RATIO` 3 x them and `QUIET_ENV` 0.2 x the
+  envelope; the envelope restarts from that pick: 197 -> 232 of 241 attacked (`alt8` 227 -> 235). Picked note to note
+  at even strength is still the weak spot: `leg15` 103 -> 101 of 233, `leg0` 108 -> 98 (the quick moves' hold); most
+  such picks reach the tracker as no pluck at all.
+- **First notes wrong** (a note's first blocks on another pitch): its band still read the note before (a semitone
+  off: the band's period tracker carries on from the last note), and a reading 1-2 blocks after a pluck read the
+  samples before it (on `testdry.wav` 5 notes began 16-24 ms 1-3 octaves off, the pick's click heard 2-3 blocks before
+  its level rose). Now a tracker's note plays its band's centre for its first `Y_STALE` 40 blocks while the band
+  reads more than `Y_NEAR` 60 cents from it, and a reading under `Y_EARLY` 3 blocks after the pluck starts a note
+  only when clean or read twice: the take 3 -> 1, `testdry.wav` 5 -> 0, `fast30` 15 -> 7; the median start the same
+  (the mean 0.5 ms later on `testdry.wav`, 0.1 ms on the take).
+- **GLITCH's pops** (`glitch.py`, `gclick.py`: clicks in the chord parts, 0.5 ms windows over 3 kHz at 6 x their
+  surroundings, loud ones 20 x): at 100, POLY PAD 14.4 a second, 4.2 loud (GLITCH 0: 0.9). The loudest were the
+  stutter (a held note to silence within a sample, then its attack and filter sweep again) and test 11's 5% rule
+  (a faint voice left out, then back at its level as its note ended). The stutter is now a dip (`render()`: `DUCK`,
+  the level 1, 0.45, 0.1, 0.4, 0.7, 1 at `G_DUCK` 5 block edges, straight lines between, 6.7 ms, no new attack or
+  sweep, `x->duck`), and a voice once rendered stays so to its end at any GLITCH. At 100: POLY PAD 10.0 a second, 1.6
+  loud; STRINGS 4.4 -> 3.3 loud, VECTOR PAD 3.8 -> 2.2; at 0 and 40 every chord tone sample for sample as test 29.
+  Most clicks left are test 11's notes themselves (44 starts a second, voices taken over).
+- The other tracker tones (LADDER LEAD, FAT BASS, POLY PAD on VOICES MONO) score as SYNC LEAD (the rules do not
+  depend on the tone, only on retriggering). The module 39,864 -> 40,184 bytes (4,872 free).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.

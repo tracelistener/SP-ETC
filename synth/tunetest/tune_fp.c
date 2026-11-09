@@ -123,6 +123,17 @@
                                             while a pick's attack falls away: an overdriven low E 140 ms on, 0.51) */
 #define SOFT_HOLD 0.7f                   /* a soft-only pluck plays only with the level now at this x its reference (a
                                             let-go's level falls: nothing) */
+/* SY test 30 (the user on tests 27-29: lead tones "either missing notes or extra notes sometimes"). On the user's take
+ * every note is let go before the next pick, the fretting finger sliding on as it lets go: test 27's quick moves were
+ * mostly that slide (17 extra short notes), and a pick softer than the note before was lost to the envelope the note
+ * before leaves for half a second. The soft click stays (picks played note to note at even strength: it hears most of
+ * the ones the jump and click tests miss). tune_ref.py has the numbers. */
+#define QUICK_HOLD 1.0f                  /* a quick move counts only when the level held over it: the level now at least */
+#define QUICK_BACK 24u                   /*   QUICK_HOLD x the highest peak QUICK_BACK..QUICK_BACK + QUICK_WIN - 1 blocks */
+#define QUICK_WIN 8u                     /*   back (32-43 ms; a let-go's falls 1.3-8.8 dB over that) */
+#define QUIET_REF 0.35f                  /* a pick from quiet: JUMP_ENV is waived when the 21 ms before the block were at */
+#define QUIET_RATIO 3.0f                 /*   most QUIET_REF x the envelope and the block is QUIET_RATIO x them and */
+#define QUIET_ENV 0.2f                   /*   QUIET_ENV x the envelope; the envelope restarts from the pick */
 #define ENV_K 0.9955654144287109f       /* test 6: the level's follower falls with a 0.3 s time constant */
 #define JUMP_ENV 1.3f                    /* a jump is a pluck only over this x env */
 #define MOVE_HOLD 0.4f                   /* a move: the level now at least this x env */
@@ -529,8 +540,9 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                 if (now < MOVE_HOLD * b->env) {
                     b->blocked++;                        /* far quieter than the note: a let-go, not a slide */
                 } else {
-                    const u32 quick = (s32)blk - b->old_at <= MOVE_QUICK;   /* SY test 27: a fret change */
-                    syn_send(t, b, note, velocity(level(b, blk)));  /* the pitch moved while it plays */
+                    const u32 quick = (s32)blk - b->old_at <= MOVE_QUICK &&   /* SY test 27: a fret change; SY */
+                                      now >= QUICK_HOLD * win_peak(b, blk - QUICK_BACK, QUICK_WIN, -0x7FFFFFFF);
+                    syn_send(t, b, note, velocity(level(b, blk)));  /* test 30: the level held. The pitch moved */
                     b->move_quick = quick;
                 }
             }
@@ -622,7 +634,10 @@ u32 tune_fp_step(tt_t *t) {
             float v = b->hfe[(blk - k) & PEAK_MASK];
             href = v > href ? v : href;
         }
-        u32 jump = pk >= P_MIN && pk >= P_RATIO * ref && pk >= JUMP_ENV * env_prev;
+        const u32 loud = pk >= JUMP_ENV * env_prev;
+        const u32 quiet = !loud && ref <= QUIET_REF * env_prev && pk >= QUIET_RATIO * ref &&   /* SY test 30: a pick */
+                          pk >= QUIET_ENV * env_prev;                                        /*   from quiet */
+        u32 jump = pk >= P_MIN && pk >= P_RATIO * ref && (loud || quiet);
         u32 click = e >= HF_MIN && e >= HF_RATIO * href && pk >= P_MIN;
         u32 soft = 0;
         if (b->syn_note >= 0) {                          /* SY test 25: the soft click, while a note plays */
@@ -638,6 +653,8 @@ u32 tune_fp_step(tt_t *t) {
             b->pluck_click = jump || click ? click : 2u;   /* SY test 25: 2, the soft click only */
             b->pluck_ref = ref;
             b->pick_peak = pk;
+            if (jump && quiet)
+                b->env = pk;                             /* SY test 30: the level starts again from this pick */
             b->last_onset = b->onset_blk = (s32)blk;
             b->first_pending = b->lock_pending = 1;
             b->agree = 0;

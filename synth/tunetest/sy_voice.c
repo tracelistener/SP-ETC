@@ -138,6 +138,20 @@ float wave_eval(u32 type, float p, float d, float dt, float r);
 #define Y_OLD 9                     /*   a reading of the note before this soon after the pluck is that string ringing
                                          into the analysis (its window is 29 ms on a low string): not a new note (SY
                                          test 24: 3 blocks less, the analysis' samples 3 blocks newer) */
+/* SY test 30 (the user: lead tones "either missing notes or extra notes sometimes"; the tracker's part is tune_fp.c's).
+ * A note's first blocks played another pitch in 3 of the take's 241 picks and, with the notes closer (its picks 285 ms
+ * apart, 30 ms of silence before each), in 16 of 219:
+ * - its band still read the note before (a semitone off: the band's period tracker carries on from the last note when
+ *   its energy never fell to the floor, and takes 5-28 ms to come round). For its first Y_STALE blocks sounding, a
+ *   tracker's note plays its band's centre whenever the band reads more than Y_NEAR cents from it (the tracker read
+ *   the note; a bend that far that soon would be held to the fret): 16 -> 7;
+ * - a reading within Y_EARLY blocks of the pluck is mostly of the samples before it (noise read as a note: on the
+ *   first take 5 of 102 notes began 16-24 ms on a note 1-3 octaves off, the pick's click heard 2-3 blocks before its
+ *   level rose): it starts a note from silence only when clean or read twice (the median start unchanged, the mean
+ *   0.5 ms later on that take, 0.1 ms on the second; 4 blocks: 0.8 and 0.3). */
+#define Y_NEAR 60.0f
+#define Y_STALE 40u
+#define Y_EARLY 3u
 /* SY test 24, GLITCH (the user: a setting from these clean voices to test 11's "very glitchy, artifacts", which test
  * 12 on dropped). Test 11 gave every band that began a voice of its own with its own envelopes (an attack and a
  * filter sweep each: on the user's take 30-45 attacks a second, POLY PAD), took a voice for it whatever played there,
@@ -490,6 +504,7 @@ SYV_NOTES static void b_start(syv_note_t *n, s32 k, const float *tg, const float
     n->soft = (u8)(pick == 0u);
     n->yband = -1;                                     /* SY test 19: the bands' (the tracker's: y_start) */
     n->woff = 0;                                       /* SY test 26: no wrong note (GLITCH's: g_artifacts) */
+    n->ystale = 0;                                     /* SY test 30 (the tracker's notes: y_start, y_move) */
 }
 
 /* SY test 17: no notes (BOSS SY's way, test 10's tracking; test 11's voices). The bands that sound are the analysis's
@@ -623,8 +638,10 @@ SYV_NOTES static void y_start(syv_note_t *n, s32 k, const float *tg, const float
     b_start(n, k, tg, rc, e, blk, 1u);
     n->yat = blk;
     n->yband = (signed char)k;
+    n->ystale = Y_STALE;                               /* SY test 30: its band may read the note before yet */
     if (tg[k] > 0.0f) {
         n->ypend = 0;
+        if (absf(rc[k] - SYV_CENTRE[k]) > Y_NEAR) n->c = SYV_CENTRE[k];
     } else {
         n->ypend = 1;
         n->c = SYV_CENTRE[k];
@@ -651,7 +668,8 @@ SYV_NOTES static void y_move(syv_note_t *n, s32 k, const u8 *on, const float *tg
     n->yat = blk;
     n->off = 0;
     n->ypend = (u8)!on[k];
-    n->c = on[k] ? rc[k] : SYV_CENTRE[k];
+    n->ystale = Y_STALE;                               /* SY test 30 */
+    n->c = on[k] && absf(rc[k] - SYV_CENTRE[k]) <= Y_NEAR ? rc[k] : SYV_CENTRE[k];
     n->r = n->c;
     if (on[k]) {
         n->last = tg[k];
@@ -803,7 +821,8 @@ SYV_MORE static void bands_mono(syv_state_t *s, const syv_patch_t *p, const floa
                     if (!yloud) {                      /* SY test 24: SENS: too soft, no note */
                         s->yowe = 0;
                         s->yact = 2;
-                    } else if (yv != s->yold || kn->ysince >= Y_OLD) {   /* SY test 20: not the string before */
+                    } else if ((yv != s->yold || kn->ysince >= Y_OLD) &&   /* SY test 20: not the string before; */
+                               (kn->ysince >= Y_EARLY || clean || twice)) {   /* SY test 30: nor the pick's noise */
                         y_start(n, k, tg, rc, e, blk, lm);
                         s->yowe = 0;
                         s->yact = 1;
@@ -886,6 +905,10 @@ SYV_MORE static void bands_mono(syv_state_t *s, const syv_patch_t *p, const floa
         n->off = 0;
         n->r = rc[k];
         n->c = rc[k];
+        if (n->ystale) {                               /* SY test 30: a tracker's note, its first blocks sounding: */
+            n->ystale--;                               /*   not the note before's reading */
+            if (absf(rc[k] - SYV_CENTRE[k]) > Y_NEAR) n->c = SYV_CENTRE[k];
+        }
         n->last = tg[k];
         n->elast = e[k];
         if (n->young) {
@@ -1118,10 +1141,20 @@ SYV_MORE static void t11_poly(syv_state_t *s, const float *tg, const float *rc, 
  * (an octave up or down, a twelfth, a fifth: a partial read as the note) with chance a / 2, and a held note attacks
  * again from silence (a stutter) with chance a every G_STUT_MIN..G_STUT_MIN + G_STUT_SPAN - 1 blocks (32-95 ms). With
  * test 11's pops (render(): a faint voice in and out at 5%). The numbers are a fixed sequence from each start (the
- * module and the twin alike). Under 50: none. */
+ * module and the twin alike). Under 50: none.
+ * SY test 30 (the user on tests 27-29: "chords sound nice though glitches have some fizzy pops that maybe could be
+ * tamed"). On the user's take's chords, POLY PAD at GLITCH 100: 14.4 clicks a second (0.5 ms of the output over 3 kHz
+ * at 6 x its surroundings; GLITCH 0: 0.9), 4.2 of them loud (20 x). The loudest were the stutter's cut (the voice's
+ * level to zero within a sample, then its attack and filter sweep again: 19.6 a second) and the 5% pops (a faint
+ * voice left out, then back at its level when its note ended). Now the stutter is a dip (render(): the voice's level
+ * down to DUCK's floor and back over G_DUCK blocks, 6.7 ms, straight lines a block long; no new attack, no sweep) and
+ * a voice once rendered stays so to its end, as under 50: 9.9 clicks a second, 1.6 loud, the stutters and the notes
+ * themselves (test 11's: 44 starts a second, the wrong notes) as before. */
 #define G_STUT_MIN 24u
 #define G_STUT_SPAN 48u
+#define G_DUCK 5u
 static const signed char G_WRONG[4] = {12, -12, 19, 7};
+static const float DUCK[G_DUCK + 1u] = {1.0f, 0.7f, 0.4f, 0.1f, 0.45f, 1.0f};   /* the dip's level with [i] blocks left */
 
 SYV_MORE static u32 g_rand(syv_state_t *s) {
     s->rng = s->rng * 1664525u + 1013904223u;
@@ -1144,8 +1177,8 @@ SYV_MORE static void g_artifacts(syv_state_t *s, u32 nv, u32 glitch) {
             n->stut = (u8)(G_STUT_MIN + g_rand(s) % G_STUT_SPAN);
         } else if (n->stut) {
             n->stut--;
-        } else {                                       /* held: now and then again from silence */
-            const u32 r = g_rand(s);
+        } else {                                       /* held: now and then a stutter (SY test 30: a dip; tests */
+            const u32 r = g_rand(s);                   /*   26-29: again from silence) */
             n->stut = (u8)(G_STUT_MIN + (r >> 8) % G_STUT_SPAN);
             if ((float)(r & 0xFFu) < a * 256.0f) n->trig = 2;
         }
@@ -1393,7 +1426,7 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
         float ga = s->ga, gf = s->gf;
         u32 strike = 0u, soft = 0u;                    /* SY test 18: a voice starting with an attack / softly */
         for (u32 v = 0; v < nv; v++) {
-            if (c->trig[v]) strike = 1u;
+            if (c->trig[v] == 1u) strike = 1u;         /* (SY test 30: not GLITCH's stutter, 2) */
             else if (c->soft[v]) soft = 1u;
         }
         const u32 fresh = s->blk - s->gat > B_WIN;     /* test 18: no (re)start lately (a pick's blips start none) */
@@ -1434,7 +1467,10 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
     }
     for (u32 v = 0; v < SYV_NV; v++) {                 /* SY test 25: all (over the cap: no gate, a quick release) */
         syv_voice_t *x = &s->v[v];
-        if (c->trig[v] || c->soft[v] || (s->guard && c->gate[v] > 0.0f && !x->active)) {   /* test 17: soft too */
+        if (c->trig[v] == 2u && x->active) {
+            x->duck = G_DUCK;                           /* SY test 30: GLITCH's stutter: a dip (tests 26-29: its level
+                                                           to zero at once and a new attack, a pop) */
+        } else if (c->trig[v] || c->soft[v] || (s->guard && c->gate[v] > 0.0f && !x->active)) {   /* test 17: soft too */
             x->astg = 1;
             x->fstg = 1;
             x->t = 0.0f;
@@ -1450,8 +1486,6 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
                 x->lev = c->lev[v];
                 x->lawf = c->law[v];                    /* test 18 */
                 x->lit = 0;                             /* test 16: not rendered yet */
-            } else if (c->trig[v] == 2u) {
-                x->aenv = 0.0f;                         /* SY test 26: GLITCH's stutter: again from silence */
             }
             x->soft = c->soft[v];                       /* test 17: no pick: its gate rises gently, its strike spent */
             if (x->soft) {
@@ -1459,6 +1493,7 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
                 x->m2 = 0.0f;
             }
             x->gl = 0;
+            x->duck = 0;                                /* SY test 30 */
             x->active = 1;
         } else if (s->guard && c->gate[v] > 0.0f && x->astg == 4u) {   /* test 15: GUARD: back after a gap, no attack */
             x->astg = 1;
@@ -1473,11 +1508,12 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
         }
         x->fast = c->fast[v];
         if (!x->active) continue;
-        if (!x->lit || s->gg >= 0.5f) {                 /* a faint blip: not worth a voice, until it first is (test */
+        if (!x->lit) {                                  /* a faint blip: not worth a voice, until it first is (test */
             if (c->conf[v] < 0.05f && x->conf < 0.05f && x->astg != 4u) continue;   /* 11's: its attack waits) */
             x->lit = 1;                                 /* test 16: then rendered to its end (test 11 left it out */
-        }                                               /*   again under 5%, a step each way: clicks; SY test 26:
-                                                           GLITCH's top half does so again, test 11's pops) */
+        }                                               /*   again under 5%, a step each way: clicks; SY tests 26-29:
+                                                           GLITCH's top half did so again; SY test 30: no more, its
+                                                           loudest pops were a voice back at its level as it ended) */
         n_on++;
         if (c->vel[v] > x->vel) x->vel = c->vel[v];
         /* the block's pitch (glide), LFO, confidence and level */
@@ -1499,8 +1535,13 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
         const float law1 = x->lawf + (c->law[v] - x->lawf) * 0.1203f;     /* SY test 18: LAW's factor, the same */
         const float vs = (1.0f - p->avel) + p->avel * x->vel;
         const float lvl = vs * (1.0f + p->lfo_amp * lfo);
-        const float k0 = lvl * ((1.0f - p->follow) + p->follow * x->lev) * x->conf * x->lawf;
-        const float k1 = lvl * ((1.0f - p->follow) + p->follow * lev1) * conf1 * law1;
+        float k0 = lvl * ((1.0f - p->follow) + p->follow * x->lev) * x->conf * x->lawf;
+        float k1 = lvl * ((1.0f - p->follow) + p->follow * lev1) * conf1 * law1;
+        if (x->duck) {                                 /* SY test 30: GLITCH's stutter, a dip: the level down and back */
+            k0 = k0 * DUCK[x->duck];                   /*   in straight lines, a block each */
+            x->duck--;
+            k1 = k1 * DUCK[x->duck];
+        }
         const float cr = x->fast ? crf : (flt == 6u ? pr[3] : p->ar);
         const float pitch = 1.0f + p->lfo_pitch * lfo;
         const float fb = x->f * p->octm * pitch, fe_ = f1 * p->octm * pitch;   /* the block's start and end pitch */

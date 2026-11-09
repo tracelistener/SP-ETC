@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test29'
+REVISION = 'sy-synth-test30'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1136,7 +1136,8 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 29: test 28 on combined-test20 (combined-test19 with FX deep edit test15: the hidden FX settings open on every FX screen: the Sound Generator page, where the kits and this screen are, and REMAIN + FX on an unlit effect, page 34; stock sends VALUE to the FX screen on the main page only). The guitar synth is test 28\'s, value for value. '
+        description='SY synth test 30: test 29 (combined-test20) with the lead notes and GLITCH\'s pops worked on (the user: lead tones "either missing notes or extra notes sometimes"; GLITCH "fizzy pops"). The tracker: a quick move attacks only when the level held over it (test 27\'s fired on let-gos: the finger sliding on as it lets go), and a pick from quiet softer than the note before is heard (the envelope waived when the 21 ms before were quiet). The voices: a tracker\'s note plays its band\'s centre while the band still reads the note before (its first 40 blocks, 60 cents), and a reading 1-2 blocks after a pluck starts a note only when clean or read twice (the pick\'s noise). GLITCH: the stutter is a 6.7 ms dip, not a cut and a new attack, and no voice drops out at 5%. On the user\'s take, SYNC LEAD: extra short notes 80 -> 59, first notes wrong 3 -> 1; every other note 12 dB softer: picks attacked 197 -> 232 of 241; picked note to note at even strength 103 -> 101 of 233; chords below GLITCH 50 the same, sample for sample; POLY PAD at 100: loud clicks 4.2 -> 1.6 a second. '
+                    'SY synth test 29: test 28 on combined-test20 (combined-test19 with FX deep edit test15: the hidden FX settings open on every FX screen: the Sound Generator page, where the kits and this screen are, and REMAIN + FX on an unlit effect, page 34; stock sends VALUE to the FX screen on the main page only). The guitar synth is test 28\'s, value for value. '
                     'SY synth test 28: test 27 (on the unit: "really good") with the same sound, value for value, in less room and time. The tracker\'s difference function (lags 1-100 over 100 terms, every 2 blocks) and its 12 kHz refinement take four lags at a time: a window of four samples slides along the lags, so each sample is loaded once for the four, and four sums keep the FPU busy (tests 1-27: one lag at a time, every lag\'s terms unrolled, one sum waiting on itself); each sum takes the same terms in the same order. Its normalisation (dn6, 404 bytes) is on the stack, and the stack is 1,792 bytes (was 2,048). '
                     'SY synth test 27: test 26 (not yet on the unit) plus the lead: on test 25 the user\'s lick (F4 G4 G#4) glided into '
                     'new notes, and the user says those were picked: the fret goes down first (the pitch changes, the tracker moves '

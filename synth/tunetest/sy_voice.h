@@ -71,8 +71,9 @@ typedef struct {
     float ph[3], phs, phm, phm2, uph[7], phl;
     float f, aenv, fenv, y[4], ic1, ic2, g, c1, c2, c3, t, vel, lev, conf, m1, m2, rnd, sgprev;
     syv_u32 ns, tick;
-    syv_u8 astg, fstg, active, fast, lit, soft, gl, pad;   /* lit: SY test 16, rendered since its start; soft,
-                                                       gl: test 17, a start without a pick, gliding to a new note */
+    syv_u8 astg, fstg, active, fast, lit, soft, gl, duck;  /* lit: SY test 16, rendered since its start; soft,
+                                                       gl: test 17, a start without a pick, gliding to a new note;
+                                                       duck: SY test 30, the blocks left of GLITCH's stutter (a dip) */
     float lawf;                      /* SY test 18: LAW's factor, followed block by block */
 } syv_voice_t;
 
@@ -88,7 +89,10 @@ typedef struct {
     syv_u8 ypend;                    /* SY test 19: started by the tracker before its band sounded */
     syv_s8 yband;                    /* SY test 19: the band the tracker put it on (its fret: a bend goes up from it) */
     syv_s8 woff;                     /* SY test 26, GLITCH's top half: its wrong-note error (semitones, 0 none) */
-    syv_u8 stut, pad3[3];            /*   blocks to its next stutter */
+    syv_u8 stut;                     /*   blocks to its next stutter */
+    syv_u8 ystale;                   /* SY test 30: a tracker's note's first blocks sounding left (its band may read
+                                        the note before yet: the note plays its band's centre then) */
+    syv_u8 pad3[2];
     syv_s32 yat;                     /* SY test 19: the block the tracker last read it */
 } syv_note_t;
 
