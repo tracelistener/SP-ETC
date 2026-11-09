@@ -11,7 +11,8 @@ typedef unsigned char u8;
 typedef signed char s8;
 
 #define FRAMES 64u                          /* frames an RX block (48 kHz) */
-#define STACK_BYTES 2048u                   /* the FPU side's own stack (tune_fp_call) */
+#define STACK_BYTES 1792u                   /* the FPU side's own stack (tune_fp_call; SY test 28: was 2,048, the suite's
+                                               deepest use 1,164 with FP_SAVED, an interrupt's frame at most 108 more) */
 #define FP_SAVED 176u                       /* SY test 21: what tune_fp_call and sy_fp_call keep under its top: the
                                                caller's r4-r11, sp and lr, its FPSCR and a pad, d0-d15 */
 #define TT_RING 512u                        /* the input at 12 kHz: 42.7 ms */
@@ -89,8 +90,8 @@ typedef struct {
 typedef struct __attribute__((aligned(32))) {
     float ring[TT_RING];                    /* the low-passed input at 12 kHz */
     float span[TT_SPAN];                    /* an analysis' newest samples, newest first */
-    float d6[TT_T6MAX + 1];                 /* the difference function at 6 kHz, lags 1..TT_T6MAX */
-    float dn6[TT_T6MAX + 1];                /* its cumulative-mean normalisation */
+    float d6[TT_T6MAX + 1];                 /* the difference function at 6 kHz, lags 1..TT_T6MAX (SY test 28: its
+                                               normalisation, dn6, is on the stack: decide()'s dn) */
     float peaks[TT_PEAKS];                  /* the blocks' peaks at 12 kHz */
     float z[2][2];                          /* the low-pass's two biquads (transposed direct form II) */
     u32 started, w, blk;                    /* ring writes, blocks */
@@ -118,13 +119,13 @@ typedef struct __attribute__((aligned(32))) {
     float d_base[TT_T6MAX + 1];             /* the last difference function whose samples came before the pending
                                                pluck (SY test 27: copied from d6, which keeps the last analysis' until
                                                the next; d_last and dsub, 808 bytes, gone: the subtraction is
-                                               normalised in dn6, in place) */
+                                               normalised in place, now in decide()'s dn) */
     float base_x[TT_BASE];                  /* the 12 kHz samples before the pending pluck, newest first */
     float zh6[2];                           /* SY test 25: the soft click's 6 kHz high-pass, */
     float hf6[TT_PEAKS];                    /*   the blocks' energy over 6 kHz */
     s32 old_at;                             /* SY test 27: the block the synth's note was last read steady */
     u32 move_quick;                         /*   the last note-on a quick move (a fret change, for the SY voices) */
-    u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
+    u32 stack[STACK_BYTES / 4] __attribute__((aligned(8)));   /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
 } tt_block_t;
 _Static_assert((__builtin_offsetof(tt_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");
 

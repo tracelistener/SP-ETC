@@ -83,6 +83,9 @@ from test_nam_test import (Machine, check, sha, scatter, FLASH, COPY, STACK, RET
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'tunetest'))
 import tune_ref as ref  # noqa: E402
+import re  # noqa: E402
+TT_STACK = int(re.search(r'#define STACK_BYTES (\d+)u', (Path(__file__).resolve().parent / 'tunetest' / 'tune_test.h')
+                         .read_text(encoding='utf-8')).group(1))   # SY test 28: 1,792 (tests 1-27: 2,048)
 
 TT_OFF, TT_RUN, TT_SLOW = range(3)
 TT_HEAD = 'req fx ext routing checked checks starts posted_rseq state rx steps task_attr last_mix'.split()
@@ -477,7 +480,7 @@ def tracker_checks(parent_img, img, man):
         gpr = [rng.getrandbits(32) for _ in range(8)]
         for k, v in enumerate(gpr):
             m.uc.reg_write(getattr(ar, f'UC_ARM_REG_R{k + 4}'), v)
-        m.uc.mem_write(blk + lay.b_stack, b'\xEE' * 2048)
+        m.uc.mem_write(blk + lay.b_stack, b'\xEE' * TT_STACK)
         m.uc.mem_write(STACK - 0x800, b'\xEE' * 0x800)
         m.feed(sig[20 + b])
         phase = m.get(blk + lay.b_started + 8, '<I') & 3
@@ -489,13 +492,14 @@ def tracker_checks(parent_img, img, man):
         fpu_ok &= [m.uc.reg_read(getattr(ar, f'UC_ARM_REG_S{k}')) for k in range(32)] == pattern and \
             m.uc.reg_read(ar.UC_ARM_REG_FPSCR) & 0xF7C0009F == fpscr & 0xF7C0009F
         regs_ok &= [m.uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k + 4}')) for k in range(8)] == gpr
-        stk = m.bytes(blk + lay.b_stack, 2048)
-        stack_depth = max(stack_depth, 2048 - next(i for i in range(2048) if stk[i] != 0xEE))
+        stk = m.bytes(blk + lay.b_stack, TT_STACK)
+        stack_depth = max(stack_depth, TT_STACK - next(i for i in range(TT_STACK) if stk[i] != 0xEE))
         tsk = m.bytes(STACK - 0x800, 0x800)
         task_depth = max(task_depth, 0x800 - next((i for i in range(0x800) if tsk[i] != 0xEE), 0x800))
     check(fpu_ok and regs_ok, 's0-s31, FPSCR and r4-r11 as they were after every step')
-    check(0 < stack_depth <= 1536 and task_depth <= 96,
-          f'the step runs on the module\'s own stack ({stack_depth} of 2,048 bytes); the task\'s stack sees '
+    check(0 < stack_depth <= TT_STACK - 512 and task_depth <= 96,
+          f'the step runs on the module\'s own stack ({stack_depth} of {TT_STACK:,} bytes, at most '
+          f'{TT_STACK - 512:,}); the task\'s stack sees '
           f'{task_depth} bytes (tune_rx\'s frame)')
     check(max(by_phase) <= 80000, f'instructions a step, by phase 0-3: {by_phase} (the most is '
                                   f'{max(by_phase) / 8000:.1f}% of a block at one a cycle)')
@@ -1529,20 +1533,21 @@ def sy_checks(parent_img, img, man, kit_sym):
         gpr = [rng.getrandbits(32) for _ in range(8)]
         for k, v in enumerate(gpr):
             mr.uc.reg_write(getattr(ar, f'UC_ARM_REG_R{k + 4}'), v)
-        mr.uc.mem_write(mr.block + mr.lay.b_stack, b'\xEE' * 2048)
+        mr.uc.mem_write(mr.block + mr.lay.b_stack, b'\xEE' * TT_STACK)
         mr.uc.mem_write(STACK - 0x800, b'\xEE' * 0x800)
         mr.feed(sig[110 + b])
         mr.call(sym['sy_rx'])
         fpu_ok &= [mr.uc.reg_read(getattr(ar, f'UC_ARM_REG_S{k}')) for k in range(32)] == pattern and \
             mr.uc.reg_read(ar.UC_ARM_REG_FPSCR) & 0xF7C0009F == fpscr & 0xF7C0009F
         regs_ok &= [mr.uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k + 4}')) for k in range(8)] == gpr
-        stk = mr.bytes(mr.block + mr.lay.b_stack, 2048)
-        stack_depth = max(stack_depth, 2048 - next(i for i in range(2048) if stk[i] != 0xEE))
+        stk = mr.bytes(mr.block + mr.lay.b_stack, TT_STACK)
+        stack_depth = max(stack_depth, TT_STACK - next(i for i in range(TT_STACK) if stk[i] != 0xEE))
         tsk = mr.bytes(STACK - 0x800, 0x800)
         task_depth = max(task_depth, 0x800 - next((i for i in range(0x800) if tsk[i] != 0xEE), 0x800))
     check(fpu_ok and regs_ok, 'SY: s0-s31, FPSCR and r4-r11 as they were after every step')
-    check(0 < stack_depth <= 1536 and task_depth <= 96,
-          f'SY: the step runs on the tracker\'s stack ({stack_depth} of 2,048 bytes); the task\'s stack sees '
+    check(0 < stack_depth <= TT_STACK - 512 and task_depth <= 96,
+          f'SY: the step runs on the tracker\'s stack ({stack_depth} of {TT_STACK:,} bytes, at most '
+          f'{TT_STACK - 512:,}); the task\'s stack sees '
           f'{task_depth} bytes (sy_rx\'s frame)')
     report['sy'].update(private_stack_bytes=stack_depth, task_stack_bytes=task_depth)
     # 4. TX: the block onto TX line 3's DRY pair (words 0/1 of each 16-word frame), clipped to 20 bits, once.
@@ -2849,7 +2854,7 @@ def crash_checks(parent_img, img, man):
     mf.uc.reg_write(ar.UC_ARM_REG_SP, frame + 32)
     mf.uc.emu_start(fr[6] | 1, RET, count=100000)
     mf.uc.hook_del(hw)
-    tops = mf.sym['tt_block'] + mf.lay.b_stack + 2048           # the steps' stack top
+    tops = mf.sym['tt_block'] + mf.lay.b_stack + TT_STACK       # the steps' stack top
     back = dict(pc=mf.uc.reg_read(ar.UC_ARM_REG_PC) == RET, sp=mf.uc.reg_read(ar.UC_ARM_REG_SP) == STACK,
                 r4_r11=[mf.uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k + 4}')) for k in range(8)] == gpr,
                 s0_s31=[mf.uc.reg_read(getattr(ar, f'UC_ARM_REG_S{k}')) for k in range(32)] == pattern,

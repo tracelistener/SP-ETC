@@ -1328,6 +1328,40 @@ The user on test 26's question: the lead's glided notes (G4 -> G#4, F4 -> G4 in 
   and never again) are gone: `tt_block` 9,920 -> 9,088 bytes, the module 45,048 -> 44,152, its memory ending at
   0x83fd3c78, 904 bytes free. The FPU side's stack (2,048 bytes; the suite's peak 1,164) is unchanged.
 
+## SY synth test 28 (sy-synth-test28): test 27's sound in less room and time
+
+The user on test 27: "really good". Then: was it the best it could be? Not in room: test 27 freed memory only. Test
+28 changes no sound, value for value, and leaves room for what comes next.
+
+- **Where the time went** (test 27's module in Unicorn, instructions per function, FAT BASS with the tracker on the
+  suite's open strings): the heaviest block 127,870, of it `tune_fp_step` 51,854 (the difference function: lags
+  1-100 over 100 terms every 2 blocks, every lag's terms unrolled, 1.6 KB of code, one sum waiting on itself) and
+  `yin` 21,903 (the 12 kHz refinement: 7 lags, and the octave check's 3, over 200 samples, twice with a pluck's
+  subtraction).
+- **Four lags at a time** (`diff4`): a window of four samples slides along the lags, so each sample is loaded once
+  for the four, and four sums keep the FPU busy. Each sum takes the same terms in the same order (a subtraction
+  and a fused multiply-add each, as `diff()` did), so every value is the same. The refinement computes lags
+  c - 3..c + 4 and the octave check h - 1..h + 2 (one lag each not used; the span's last sample is still the one
+  read). The loops are not unrolled.
+- **Room:** `dn6` (the normalisation, 404 bytes) is on the stack (`decide()`'s `dn`); the stack is 1,792 bytes (was
+  2,048; `aligned(8)` keeps its top 8-byte aligned). `tt_block` 9,088 -> 8,448 bytes; the module 44,152 -> 39,864,
+  its memory ending at 0x83fd2bb8: 5,192 bytes free under 0x83fd4000 (test 27: 904). FPU instructions in the
+  module 5,020 -> 4,256.
+- **Stack, worst case** (each source compiled again with `-fstack-usage`, the calls read from the linked ELF): the
+  SY step 1,280 bytes with `FP_SAVED` (`sy_fp_step` 552 > `syv_block` 128 > `render` 312 > `pass_sg` 112), the
+  tracker 928 (`tune_fp_step` 600 with `dn` > `yin` 152); with an interrupt's frame (108) 1,388 of 1,792. The suite
+  reads the size from `tune_test.h`, wants its measured peak 512 under it, and measures 928 and 1,164.
+- **Time:** the heaviest block 127,870 -> 109,822 instructions (`tune_fp_step` 37,703, `yin` 4,114 + `diff4_12`
+  13,890), the mean 79,900 -> 72,161. The suite: the tracker's analysis step 61,231 -> 44,747 (7.7% -> 5.6% of a
+  block at one a cycle), tracker + engine at most 131,107 -> 111,908 a block (`SY_YIN_MAX` 140,000); the poly tones
+  unchanged (FM PIANO 112,417). On the unit the cycles drop more than the instructions: one sum per lag waited on
+  its own multiply-add.
+- **Same sound:** both builds' modules side by side on the user's takes (`compare28.py`, every block: the 64 output
+  samples, `d6`, the tracker's result and note): 6 runs, 505,500 blocks (11.2 minutes of `testttt.wav` and
+  `testdry.wav`: SYNC LEAD twice, FAT BASS, LADDER LEAD at GLITCH 75, POLY PAD on VOICES MONO, SYNC LEAD at GLITCH 40
+  and SENS 20), every block identical, the tracker running throughout (40,124-43,124 analyses and 137-220 plucks a
+  run).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.

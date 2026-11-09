@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test27'
+REVISION = 'sy-synth-test28'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1138,7 +1138,8 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 27: test 26 (not yet on the unit) plus the lead: on test 25 the user\'s lick (F4 G4 G#4) glided into '
+        description='SY synth test 28: test 27 (on the unit: "really good") with the same sound, value for value, in less room and time. The tracker\'s difference function (lags 1-100 over 100 terms, every 2 blocks) and its 12 kHz refinement take four lags at a time: a window of four samples slides along the lags, so each sample is loaded once for the four, and four sums keep the FPU busy (tests 1-27: one lag at a time, every lag\'s terms unrolled, one sum waiting on itself); each sum takes the same terms in the same order. Its normalisation (dn6, 404 bytes) is on the stack, and the stack is 1,792 bytes (was 2,048). '
+                    'SY synth test 27: test 26 (not yet on the unit) plus the lead: on test 25 the user\'s lick (F4 G4 G#4) glided into '
                     'new notes, and the user says those were picked: the fret goes down first (the pitch changes, the tracker moves '
                     'its note) and the pick then sounds on the note already playing, unheard. The tracker now marks a move quick '
                     '(move_quick, yflag bit 4) when its readings left the note sounding (its last reading within 15 cents) at most '

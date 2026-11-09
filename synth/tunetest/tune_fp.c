@@ -1,6 +1,6 @@
 /* Guitar synth test 6 (note tracker 3), the FPU side: the note the guitar plays, from the input the effects chip
  * hands back (RX pair 0, after the input FX). Everything here runs on the audio task through tune_fp_call: on the
- * module's own 2 KB stack, with FPSCR and d0-d15 saved around it and FPSCR set to round to nearest, flush to zero
+ * module's own 1.75 KB stack, with FPSCR and d0-d15 saved around it and FPSCR set to round to nearest, flush to zero
  * and default NaN, as cabinet test 2's cab_fp_call.
  *
  * Test 4, after synth test 3 on the unit ("stuck notes. bad tracking. worse than before"): test 3's voice
@@ -172,16 +172,50 @@ __attribute__((naked, used)) u32 tune_fp_call(u32 (*fn)(tt_t *), tt_t *arg, void
         "bx lr\n");
 }
 
-/* sum over j < n of (x[step j] - x[step (j + tau)])^2 */
-static float diff(const float *x, u32 step, u32 tau, u32 n) {
-    const float *a = x, *c = x + step * tau;
-    float s = 0.0f;
-    for (u32 j = 0; j < n; j++, a += step, c += step) {
-        float d = *a - *c;
-        s += d * d;
+/* out[i] = the sum over j < n of (x[step j] - x[step (j + lag + i)])^2, for i < 4 (n a multiple of 4).
+ * SY test 28: four lags at once, value for value as one at a time (tests 1-27's diff(): each sum takes the same terms
+ * in the same order, each term a subtraction and a fused multiply-add). A window of four samples slides along the
+ * lags, so each sample is loaded once for all four, and the four sums keep the FPU busy where one sum waited on
+ * itself; the loop is not unrolled (tests 1-27 unrolled every lag's 100 terms: 1.6 KB of code). The step is a
+ * constant where it is inlined, so every load is one instruction. */
+static inline __attribute__((always_inline)) void diff4(const float *x, u32 step, u32 lag, u32 n, float *out) {
+    const float *a = x, *c = x + step * lag;
+    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f, s3 = 0.0f, t;
+    float w0 = c[0], w1 = c[step], w2 = c[2u * step];
+#pragma clang loop unroll(disable)
+    for (u32 j = 0; j < n; j += 4u, a += 4u * step, c += 4u * step) {
+        float v = a[0], w3 = c[3u * step];               /* term j: lags lag..lag+3 on w0, w1, w2, w3 */
+        t = v - w0; s0 += t * t;
+        t = v - w1; s1 += t * t;
+        t = v - w2; s2 += t * t;
+        t = v - w3; s3 += t * t;
+        v = a[step];                                     /* j + 1: w1, w2, w3, w0 */
+        w0 = c[4u * step];
+        t = v - w1; s0 += t * t;
+        t = v - w2; s1 += t * t;
+        t = v - w3; s2 += t * t;
+        t = v - w0; s3 += t * t;
+        v = a[2u * step];                                /* j + 2: w2, w3, w0, w1 */
+        w1 = c[5u * step];
+        t = v - w2; s0 += t * t;
+        t = v - w3; s1 += t * t;
+        t = v - w0; s2 += t * t;
+        t = v - w1; s3 += t * t;
+        v = a[3u * step];                                /* j + 3: w3, w0, w1, w2 (and j + 4: w0, w1, w2) */
+        w2 = c[6u * step];
+        t = v - w3; s0 += t * t;
+        t = v - w0; s1 += t * t;
+        t = v - w1; s2 += t * t;
+        t = v - w2; s3 += t * t;
     }
-    return s;
+    out[0] = s0;
+    out[1] = s1;
+    out[2] = s2;
+    out[3] = s3;
 }
+
+/* diff4 at 12 kHz over the refinement's window (one copy for every call). */
+static __attribute__((noinline)) void diff4_12(const float *x, u32 lag, float *out) { diff4(x, 1u, lag, TT_W12, out); }
 
 /* ln x for a normal x > 0: its exponent, and 2 atanh((m - 1) / (m + 1)) for the mantissa in [0.707, 1.414). */
 static float ln(float x) {
@@ -295,26 +329,30 @@ static void copy_d(float *to, const float *from) {
         to[k] = from[k];
 }
 
-/* The 12 kHz difference at lag over TT_W12 samples, less the same on base (test 6: the samples before a pluck). */
-static float diff2(const float *x, const float *base, u32 lag) {
-    float v = diff(x, 1u, lag, TT_W12);
-    if (base)
-        v -= diff(base, 1u, lag, TT_W12);
-    return v;
+/* The 12 kHz difference at lags lag..lag+3 over TT_W12 samples, less the same on base (test 6: the samples before a
+ * pluck). SY test 28: four lags a call (tests 1-27's diff2(): one). */
+static void diff2x4(const float *x, const float *base, u32 lag, float *out) {
+    diff4_12(x, lag, out);
+    if (base) {
+        float o[4];
+        diff4_12(base, lag, o);
+        for (u32 i = 0; i < 4u; i++)
+            out[i] -= o[i];
+    }
 }
 
 typedef struct {
     float aper, clean, freq;
 } yin_t;
 
-/* YIN on the difference function d (6 kHz, lags 1..tmax): its cumulative-mean normalisation (into b->dn6), the
- * first dip under thr from lag 4 (1.5 kHz) on, else the deepest; the dip's own bottom by a parabola through it and
+/* YIN on the difference function d (6 kHz, lags 1..tmax): its cumulative-mean normalisation (into dn; d may be dn),
+ * the first dip under thr from lag 4 (1.5 kHz) on, else the deepest; the dip's own bottom by a parabola through it and
  * its neighbours (test 4's clean reading); refined at 12 kHz on x around twice that lag (7 lags over a 200-sample
  * window, a parabola through the deepest of the middle 5 and its neighbours, its vertex within a lag), less the
  * same on base when given; above 1 kHz, where a period under 6 samples at 6 kHz falls between the lags and YIN's
  * first dip is twice it, half that lag wins when it is as deep within 20%. */
-static void yin(tt_block_t *b, const float *d, const float *x, const float *base, u32 tmax, float thr, yin_t *o) {
-    float *dn = b->dn6, cum = 0.0f;
+static void yin(float *dn, const float *d, const float *x, const float *base, u32 tmax, float thr, yin_t *o) {
+    float cum = 0.0f;
     for (u32 k = 1; k <= tmax; k++) {
         cum += d[k];
         dn[k] = cum > 0.0f ? d[k] * (float)k / cum : 1.0f;
@@ -343,9 +381,9 @@ static void yin(tt_block_t *b, const float *d, const float *x, const float *base
         }
     }
     u32 c = 2u * tau, best = 1;
-    float dd[7];
-    for (u32 i = 0; i < 7u; i++)
-        dd[i] = diff2(x, base, c - 3u + i);
+    float dd[8];                                        /* SY test 28: lags c - 3..c + 4, the last not used */
+    diff2x4(x, base, c - 3u, dd);
+    diff2x4(x, base, c + 1u, dd + 4);
     for (u32 i = 2; i <= 5u; i++)
         if (dd[i] < dd[best])
             best = i;
@@ -355,9 +393,8 @@ static void yin(tt_block_t *b, const float *d, const float *x, const float *base
     float k = (float)(c - 3u + best) + off;
     if (k < 24.5f) {                                    /* an octave up? half the lag at 12 kHz, 8..12 */
         u32 h = (u32)(k * 0.5f + 0.5f), hb = 1;
-        float dh[3];
-        for (u32 i = 0; i < 3u; i++)
-            dh[i] = diff2(x, base, h - 1u + i);
+        float dh[4];                                    /* SY test 28: lags h - 1..h + 2, the last not used */
+        diff2x4(x, base, h - 1u, dh);
         for (u32 i = 0; i < 3u; i += 2u)
             if (dh[i] < dh[hb])
                 hb = i;
@@ -388,8 +425,9 @@ static void end(tt_t *t) {
 /* The analysis' fourth block: the note, if any, and what it means for the readout and the synth. */
 static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     const float *x = b->span, *d = b->d6;
+    float dn[TT_T6MAX + 1];                             /* SY test 28: on the stack (was tt_block.dn6, 404 bytes) */
     yin_t y;
-    yin(b, d, x, 0, TT_T6MAX, THRESHOLD, &y);
+    yin(dn, d, x, 0, TT_T6MAX, THRESHOLD, &y);
     float power = 0.0f;
     for (u32 j = 0; j < TT_W12; j++)
         power += x[j] * x[j];
@@ -401,8 +439,8 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     if (pre && b->lock_pending)
         copy_d(b->d_base, d);
     if (!pre && b->lock_pending && b->pluck_ref >= RING_MIN * b->pick_peak) {   /* test 6: over strings ringing */
-        float *dn = b->dn6, e_new = 0.0f, e_all = 0.0f, mabs = 0.0f, mn = 0.0f;   /* SY test 27: in dn6 (yin() */
-                                                                                  /*   normalises it in place) */
+        float e_new = 0.0f, e_all = 0.0f, mabs = 0.0f, mn = 0.0f;   /* SY test 27: in dn (yin() normalises it in */
+                                                                    /*   place) */
         for (u32 k = 1; k <= TT_T6MAX; k++) {           /* what the pick added */
             float v = d[k] - b->d_base[k];
             dn[k] = v;
@@ -419,7 +457,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
             for (u32 k = 1; k <= TT_T6MAX; k++)
                 dn[k] = dn[k] > 0.0f ? dn[k] : 0.0f;
             yin_t s;
-            yin(b, dn, x, b->base_x, tmax < (s32)TT_T6MAX ? (u32)tmax : TT_T6MAX, THR_SUB, &s);
+            yin(dn, dn, x, b->base_x, tmax < (s32)TT_T6MAX ? (u32)tmax : TT_T6MAX, THR_SUB, &s);
             u32 v2 = power >= LEVEL_MIN * LEVEL_MIN && s.aper < APER_MAX;
             float ratio = s.freq / y.freq;
             s32 kk = (s32)(ratio + 0.5f);
@@ -616,8 +654,9 @@ u32 tune_fp_step(tt_t *t) {
     if ((blk & (TT_EVERY - 1u)) == TT_EVERY - 1u) {     /* SY test 24: every 2 blocks, on the newest samples */
         for (u32 j = 0; j < TT_SPAN; j++)
             b->span[j] = b->ring[(b->w - 1u - j) & RING_MASK];
-        for (u32 k = 1; k <= TT_T6MAX; k++)
-            b->d6[k] = diff(b->span, 2u, k, TT_W6);
+#pragma clang loop unroll(disable)
+        for (u32 k = 1; k <= TT_T6MAX; k += 4u)          /* SY test 28: four lags at a time */
+            diff4(b->span, 2u, k, TT_W6, &b->d6[k]);
         decide(t, b, blk);
     }
     b->blk = blk + 1u;
