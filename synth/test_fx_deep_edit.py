@@ -1416,14 +1416,15 @@ def anypage_checks(img, parent, man, st):
     for _ in range(2):
         m.clear()
         m.call(KEY_PRESS, ev(EV_KEY, KEY_VALUE), count=20_000_000)
-        taken = m.state()['value_taken']
+        taken, held = m.state()['value_taken'], (m.uc.mem_read(KEYS + (KEY_VALUE >> 3), 1)[0] >> (KEY_VALUE & 7)) & 1
         m.call(KEY_RELEASE, ev(EV_KEY_UP, KEY_VALUE), count=20_000_000)
-        seq.append((sc.flag(VIEW_SCREEN2), m.popups, taken, m.state()['value_taken'], m.state()['value_down']))
-    want = [(1, [], 1, 0, 0), (1, [(screen_text(rt, st, 1, TAPE_ECHO, 1), SCREEN_MS)], 1, 0, 0)]
+        seq.append((sc.flag(VIEW_SCREEN2), m.popups, taken, held, m.state()['value_taken'],
+                    (m.uc.mem_read(KEYS + (KEY_VALUE >> 3), 1)[0] >> (KEY_VALUE & 7)) & 1, m.state()['value_down']))
+    want = [(1, [], 2, 1, 0, 0, 0), (1, [(screen_text(rt, st, 1, TAPE_ECHO, 1), SCREEN_MS)], 2, 1, 0, 0, 0)]
     check(m.r32(FX_SHOWN) == v and m.r32(TOP_PAGE) == 0 and seq == want,
           f'test15: with TOP\'s object gone and only stock\'s pointer to the FX screen (page 34, the Sound Generator '
           f'page), VALUE through the dispatcher\'s key press handler steps to screen 2, then the hidden settings, '
-          f'press and release taken ({seq})')
+          f'press and release taken, VALUE\'s held bit set from one to the other as stock\'s own press sets it ({seq})')
     x0 = st.by_fx[TAPE_ECHO][0]
     m.clear()
     sent = m.state()['sent']
