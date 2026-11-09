@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test25'
+REVISION = 'sy-synth-test26'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1138,7 +1138,16 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 25: test 24 on the unit "works better but misses some quiet notes", and GLITCH '
+        description='SY synth test 26: test 25 on the unit: "glitch still does barely anything except lower chords" and lead '
+                    'notes still missed (the user\'s take with the dry guitar isolated out: the lead glides into many of its new '
+                    'notes). GLITCH\'s top half (50-100) on a chord tone now plays test 11\'s own poly notes (its notes_poly: a '
+                    'band beginning takes a free voice, else the quietest young one, else the oldest note; 4 voices), which match '
+                    'test 11 on the user\'s take (voice starts, held notes taken, pitch jumps); and since tests 25 and 26 at 100 '
+                    'already matched test 11\'s own engine there, GLITCH from 50 to 100 adds, growing: test 11\'s pops (a faint '
+                    'voice in and out at 5%), wrong notes (an attack an octave up or down, a twelfth or a fifth off, chance up to '
+                    'a half) and stutter (a held note again from silence every 32-95 ms, chance up to 1). GLITCH 0-49 is test 25\'s '
+                    'sample for sample. '
+                    'SY synth test 25: test 24 on the unit "works better but misses some quiet notes", and GLITCH '
                     '"doesn\'t make much difference on pad tones". GLITCH on a chord tone now shortens its envelopes '
                     '(attack and filter attack towards 3 ms, release towards 40 ms, geometrically: POLY PAD 32 ms and '
                     '200 ms at 50, 3 and 40 at 100) and from 90 plays at most 4 voices on AUTO (test 11\'s): on the '

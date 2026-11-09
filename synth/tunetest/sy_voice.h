@@ -87,6 +87,8 @@ typedef struct {
     syv_u8 gate, off, young, fast, nh, trig, soft, glide;   /* soft, glide: SY test 17 */
     syv_u8 ypend;                    /* SY test 19: started by the tracker before its band sounded */
     syv_s8 yband;                    /* SY test 19: the band the tracker put it on (its fret: a bend goes up from it) */
+    syv_s8 woff;                     /* SY test 26, GLITCH's top half: its wrong-note error (semitones, 0 none) */
+    syv_u8 stut, pad3[3];            /*   blocks to its next stutter */
     syv_s32 yat;                     /* SY test 19: the block the tracker last read it */
 } syv_note_t;
 
@@ -119,6 +121,7 @@ typedef struct {
     syv_s32 pend_b0[SYV_BANDS];      /*   a band waiting to be a note since this block (-1: none), its peak; */
     float e_prev[4][SYV_BANDS];      /*   the energies of the last four blocks (a fundamental building up); */
     syv_u8 t11, pad2[3];             /*   those notes ran last block */
+    syv_u32 rng;                     /* SY test 26: GLITCH's artifacts' random numbers */
     syv_s32 blk;
     float dcx, dcy;
     syv_u32 cost;                    /* voices rendered in the last block */

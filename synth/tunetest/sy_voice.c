@@ -300,6 +300,7 @@ SYV_DATA void syv_reset(syv_state_t *s) {
     s->gat = -1000000;                                 /* SY test 18: the envelopes not started yet */
     for (u32 k = 0; k < SYV_BANDS; k++)                /* SY test 24: no band waiting (t11_mono) */
         s->pend_b0[k] = -1;
+    s->rng = 0x2545F491u;                              /* SY test 26: GLITCH's artifacts, the same every start */
     s->started = 1;
 }
 
@@ -312,7 +313,7 @@ SYV_DATA void syv_reset(syv_state_t *s) {
  * 4: more voices taken over, more notes cut). */
 #define G_ATT 0.989871f             /* sy_voices.py's _att(3 ms): e^(-1.466 / 144), the pole */
 #define G_REL 0.997607f             /* _dec(40 ms): e^(-4.6 / 1920) */
-#define G_CAP_AT 90u
+#define G_CAP_AT G_BANDS                /* SY test 26: test 11's 4 voices over GLITCH's top half (test 25: from 90) */
 #define G_CAP 4u
 
 SYV_MORE static float lnp(float a) {                   /* ln a for a pole a near 1 (pow_k's series) */
@@ -488,6 +489,7 @@ SYV_NOTES static void b_start(syv_note_t *n, s32 k, const float *tg, const float
     n->trig = (u8)(pick != 0u);
     n->soft = (u8)(pick == 0u);
     n->yband = -1;                                     /* SY test 19: the bands' (the tracker's: y_start) */
+    n->woff = 0;                                       /* SY test 26: no wrong note (GLITCH's: g_artifacts) */
 }
 
 /* SY test 17: no notes (BOSS SY's way, test 10's tracking; test 11's voices). The bands that sound are the analysis's
@@ -1027,6 +1029,125 @@ SYV_MORE static void t11_mono(syv_state_t *s, const syv_patch_t *p, const float 
     }
 }
 
+/* SY test 26, GLITCH's top half (from G_BANDS) on a chord tone: test 11's poly notes (its notes_poly, git b322ab2;
+ * the user on tests 24 and 25: GLITCH "barely does anything" on pads, which loosened tests 17-23's rules but kept the
+ * chord's voices). A band beginning (its run's first block; SENS as below) takes a free voice, else the quietest
+ * young voice (a blip), else the oldest note: a held chord's notes are taken over by its partials' flicker, each at
+ * its own pitch with an attack (test 11's artifacts). A young note plays its band's raw pitch at the band's own level
+ * and ends at once (a quick release) when the band stops; a settled one follows a neighbour reading its pitch, rides
+ * 3 blocks of a gap, steadies its pitch and attacks again when picked again. Test 11 played 4 voices (G_CAP from
+ * G_BANDS on AUTO) and had no GUARD, B_HAND or pick rules. */
+SYV_MORE static void t11_poly(syv_state_t *s, const float *tg, const float *rc, const float *e, u32 nv,
+                              const syv_knobs_t *kn) {
+    const s32 blk = s->blk;
+    const float *rc4 = s->rc_prev[blk & 3];
+    const float sens = (float)(kn->sens <= 100u ? kn->sens : 100u) * 0.01f;
+    u8 on[SYV_BANDS];
+    for (u32 k = 0; k < SYV_BANDS; k++)
+        on[k] = tg[k] > 0.0f;
+    unsigned long long taken = 0;
+    for (u32 v = 0; v < nv; v++) {                     /* the notes go on, move with their partial, or end */
+        syv_note_t *n = &s->n[v];
+        n->trig = 0;
+        n->soft = 0;
+        n->glide = 0;
+        if (n->band < 0 || !n->gate) continue;
+        if (on[n->band]) {
+            n->off = 0;
+            taken |= 1ull << n->band;
+            continue;
+        }
+        if (follow(s, n, on, rc, nv, &taken)) {
+            n->off = 0;
+            continue;
+        }
+        n->off++;
+        if (n->young || n->off > 3u) {
+            n->gate = 0;
+            n->rel = blk;
+            n->fast = n->young;
+        }
+    }
+    for (u32 k = 0; k < SYV_BANDS; k++) {              /* the bands beginning */
+        if (!on[k] || s->run[k] != 1u || ((taken >> k) & 1ull)) continue;
+        if (sens > 0.0f && tg[k] < sens * s->pkh) continue;
+        s32 w = -1;
+        for (u32 v = 0; v < nv; v++)                   /* a free voice, released longest ago */
+            if (!s->n[v].gate && (w < 0 || s->n[v].rel < s->n[w].rel)) w = (s32)v;
+        if (w < 0)                                     /* else the quietest young one (a blip) */
+            for (u32 v = 0; v < nv; v++)
+                if (s->n[v].young && (w < 0 || s->n[v].cf < s->n[w].cf)) w = (s32)v;
+        if (w < 0)                                     /* else the oldest note */
+            for (u32 v = 0; v < nv; v++)
+                if (w < 0 || s->n[v].start < s->n[w].start) w = (s32)v;
+        b_start(&s->n[w], (s32)k, tg, rc, e, blk, 1u);
+        taken |= 1ull << k;
+    }
+    for (u32 v = 0; v < nv; v++) {                     /* the pitch, the level, settling, re-picks */
+        syv_note_t *n = &s->n[v];
+        if (n->band < 0 || !n->gate || !on[n->band]) continue;
+        const s32 k = n->band;
+        n->r = rc[k];
+        n->last = tg[k];
+        n->elast = e[k];
+        if (n->young) {
+            n->c = rc[k];                              /* the band's pitch as it is */
+            n->peak = maxf(n->peak, tg[k]);
+            if (blk - n->start >= PROB && tg[k] >= PROB_HOLD * n->peak && blk >= 4 && absf(rc[k] - rc4[k]) < STABLE)
+                n->young = 0;
+        } else {
+            if (repick(n, tg[k], blk)) {
+                n->trig = 1;
+                n->start = blk;
+                n->peak = tg[k];
+            }
+            steady(n, rc[k]);
+            if (blk - n->start < 12) n->peak = maxf(n->peak, tg[k]);
+        }
+        n->lev = minf(1.0f, tg[k] / maxf(n->peak, 1e-9f));
+    }
+}
+
+/* SY test 26, GLITCH's top half, made to be heard (the user on test 25: "glitch still does barely anything"; tests 25
+ * and 26 at 100 already matched test 11's own engine on the user's take: voice starts, held notes taken, pitch jumps
+ * and clicks alike): at a = (GLITCH - 50) / 50, a note that attacks (or glides to a new note) plays a tracking error
+ * (an octave up or down, a twelfth, a fifth: a partial read as the note) with chance a / 2, and a held note attacks
+ * again from silence (a stutter) with chance a every G_STUT_MIN..G_STUT_MIN + G_STUT_SPAN - 1 blocks (32-95 ms). With
+ * test 11's pops (render(): a faint voice in and out at 5%). The numbers are a fixed sequence from each start (the
+ * module and the twin alike). Under 50: none. */
+#define G_STUT_MIN 24u
+#define G_STUT_SPAN 48u
+static const signed char G_WRONG[4] = {12, -12, 19, 7};
+
+SYV_MORE static u32 g_rand(syv_state_t *s) {
+    s->rng = s->rng * 1664525u + 1013904223u;
+    return s->rng >> 8;                                /* 24 bits */
+}
+
+SYV_MORE static void g_artifacts(syv_state_t *s, u32 nv, u32 glitch) {
+    if (glitch < G_BANDS) {
+        for (u32 v = 0; v < SYV_NV; v++)
+            s->n[v].woff = 0;
+        return;
+    }
+    const float a = (float)((glitch <= 100u ? glitch : 100u) - G_BANDS) * (1.0f / (float)(100u - G_BANDS));
+    for (u32 v = 0; v < nv; v++) {
+        syv_note_t *n = &s->n[v];
+        if (n->band < 0 || !n->gate) continue;
+        if (n->trig || n->glide) {                     /* an attack or a new note: now and then a wrong note */
+            const u32 r = g_rand(s);
+            n->woff = (float)(r & 0xFFFFu) < 0.5f * a * 65536.0f ? G_WRONG[(r >> 16) & 3u] : 0;
+            n->stut = (u8)(G_STUT_MIN + g_rand(s) % G_STUT_SPAN);
+        } else if (n->stut) {
+            n->stut--;
+        } else {                                       /* held: now and then again from silence */
+            const u32 r = g_rand(s);
+            n->stut = (u8)(G_STUT_MIN + (r >> 8) % G_STUT_SPAN);
+            if ((float)(r & 0xFFu) < a * 256.0f) n->trig = 2;
+        }
+    }
+}
+
 /* SY test 18, LAW: the voice's level x this for its band k. The SY-1000's per-voice volume (DSP row b47e, decoded
  * 2026-11-07) gives a band at a fraction r of the loudest of its five bands (k-2..k+2) r^2 of that one's volume, under
  * either reading of its divide step; the readings differ in how the volume follows the playing. 1, SY 1:1: x r (the
@@ -1070,7 +1191,7 @@ SYV_NOTES static void to_voices(syv_state_t *s, const syv_patch_t *p, const floa
         c->soft[v] = n->soft;
         c->glide[v] = n->glide;
         c->gate[v] = n->gate ? 1.0f : 0.0f;
-        c->freq[v] = 440.0f * syv_exp2(n->c * (1.0f / 1200.0f));
+        c->freq[v] = 440.0f * syv_exp2((n->c + 100.0f * (float)n->woff) * (1.0f / 1200.0f));   /* SY test 26 */
         c->vel[v] = velocity(n->peak, vref);
         c->lev[v] = n->lev;
         c->fast[v] = n->fast;
@@ -1325,6 +1446,8 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
                 x->lev = c->lev[v];
                 x->lawf = c->law[v];                    /* test 18 */
                 x->lit = 0;                             /* test 16: not rendered yet */
+            } else if (c->trig[v] == 2u) {
+                x->aenv = 0.0f;                         /* SY test 26: GLITCH's stutter: again from silence */
             }
             x->soft = c->soft[v];                       /* test 17: no pick: its gate rises gently, its strike spent */
             if (x->soft) {
@@ -1346,10 +1469,11 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
         }
         x->fast = c->fast[v];
         if (!x->active) continue;
-        if (!x->lit) {                                  /* a faint blip: not worth a voice, until it first is (test */
+        if (!x->lit || s->gg >= 0.5f) {                 /* a faint blip: not worth a voice, until it first is (test */
             if (c->conf[v] < 0.05f && x->conf < 0.05f && x->astg != 4u) continue;   /* 11's: its attack waits) */
             x->lit = 1;                                 /* test 16: then rendered to its end (test 11 left it out */
-        }                                               /*   again under 5%, a step each way: clicks) */
+        }                                               /*   again under 5%, a step each way: clicks; SY test 26:
+                                                           GLITCH's top half does so again, test 11's pops) */
         n_on++;
         if (c->vel[v] > x->vel) x->vel = c->vel[v];
         /* the block's pitch (glide), LFO, confidence and level */
@@ -1670,10 +1794,14 @@ SYV_DATA float syv_block(syv_state_t *s, const syv_patch_t *tone, const syv_knob
     } else if (p->mono) {
         s->t11 = 0;
         bands_mono(s, p, tg, rc, e, struck, vref, cp, k);   /* SY test 17: the bands, no notes */
+    } else if (k->glitch >= G_BANDS) {                 /* SY test 26: GLITCH's top half: test 11's poly notes */
+        s->t11 = 0;
+        t11_poly(s, tg, rc, e, nv, k);
     } else {
         s->t11 = 0;
         bands_poly(s, p, tg, rc, e, vref, cp, nv, k);
     }
+    g_artifacts(s, nv, k->glitch);                     /* SY test 26: GLITCH's top half: wrong notes, stutter */
     to_voices(s, p, tg, e, vref, cp, nv, k->law <= 2u ? k->law : 0u);   /* SY test 18: LAW */
     s->pick = k->since == 0u;                          /* SY test 17: the pick's envelopes */
     s->since = k->since;

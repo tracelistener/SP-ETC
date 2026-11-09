@@ -1275,6 +1275,35 @@ GLITCH "doesn't make much difference on pad tones".
 Demos (twin renders of the take): `E:\Claude\sy25_demos`: POLY PAD and STRINGS at GLITCH 100 (test 24, test 25, then
 test 25 at 50), SYNC LEAD on the bridge notes 24-36 s (test 24 then test 25's tracker, the guitar under it).
 
+## SY synth test 26 (sy-synth-test26): GLITCH, much glitchier
+
+Test 25 on the unit: "glitch still does barely anything except lower chords. and notes still missed with lead
+tones" (`testsp25.wav`: the neck pickup, the dry guitar isolated out, so only the synth).
+
+- **The recording.** The lead (1-25 s, one lick around F4 G4 G#4) glides into its new note without an attack about 7
+  times (G4 -> G#4, F4 -> G4), twice with an attack on G#4 70-160 ms later: hammer-ons, slides or bends to the
+  tracker; with the guitar out of the recording the picks themselves cannot be seen. The chords: a held chord smooth
+  (40-46 s), then 5-8 heard attacks and 6-18 quick level jumps a second (54-59 s) with notes under the guitar's range
+  (A#1, C#2, D#2, sub-octaves of wrong notes).
+- **What test 11 was.** The user's words on test 11: "tones sound amazing but there are these weird
+  glitches/artifacts/extra notes in guitar synth mode. Sound really cool". Its band analysis is today's (the
+  parameters the same; test 18's FUND spare lets a few more bands through). Its poly notes, ported (`t11_poly`, from
+  its notes_poly), on the user's take: voice starts 32.4 / 44.3 a second (notes / chords; test 11 itself 32.2 /
+  44.3), held notes taken 0.15 / 0.57 (the same), pitch jumps 10.4 / 15.6 (10.3 / 15.5). But test 25 at 100 already
+  had as many (33.8 / 45.6 starts, 1.02 / 1.01 taken, 12.1 / 17.4 jumps) and as many clicks (POLY PAD 34 / 10 a second
+  against test 11's 29 / 9): on this playing test 11's rules are not much glitchier than test 25's top.
+- **GLITCH's top half (50-100):** a chord tone plays `t11_poly` with 4 voices on AUTO (test 25: from 90), and at
+  a = (GLITCH - 50) / 50, on every tone (`g_artifacts`): test 11's pops (render(): a faint voice in and out at 5%, every
+  block), wrong notes (an attack or a new note an octave up or down, a twelfth or a fifth off, chance a / 2: the
+  note's `woff`) and stutter (a held note again from silence, chance a every 24-71 blocks: `trig` 2). The numbers are
+  an LCG from each start (module and twin alike). On the take (heard attacks a second, notes / chords): POLY PAD
+  test 25 at 100 8.3 / 7.5, test 26 at 50 8.0 / 5.7, 75 10.2 / 9.3, 100 11.2 / 10.8; STRINGS 6.5 / 4.5 -> 11.0 / 9.7;
+  SYNC LEAD 7.7 / 6.0 -> 10.0 / 7.9. GLITCH 0-49 is test 25's output sample for sample on every tone tried.
+- **Lead notes:** unchanged; what the glides were (picked notes, hammer-ons, slides or bends) decides the next step.
+
+Demos (twin renders of `testttt.wav`'s neck notes and chords; test 25 at 100, then test 26 at 75 and 100):
+`E:\Claude\sy26_demos`.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
