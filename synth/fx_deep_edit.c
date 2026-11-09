@@ -434,6 +434,17 @@ static u8 *fx_up(void) {
     return v && !((u32)v & 3u) && *(const u32 *)v == FX_VIEW_VTABLE ? v : 0;
 }
 
+/* The next extra screen, or out after the last: VALUE on the input FX's (test9) and, test15, on the BUS ones, with or
+ * without their FX screen. */
+static void next_screen(void) {
+    if (follow() && fde.screen < extra_screens()) {
+        fde.screen++;
+        show();
+    } else {
+        leave();
+    }
+}
+
 /* VALUE pressed on the FX screen: stock's toggle of screens 1 and 2 (0x801479a0, called with the screen from
  * the generic key handler 0x800cba46) jumps here. Screen 1, screen 2 where the effect has one, then the extra
  * screens, then screen 1 again. A screen that opened without REMAIN held (stock: the press does nothing, VALUE
@@ -455,13 +466,9 @@ EXPORT void fde_value(u8 *screen) {
         *REMAIN_MODE = 1;
     }
     if (fde.screen) {
-        if (follow() && fde.screen < extra_screens()) {
-            fde.screen++;
-            show();
-            return;
-        }
-        leave();
-        screen[VIEW_SCREEN2] = 0;
+        next_screen();
+        if (!fde.screen)
+            screen[VIEW_SCREEN2] = 0;                  /* after the last: screen 1 */
         return;
     }
     follow();
@@ -571,12 +578,7 @@ EXPORT u32 fde_key_down(const s16 *ev) {
     }
     if (fde.input && fde.screen) {
         if (key == KEY_VALUE) {
-            if (follow() && fde.screen < extra_screens()) {
-                fde.screen++;
-                show();
-            } else {
-                leave();
-            }
+            next_screen();
             return 1;
         }
         if (key != KEY_SHIFT)
@@ -595,14 +597,9 @@ EXPORT u32 fde_key_down(const s16 *ev) {
             return 1;                                  /*   own handlers keep it) */
         }
         if (fde.screen) {                              /* test15: an extra screen whose FX screen is gone (page 34, */
-            if (follow() && fde.screen < extra_screens()) {   /* REMAIN + FX on an unlit effect, closes when the */
-                fde.screen++;                          /*   popup opens: DM-404): VALUE steps it, and leaves after */
-                show();                                /*   the last */
-            } else {
-                leave();
-            }
-            fde.value_taken = 1;
-            return 1;
+            next_screen();                             /*   REMAIN + FX on an unlit effect, closes when the popup */
+            fde.value_taken = 1;                       /*   opens: DM-404): VALUE steps it, and leaves after the */
+            return 1;                                  /*   last */
         }
     }
     return 0;
@@ -698,9 +695,9 @@ __attribute__((naked)) EXPORT void fde_knob_bridge(void) {
         "bx r12\n\t");
 }
 
-/* TOP's page filter (vtable 0x8022ce5c +0x08): on an extra screen CTRL 1-3 are its settings', and any button
- * but VALUE and SHIFT leaves it and then does what it always does. Everything else goes on to DOOM OS's filter
- * as before. (The input FX's screens are worked in the dispatcher's handlers above, before any page.) */
+/* TOP's page filter (vtable 0x8022ce5c +0x08): stock's pointer put back on TOP's FX screen (test14), then DOOM OS's
+ * filter as before. Test15: on an extra screen the knobs and leaving are the dispatcher's handlers' (above), on any
+ * page; this filter did them on TOP only. */
 /* The FX screen's update (its vtable +0x28 points here; test13): after HOLD + VALUE on it, once the popup's time is
  * over and no popup is on the screen, the screen draws itself again; then the stock update. */
 EXPORT void fde_fx_update(u8 *view) {
@@ -713,20 +710,8 @@ EXPORT void fde_fx_update(u8 *view) {
 }
 
 EXPORT s32 fde_filter(void *page, const s16 *ev) {
-    s32 type = ev[0], what = ev[1];
     ready();                                           /* test11: the saved edits, at the main screen's first event */
-    u8 *v = fx_screen();
-    if (v && *FX_SHOWN != v) {
-        *FX_SHOWN = v;                                 /* test14: stock's pointer back on the FX screen that is up */
-        fde.repairs++;
-    }
-    if (fde.screen) {
-        if (type == EV_KNOB && (u32)(what - 1) < PER_SCREEN) {
-            knob((u32)(what - 1), ev[2]);
-            return 1;
-        }
-        if (type == EV_KEY && what != KEY_VALUE && what != KEY_SHIFT)
-            leave();
-    }
+    (void)fx_up();                                     /* test14: stock's pointer back on TOP's FX screen (test15: the
+                                                          extra screens' knobs and leaving are the dispatcher's) */
     return DOOM_FILTER(page, ev);
 }
