@@ -516,3 +516,31 @@ python synth/build_sg_level.py release/combined-test17/SP404MKII_APP1.bin OUT_DI
   combined-test18, with the sampled reference unchanged.
 
 **Not run:** the unit.
+
+## 21. combined-test20
+
+The user on v9.52: the hidden FX settings never came on the Sound Generator page, a kit or the guitar synth screen, nor
+after REMAIN + FX on an unlit effect (until the effect went off and on). Stock sends VALUE to the FX screen on the
+main page only; REMAIN + FX on an unlit effect opens page 34, and the Sound Generator page is page 30, both without
+TOP's object (DM-404). FX deep edit at `fx-deep-edit-test15` (FX_DEEP_EDIT.md, "Test15") sends VALUE to the FX screen
+up on any page from the dispatcher's key press handler, keeps VALUE's held bit until the release as stock's press
+does, works the knobs and leaving there, and steps the hidden pages on after page 34 closes on the popup. Its blob is
+9,984 bytes (test14: 10,112), ending below the tune-test builds' voice state at `0x83FE4800`.
+
+The chain as combined-test19's: `build_combined.py` (step 2 at fx-deep-edit-test15, refs in
+`analysis/kit_pr1_audit/dev_combined20/refs`), `build_fast_boot.py`, `build_kit_footer.py`, then
+`build_sg_level.py ... --revision combined-test20`.
+
+- **APP1:** `f0fac6e4...45ee`, 3,156,976 bytes, in `analysis/kit_pr1_audit/release/combined-test20`. Every module byte
+  for byte its own test build's; the same 7 reviewed overlaps. Only the FX deep edit module differs from combined-test19.
+
+**Checked** (Unicorn, `analysis/kit_pr1_audit/dev_combined20/run_suites.py`, every suite): each gives combined-test19's
+result. `test_fx_deep_edit.py` 104 of 107 (the same 3: the 2 layout checks and ROLL's key; test15's 5 new checks
+pass); the other feature suites fail the same layout checks as before (bounce's planning-boundary check by 128 bytes
+less); the kit suites, the 18 kit bounce runs, `test_sg_level.py` (36) and pad env step 3 (64) pass.
+fx-deep-edit-test15 on its own parent passes all 107. DM-404 on sy-synth-test29 (this image plus the guitar synth):
+the hidden page from the main page, page 34 (unlit, and lit there), the Sound Generator page and the guitar synth
+screen, CTRL 1 editing it.
+
+**Not run:** the unit.
+
