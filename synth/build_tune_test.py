@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test24'
+REVISION = 'sy-synth-test25'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1138,7 +1138,20 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 24: test 23 on the unit worked "quite well on neck"; the user wanted single '
+        description='SY synth test 25: test 24 on the unit "works better but misses some quiet notes", and GLITCH '
+                    '"doesn\'t make much difference on pad tones". GLITCH on a chord tone now shortens its envelopes '
+                    '(attack and filter attack towards 3 ms, release towards 40 ms, geometrically: POLY PAD 32 ms and '
+                    '200 ms at 50, 3 and 40 at 100) and from 90 plays at most 4 voices on AUTO (test 11\'s): on the '
+                    'user\'s take POLY PAD at 100 makes 8.3 heard attacks a second (test 24: 6.4), quick level '
+                    'rises and drops twice to three times as many on every chord tone; 0 is test 24\'s sample for '
+                    'sample, mono tones unchanged. The SG tracker has a soft click: while the synth plays a note, the '
+                    'energy over 6 kHz of the newest 2 blocks at 4.5 dB over the mean of the 16 before (a block\'s '
+                    'gap), their peak at 0.7 x the pluck reference or more, is a pluck too, and plays only if the '
+                    'level then holds at 0.7 x (29 of test 24\'s 61 missed picks came as loud as the note sounding, '
+                    'its 2 kHz click +0.9 dB): SYNC LEAD plays 269 of the take\'s 318 picks (257), the first note '
+                    'right 249 times (243), 23 more attacks on softer onsets and 1 on none. The other misses are '
+                    'near silent (peaks 26 dB under a pick\'s, no pitch to read). '
+                    'SY synth test 24: test 23 on the unit worked "quite well on neck"; the user wanted single '
                     'notes sooner and a setting from these clean voices to test 11\'s "very glitchy, artifacts". The '
                     'unit matched the twin plus about 4 ms of its own path (3 blocks). The SG tracker now analyses '
                     'its newest samples every 2 blocks (test 23: every 4, on samples 3 blocks old), its count rules '

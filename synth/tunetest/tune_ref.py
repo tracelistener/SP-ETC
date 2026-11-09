@@ -31,6 +31,17 @@ HARMONIC_JUMPS = (12, 19, 24, 28, 31)
 VEL_FLOOR, VEL_FULL, LEVEL_BLOCKS = 50, 0.4, 13   # test 4: velocity 50..127 by sqrt(peak / VEL_FULL); level window
 HF_FC, HF_RATIO, HF_MIN, HF_FROM, HF_TO = 2000.0, 2.0, 1e-4, 2, 16   # the click: energy over 2 kHz in a block,
                                                   # HF_RATIO x the most of blocks HF_FROM..HF_TO back, over HF_MIN
+# SY test 25, a soft click (the user: test 24 "misses some quiet notes"; on the user's take 29 of its 61 missed picks
+# came while a note sounded, as loud as it, the 2 kHz click +0.9 dB over its reference): while the synth plays a note,
+# the energy over 6 kHz of the newest 2 blocks at HF6_RATIO (4.5 dB) x the mean of blocks HF6_FROM..HF6_TO back (a
+# block's gap), the newest 2 blocks' peak over P_MIN, is a pluck too (a click's: CLICK_KEEP on its own note). On the
+# take, SYNC LEAD: picks played 257 -> 269 of 318, the first note right 243 -> 248, 29 more attacks on softer onsets
+# (semitone steps, soft repeats) and 2 on none; in held notes about one false click a minute.
+HF6_FC, HF6_RATIO, HF6_FROM, HF6_TO = 6000.0, 2.8183829, 3, 18
+SOFT_LEVEL, SOFT_HOLD = 0.7, 0.7                  # the 2 blocks' peak at least SOFT_LEVEL x the pluck reference (no
+                                                  # click while a pick's attack falls away: an overdriven low E 140 ms
+                                                  # after its pick, 0.51); a soft-only pluck plays only with the level
+                                                  # now at SOFT_HOLD x its reference (a let-go's falls: nothing)
 # Test 6. The level: a peak follower falling with a 0.3 s time constant (env). Letting a fretted note go (synth
 # test 5 on the unit: "a second note on release") leaves the open string or a touch harmonic far quieter than the
 # note: a move needs the level now (a period's peak) at MOVE_HOLD x env, a pluck's lock PLUCK_HOLD x the level
@@ -59,6 +70,7 @@ def _hp2(fc, fs=48000):
 
 
 HP = _hp2(HF_FC)
+HP6 = _hp2(HF6_FC)                                 # SY test 25
 BQ = ((0.009165618568658829, 0.018331237137317657, 0.009165618568658829, -1.641069769859314, 0.6777322292327881),
       (0.010120933875441551, 0.020241867750883102, 0.010120933875441551, -1.8121154308319092, 0.8525991439819336))
 NAMES = ('C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B')
@@ -109,6 +121,9 @@ class Tracker:
         self.hfe = np.zeros(PEAKS)
         self.z = [[0.0, 0.0], [0.0, 0.0]]
         self.zh = [0.0, 0.0]
+        self.zh6 = [0.0, 0.0]                                   # SY test 25: the soft click's 6 kHz high-pass
+        self.hf6 = np.zeros(PEAKS)
+        self.softs = 0                                          # plucks only the soft click heard
         self.w = self.blk = 0
         self.last_onset, self.onset_blk, self.prev_note = -1000, 0, -1
         self.first_pending = self.lock_pending = False
@@ -160,15 +175,20 @@ class Tracker:
 
     def step(self, block):
         """block: the 64 int16 values the integer side copies, (L + R) >> 1 of pair 0."""
-        z, zh = self.z, self.zh
+        z, zh, zh6 = self.z, self.zh, self.zh6
         h0, h1, h2, g1, g2 = HP
-        pk = e = 0.0
+        k0, k1, k2, q1, q2 = HP6
+        pk = e = e6 = 0.0
         for f, s in enumerate(block):
             v = s / 32768.0
             y = h0 * v + zh[0]                              # the click's high-pass, on the input itself
             zh[0] = h1 * v - g1 * y + zh[1]
             zh[1] = h2 * v - g2 * y
             e += y * y
+            y = k0 * v + zh6[0]                             # SY test 25: the soft click's, at 6 kHz
+            zh6[0] = k1 * v - q1 * y + zh6[1]
+            zh6[1] = k2 * v - q2 * y
+            e6 += y * y
             for k in (0, 1):
                 b0, b1, b2, a1, a2 = BQ[k]
                 y = b0 * v + z[k][0]
@@ -182,6 +202,7 @@ class Tracker:
         blk = self.blk
         self.peaks[blk & (PEAKS - 1)] = pk
         self.hfe[blk & (PEAKS - 1)] = e
+        self.hf6[blk & (PEAKS - 1)] = e6
         env_prev = self.env
         self.env = max(pk, self.env * ENV_K)
         if blk >= P_TO:
@@ -189,9 +210,16 @@ class Tracker:
             href = max(self.hfe[(blk - k) & (PEAKS - 1)] for k in range(HF_FROM, HF_TO + 1))
             jump = pk >= P_MIN and pk >= P_RATIO * ref and (pk >= JUMP_ENV * env_prev or not self.test6)
             click = self.click and e >= self.hf_min and e >= self.hf_ratio * href and pk >= P_MIN
-            if (jump or click) and blk - self.last_onset >= REFRACTORY:
+            soft = False
+            if self.click and self.syn_note >= 0:           # SY test 25: the soft click, while a note plays
+                m6 = sum(self.hf6[(blk - k) & (PEAKS - 1)] for k in range(HF6_FROM, HF6_TO + 1))
+                pk2 = max(pk, self.peaks[(blk - 1) & (PEAKS - 1)])
+                soft = ((e6 + self.hf6[(blk - 1) & (PEAKS - 1)]) * 0.5 >= HF6_RATIO * m6 * (1 / 16) and
+                        pk2 >= P_MIN and pk2 >= SOFT_LEVEL * ref)
+            if (jump or click or soft) and blk - self.last_onset >= REFRACTORY:
                 self.clicks += not jump
-                self.pluck_click = click
+                self.softs += not (jump or click)
+                self.pluck_click = 2 if not (jump or click) else int(click)   # SY test 25: 2, the soft click only
                 self.pluck_ref = ref
                 self.pick_peak = pk
                 self.last_onset = self.onset_blk = blk
@@ -335,6 +363,9 @@ class Tracker:
                         self.stops += 1                     # the level fell after it: a let-go, not a pick
                         if self.syn_note >= 0:
                             self.syn_send(-1)
+                    elif self.pluck_click == 2 and now < SOFT_HOLD * self.pluck_ref:
+                        self.syn_strays += 1                # SY test 25: a soft click whose level fell (a let-go's
+                                                            # finger leaving the fret): nothing
                     elif not same or self.after_peak(blk) >= keep * self.pluck_ref:
                         self.syn_send(note, velocity(self.pick_peak))   # a pluck went steady: the synth plays it
                         self.sub_lock = sub

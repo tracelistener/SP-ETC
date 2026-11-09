@@ -119,6 +119,8 @@ typedef struct __attribute__((aligned(32))) {
     float d_base[TT_T6MAX + 1];             /* the last one whose samples came before the pending pluck */
     float dsub[TT_T6MAX + 1];               /* the difference function less d_base */
     float base_x[TT_BASE];                  /* the 12 kHz samples before the pending pluck, newest first */
+    float zh6[2];                           /* SY test 25: the soft click's 6 kHz high-pass, */
+    float hf6[TT_PEAKS];                    /*   the blocks' energy over 6 kHz */
     u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
 } tt_block_t;
 _Static_assert((__builtin_offsetof(tt_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");

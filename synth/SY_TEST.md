@@ -1231,6 +1231,50 @@ GUARD gone ("guard barely does anything") and SENS kept but stronger.
 
 Demos (twin renders of the recording's neck notes and chords, GLITCH 0 / 50 / 100 / test 11): `E:\Claude\sy24_demos`.
 
+## SY synth test 25 (sy-synth-test25): GLITCH on pads, and a soft click
+
+Test 24 on the unit: "works better but misses some quiet notes" (input gain at its top, EXT SOURCE lighting red), and
+GLITCH "doesn't make much difference on pad tones".
+
+- **Why pads hid GLITCH.** Test 24 gave each new voice the tone's own envelopes from GLITCH up: a pad's 350 ms attack
+  and 1 s release smoothed its blips into a wash. On the user's take (`testttt.wav`, test 24's tracker events), POLY
+  PAD at 100 started 35 voices a second but made 6.4 heard attacks (the pick finder run on the output; the guitar
+  itself 3.5, POLY PAD at 0 3.7).
+- **GLITCH shortens a chord tone's envelopes** (`g_envs`, tones not mono by design): its attack and filter attack go
+  towards 3 ms, its release towards 40 ms, geometrically in g (POLY PAD: 32 ms and 200 ms at 50, 3 and 40 at 100; an
+  ENV preset's attack, release and filter attack the same). From 90 a chord tone on VOICES AUTO plays at most 4 voices
+  (test 11's); notes over the cap end and `render()` now lets every voice go (over the cap: a quick release, where
+  test 24 left a voice over a lowered cap frozen). At 100 (heard attacks a second, quick level rises, drops; test 24
+  then 25): POLY PAD 6.4 / 0.9 / 1.0 -> 8.3 / 2.1 / 1.7; STRINGS 6.0 / 0.8 / 0.9 -> 6.5 / 2.1 / 2.8; VECTOR PAD drops
+  1.8 -> 3.0; SG VOWEL 5.6 -> 8.2 attacks; FM BELL drops 0.2 -> 2.5. GLITCH 0 is test 24's output sample for sample on
+  every tone tried; mono tones unchanged (test 11's at the top, as the user liked).
+- **The misses.** Test 24's SYNC LEAD missed 61 of the take's 318 real picks, none heard as a pluck by the tracker. 32
+  came from silence and are near silent: filtered peaks -45 to -74 dBFS (a played pick's -26), no voiced reading for
+  50 ms; lowering every floor 12 dB found 6 of them and 35 stray attacks. 29 came while a note sounded, as loud as it
+  (jump -0.6 dB, the 2 kHz click +0.9 dB over its reference, no aperiodicity rise): semitone steps (upward ones the
+  tracker moves to without an attack, downward ones drift 45 cents flat as both strings ring and never move) and same-
+  level repeats. Their pitch paths are a held note's (137 settled drifts of 35+ cents away from any onset, the same
+  speed and size).
+- **A soft click.** The offline pick finder's 2.5-8 kHz band rose 6 dB at those picks over 12 ms. In the tracker:
+  while the synth plays a note, the energy over 6 kHz (a second 2nd-order high-pass on the input) of the newest 2
+  blocks at 4.5 dB over the mean of the 16 before (a block's gap), the 2 blocks' peak over `P_MIN`, is a pluck too
+  (as a click: `CLICK_KEEP` on its own note). Two guards from the suite's own signals, where the bare click added
+  plucks: the 2 blocks' peak at `SOFT_LEVEL` (0.7) x the pluck reference or more (the overdriven neck-pickup low E
+  clicked 140 ms after its pick as the attack fell away, at 0.51: a second E2), and a soft-only pluck (`pluck_click`
+  2) plays only with the level now at `SOFT_HOLD` (0.7) x its reference, else nothing happens (the D string let go
+  from fret 12: the finger leaving the fret clicked 7.3 dB and the note fell to the open string's 0.3: a second D4).
+  On the take, SYNC LEAD: picks played 257 -> 269 of 318, no note 61 -> 49, the first note right 35 / 111 / 97 ->
+  35 / 114 / 100 (low / mid / high), moved after 7 -> 11, attacks off any real pick 8 -> 30: 23 on softer onsets the
+  finder hears (17 semitone steps, 6 repeats, 3-6 dB under the playing before) and 1 on none; two attacks on one
+  pick 1 -> 2. Without the guards: 37 off any pick (12 repeats, some a note's own attack falling away). Tried: 4 dB
+  (5 on none), 6 dB (8 more picks), from silence too (the high strings' first note right 97 -> 92), a strong pluck
+  overriding a soft one (no change), `SOFT_LEVEL` 0.8 (5 picks fewer), `SOFT_HOLD` 0.5 (the let-go's second note).
+- **Room:** `g_envs` in `.syvmore` (6,460 of 9,728 bytes), `.syvdata` 3,556 of 3,840; `tt_block` 136 bytes more
+  (the 6 kHz filter and 32 blocks' energies): the module's memory ends at 0x83fd3f38 (limit 0x83fd4000).
+
+Demos (twin renders of the take): `E:\Claude\sy25_demos`: POLY PAD and STRINGS at GLITCH 100 (test 24, test 25, then
+test 25 at 50), SYNC LEAD on the bridge notes 24-36 s (test 24 then test 25's tracker, the guitar under it).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.

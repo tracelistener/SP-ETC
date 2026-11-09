@@ -1,4 +1,4 @@
-# SY synth test 24: quicker single notes, GLITCH and VOICES
+# SY synth test 25: GLITCH on pads, and softer picks
 
 A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, and the quieter Sound Generator and kits) plus the
 guitar synth. Not for sharing. To go back, patch v9.52 again.
@@ -8,24 +8,19 @@ guitar synth. Not for sharing. To go back, patch v9.52 again.
 | SP404MKII_APP1.bin ({{APP1_SIZE}} bytes) | `{{APP1_SHA256}}` |
 | SP404MKII_APP0.bin (stock 5.52) | `{{APP0_SHA256}}` |
 
-What's new since test 23:
+What's new since test 24:
 
-- **Single notes start sooner.** The note tracker now checks the newest sound every 2 blocks instead of every 4 on
-  sound 3 blocks old. On your recording, lead and bass notes start 4-5 ms sooner on every string, and are as often
-  right.
-- **The TRACK page (tap SHIFT twice) is now GLITCH, SENS and VOICES.** LAW stays at 1:1 and GUARD at PICK, built in.
-  - **GLITCH (CTRL 1), 0 to 100:** 0 is test 23's clean sound. Turning it up gives each voice its own attack and
-    filter sweep, and lets every overtone and flicker start a voice. At 100 it's as glitchy as test 11. On the leads
-    and basses, from 50 up the notes come from test 11's own note rules.
-  - **SENS (CTRL 2), 0 to 100:** how loud a string must be, against your recent playing, to start a note. Twice the
-    old range, and it now works on the leads and basses too (soft ghost notes start nothing).
-  - **VOICES (CTRL 3):** AUTO plays each sound as designed. MONO makes any sound play single notes from the note
-    tracker (pads and FM tones as leads). 2 to 6 caps the chord voices (fewer: calmer chords).
+- **GLITCH now bites on pads and the other chord sounds.** Turning it up shortens their attack and release. At 50 a
+  pad's slow swell takes about 30 ms; at 100 every voice starts in 3 ms and stops in 40 ms, so the flicker becomes
+  blips and cut-offs you hear. From 90 up, chord sounds on VOICES AUTO play at most 4 voices (test 11's), so notes
+  get cut more. Leads and basses are as in test 24, and GLITCH 0 is test 24 exactly.
+- **Soft picks over a ringing note count now.** While a note sounds, the note tracker also listens for the pick's
+  scratch above 6 kHz. On your recording SYNC LEAD plays 269 of 318 picks (test 24: 257), and the first note is
+  right more often (249 times, test 24: 243).
 
-1. Volume low. SYNC LEAD (pad 7), TRACK page at GLITCH 0, SENS 0, VOICES AUTO. Play single notes up and down the neck.
-2. SG FM BELL (SHIFT + pad 5) with VOICES at MONO: single-note lines. Then back to AUTO for chords, and try 3.
-3. Turn GLITCH slowly up to 100 while you play, on SYNC LEAD and then on POLY PAD (pad 1) with chords.
-4. Try SENS on a lead: around 30, then 60, with soft and hard picking.
+1. Volume low. SYNC LEAD (pad 7), TRACK page at GLITCH 0, SENS 0, VOICES AUTO. Play lines with soft repeated notes
+   and soft notes after loud ones.
+2. POLY PAD (pad 1), chords: turn GLITCH slowly from 0 to 100. Then STRINGS (pad 2).
 
-Tell me: do single notes feel quicker than test 23? Does SG FM BELL on MONO stop missing notes? Where on GLITCH
-does it start to sound like test 11? If a SY SLOW message ever shows, tell me where.
+Tell me: does SYNC LEAD catch more of your quiet notes, and does it play notes you didn't? Does GLITCH change the
+pads enough now, and where does it get too much?

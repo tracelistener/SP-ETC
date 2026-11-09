@@ -109,7 +109,17 @@
 #define HF_MIN 1e-4f                     /* (and at least this) */
 #define HF_FROM 2u                       /* the most of blocks HF_FROM..HF_TO back */
 #define HF_TO 16u
-#define ENV_K 0.9955654144287109f        /* test 6: the level's follower falls with a 0.3 s time constant */
+#define HF6_RATIO 2.818382978439331f     /* SY test 25: a soft click, while the synth plays a note: the energy over 6 kHz
+                                            of the newest 2 blocks at this (4.5 dB) x the mean of blocks HF6_FROM..HF6_TO
+                                            back, the 2 blocks' peak over P_MIN (the user's take: 29 of test 24's 61
+                                            missed picks came as loud as the note sounding, the 2 kHz click +0.9 dB) */
+#define HF6_FROM 3u
+#define HF6_TO 18u
+#define SOFT_LEVEL 0.7f                  /* the soft click's 2 blocks' peak at least this x the pluck reference (no click
+                                            while a pick's attack falls away: an overdriven low E 140 ms on, 0.51) */
+#define SOFT_HOLD 0.7f                   /* a soft-only pluck plays only with the level now at this x its reference (a
+                                            let-go's level falls: nothing) */
+#define ENV_K 0.9955654144287109f       /* test 6: the level's follower falls with a 0.3 s time constant */
 #define JUMP_ENV 1.3f                    /* a jump is a pluck only over this x env */
 #define MOVE_HOLD 0.4f                   /* a move: the level now at least this x env */
 #define PLUCK_HOLD 0.25f                 /* a pluck going steady: the level now at least this x its reference */
@@ -123,6 +133,9 @@
 /* The click's 2nd-order Butterworth high-pass at 2 kHz (48 kHz): b0, b1, b2, a1, a2. */
 static const float HP[5] = {0.8308980464935303f, -1.6617960929870605f, 0.8308980464935303f, -1.632993221282959f,
                             0.6905989050865173f};
+/* SY test 25: the soft click's, at 6 kHz */
+static const float HP6[5] = {0.5690355896949768f, -1.1380711793899536f, 0.5690355896949768f, -0.9428090453147888f,
+                             0.3333333432674408f};
 
 /* The 4th-order Butterworth low-pass at 1.6 kHz (48 kHz) as two biquads: b0, b1, b2, a1, a2. */
 static const float BQ[2][5] = {
@@ -456,6 +469,9 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                     b->stops++;                          /* the level fell after it: a let-go, not a pick */
                     if (b->syn_note >= 0)
                         syn_send(t, b, -1, 0u);
+                } else if (b->pluck_click == 2u && now < SOFT_HOLD * b->pluck_ref) {
+                    b->syn_strays++;                     /* SY test 25: a soft click whose level fell (a let-go's
+                                                            finger leaving the fret): nothing */
                 } else if (!same || after_peak(b, blk) >= keep * b->pluck_ref) {
                     syn_send(t, b, note, velocity(b->pick_peak));   /* a pluck went steady: the synth plays it */
                     b->sub_lock = sub;
@@ -508,12 +524,17 @@ u32 tune_fp_step(tt_t *t) {
     }
     float z00 = b->z[0][0], z01 = b->z[0][1], z10 = b->z[1][0], z11 = b->z[1][1], pk = 0.0f;
     float h0 = b->zh[0], h1 = b->zh[1], e = 0.0f;
+    float g0 = b->zh6[0], g1 = b->zh6[1], e6 = 0.0f;     /* SY test 25 */
     for (u32 f = 0; f < FRAMES; f++) {
         float v = (float)t->in[f] * IN_SCALE;
         float y = HP[0] * v + h0;                        /* the click's high-pass, on the input itself */
         h0 = HP[1] * v - HP[3] * y + h1;
         h1 = HP[2] * v - HP[4] * y;
         e += y * y;
+        y = HP6[0] * v + g0;                             /* SY test 25: the soft click's, at 6 kHz */
+        g0 = HP6[1] * v - HP6[3] * y + g1;
+        g1 = HP6[2] * v - HP6[4] * y;
+        e6 += y * y;
         y = BQ[0][0] * v + z00;
         z00 = BQ[0][1] * v - BQ[0][3] * y + z01;
         z01 = BQ[0][2] * v - BQ[0][4] * y;
@@ -534,9 +555,12 @@ u32 tune_fp_step(tt_t *t) {
     b->z[1][1] = z11;
     b->zh[0] = h0;
     b->zh[1] = h1;
+    b->zh6[0] = g0;
+    b->zh6[1] = g1;
     u32 blk = b->blk;
     b->peaks[blk & PEAK_MASK] = pk;
     b->hfe[blk & PEAK_MASK] = e;
+    b->hf6[blk & PEAK_MASK] = e6;
     float env_prev = b->env, ev = b->env * ENV_K;
     b->env = pk > ev ? pk : ev;                          /* test 6: the level */
     if (blk >= P_TO) {
@@ -551,9 +575,18 @@ u32 tune_fp_step(tt_t *t) {
         }
         u32 jump = pk >= P_MIN && pk >= P_RATIO * ref && pk >= JUMP_ENV * env_prev;
         u32 click = e >= HF_MIN && e >= HF_RATIO * href && pk >= P_MIN;
-        if ((jump || click) && (s32)blk - b->last_onset >= REFRACTORY) {
+        u32 soft = 0;
+        if (b->syn_note >= 0) {                          /* SY test 25: the soft click, while a note plays */
+            float m6 = 0.0f;
+            for (u32 k = HF6_FROM; k <= HF6_TO; k++)
+                m6 += b->hf6[(blk - k) & PEAK_MASK];
+            const float p1 = b->peaks[(blk - 1u) & PEAK_MASK], pk2 = pk > p1 ? pk : p1;
+            soft = (e6 + b->hf6[(blk - 1u) & PEAK_MASK]) * 0.5f >= HF6_RATIO * m6 * (1.0f / 16.0f) &&
+                   pk2 >= P_MIN && pk2 >= SOFT_LEVEL * ref;
+        }
+        if ((jump || click || soft) && (s32)blk - b->last_onset >= REFRACTORY) {
             b->clicks += !jump;
-            b->pluck_click = click;
+            b->pluck_click = jump || click ? click : 2u;   /* SY test 25: 2, the soft click only */
             b->pluck_ref = ref;
             b->pick_peak = pk;
             b->last_onset = b->onset_blk = (s32)blk;

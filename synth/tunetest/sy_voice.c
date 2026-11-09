@@ -303,6 +303,41 @@ SYV_DATA void syv_reset(syv_state_t *s) {
     s->started = 1;
 }
 
+/* SY test 25, GLITCH on a chord tone (the user on test 24: GLITCH "doesn't make much difference on pad tones": each new
+ * voice had the tone's own envelopes, and a pad's slow attack and long release smoothed its blips away; on the user's
+ * take POLY PAD at GLITCH 100 made 35 voice starts a second but 6.4 heard attacks): its attack and filter attack go
+ * towards G_ATT's 3 ms and its release towards G_REL's 40 ms by GLITCH, geometrically (POLY PAD's 350 ms attack and
+ * 1 s release: 32 ms and 200 ms at 50, 3 and 40 at 100: 8.3 heard attacks a second, level drops 1.0 -> 1.6). A mono
+ * tone's are test 11's at the top as before. From G_CAP_AT, a chord tone on AUTO voices plays at most G_CAP (test 11's
+ * 4: more voices taken over, more notes cut). */
+#define G_ATT 0.989871f             /* sy_voices.py's _att(3 ms): e^(-1.466 / 144), the pole */
+#define G_REL 0.997607f             /* _dec(40 ms): e^(-4.6 / 1920) */
+#define G_CAP_AT 90u
+#define G_CAP 4u
+
+SYV_MORE static float lnp(float a) {                   /* ln a for a pole a near 1 (pow_k's series) */
+    const float d = 1.0f - a;
+    if (d < 0.05f) return -(d + d * d * (0.5f + d * (1.0f / 3.0f)));
+    return syv_log2(a) * 0.693147181f;
+}
+
+SYV_MORE static float g_toward(float a, float t, float g) {   /* a pole's time towards t's by g, geometrically: */
+    if (!(a > t) || !(a < 1.0f) || g <= 0.0f) return a;       /*   a^((ms_a / ms_t)^g), only ever shorter */
+    return pow_k(a, syv_exp2(g * syv_log2(lnp(t) / lnp(a))));
+}
+
+SYV_MORE static void g_envs(syv_state_t *s, syv_patch_t *p, u32 glitch) {
+    const float g = (float)(glitch <= 100u ? glitch : 100u) * 0.01f;
+    p->aa = 1.0f - g_toward(1.0f - p->aa, G_ATT, g);
+    p->fa = 1.0f - g_toward(1.0f - p->fa, G_ATT, g);
+    p->ar = g_toward(p->ar, G_REL, g);
+    if (p->preset) {                                   /* the Sound Generator's ENV preset: attack, release, the */
+        s->pre[0] = g_toward(s->pre[0], G_ATT, g);     /*   filter's attack (1.0: none, kept) */
+        s->pre[3] = g_toward(s->pre[3], G_REL, g);
+        s->pre[4] = g_toward(s->pre[4], G_ATT, g);
+    }
+}
+
 /* ---- the screen's settings ---- */
 
 SYV_DATA static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs_t *k) {
@@ -371,6 +406,7 @@ SYV_DATA static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs
         s->pre[3] = pow_k(s->pre[3], inv);
     }
     if (k->dyn >= 1u && k->dyn <= 101u) p->avel = (float)(k->dyn - 1u) * 0.01f;
+    if (k->glitch > 0u && !t->mono) g_envs(s, p, k->glitch);   /* SY test 25: GLITCH on a chord tone's envelopes */
     if (k->voices == 1u && !t->mono) {                  /* SY test 24, VOICES 1: a poly tone plays single notes, the */
         p->mono = 1;                                    /*   tracker's (sy_fp.c runs it), each pick attacking */
         p->retrig = 1;
@@ -1271,7 +1307,7 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
         s->gastg = (u8)st;
         s->gfstg = (u8)fst;
     }
-    for (u32 v = 0; v < nv; v++) {
+    for (u32 v = 0; v < SYV_NV; v++) {                 /* SY test 25: all (over the cap: no gate, a quick release) */
         syv_voice_t *x = &s->v[v];
         if (c->trig[v] || c->soft[v] || (s->guard && c->gate[v] > 0.0f && !x->active)) {   /* test 17: soft too */
             x->astg = 1;
@@ -1619,6 +1655,11 @@ SYV_DATA float syv_block(syv_state_t *s, const syv_patch_t *tone, const syv_knob
     ctl_t *cp = &s->ctl;
     u32 cap = p->flags & 0x0Fu;                      /* the tone's voice cap (flags' low bits) */
     u32 nv = p->mono ? 1u : cap && cap < SYV_NV ? cap : SYV_NV;
+    if (!p->mono && k->voices == 0u && k->glitch >= G_CAP_AT && nv > G_CAP) nv = G_CAP;   /* SY test 25 */
+    for (u32 v = nv; v < SYV_NV; v++) {                /* SY test 25: notes over the cap end (a knob lowered it; */
+        s->n[v].gate = 0;                              /*   render() lets their voices go quickly) */
+        s->n[v].band = -1;
+    }
     if (p->mono && k->glitch >= G_BANDS) {             /* SY test 24: GLITCH's top half: test 11's mono notes */
         if (!s->t11)
             for (u32 b = 0; b < SYV_BANDS; b++)        /* none waiting from before */
