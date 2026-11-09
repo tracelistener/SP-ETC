@@ -508,7 +508,8 @@ class Engine:
         code = y.ycode
         ys = y.blk - 1 - y.onset_blk
         self.ykn = ((code & 0x7F) + 1 if fresh and (code & 0x100) else 0,
-                    0x80 | (1 if fresh else 0) | (2 if fresh and (code & 0x200) else 0),
+                    0x80 | (1 if fresh else 0) | (2 if fresh and (code & 0x200) else 0) |
+                    (4 if y.move_quick else 0),                # SY test 27: its last note-on a quick move
                     0 if ys < 0 else min(ys, 255),
                     y.syn_note + 1 if 0 <= y.syn_note <= 126 else 0,
                     (y.syn >> 16) & 0xFF)                # SY test 20: its note-ons (a re-pick's too)

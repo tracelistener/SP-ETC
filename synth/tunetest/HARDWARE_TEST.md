@@ -1,7 +1,7 @@
-# SY synth test 26: GLITCH, much glitchier
+# SY synth test 27: GLITCH much glitchier, and picked note changes attack
 
 A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, and the quieter Sound Generator and kits) plus the
-guitar synth. Not for sharing. To go back, patch v9.52 again.
+guitar synth. Not for sharing. To go back, patch v9.52 again. It has everything from test 26, so skip test 26.
 
 | File | SHA-256 |
 | --- | --- |
@@ -10,13 +10,14 @@ guitar synth. Not for sharing. To go back, patch v9.52 again.
 
 What's new since test 25:
 
-- **GLITCH 0 to 49 is test 25 exactly.**
-- **From 50, chord sounds play test 11's own chord notes** (4 voices; every flicker can take over a held note).
-- **From 50 to 100, real glitches grow in, on every sound:** test 11's pops, wrong notes (an octave, a fifth or a
-  twelfth off, up to half the notes at 100) and stutter (held notes restart every 30-100 ms at 100).
-- Lead tracking is as in test 25.
+- **Picked note changes on the leads attack.** When you fret a new note and pick it, the note tracker hears the
+  pitch change first and the pick gets lost in the note already playing. A quick pitch change (a new fret) now
+  attacks on SYNC LEAD, LADDER LEAD and any sound on VOICES MONO. Bends and slides still glide.
+- **GLITCH 0 to 49 is test 25 exactly.** From 50, chord sounds play test 11's own chord notes, and pops, wrong notes
+  and stutter grow in on every sound up to 100.
 
-1. Volume low. POLY PAD (pad 1), chords: turn GLITCH from 0 to 100 slowly.
-2. SYNC LEAD (pad 7), single notes: GLITCH 0, then 75, then 100.
+1. Volume low. SYNC LEAD (pad 7), GLITCH 0: play your F G G# lick, picking every note, and a few bends.
+2. POLY PAD (pad 1), chords: turn GLITCH slowly from 0 to 100. Then SYNC LEAD at 75 and 100.
 
-Tell me: is it glitchy enough now, too much at 100, or the wrong kind of glitch?
+Tell me: do the picked notes in the lick attack now, and do bends still glide? Is GLITCH glitchy enough now, or too
+much at 100?

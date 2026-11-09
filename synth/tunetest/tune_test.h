@@ -115,12 +115,15 @@ typedef struct __attribute__((aligned(32))) {
                                                subtraction found, moves too quiet to play */
     u32 ycode;                              /* SY test 19: the newest analysis for the SY engine's mono tones: its
                                                nearest note (0..126) | 0x100 voiced | 0x200 clean (was padding) */
-    float d_last[TT_T6MAX + 1];             /* the last analysis' difference function */
-    float d_base[TT_T6MAX + 1];             /* the last one whose samples came before the pending pluck */
-    float dsub[TT_T6MAX + 1];               /* the difference function less d_base */
+    float d_base[TT_T6MAX + 1];             /* the last difference function whose samples came before the pending
+                                               pluck (SY test 27: copied from d6, which keeps the last analysis' until
+                                               the next; d_last and dsub, 808 bytes, gone: the subtraction is
+                                               normalised in dn6, in place) */
     float base_x[TT_BASE];                  /* the 12 kHz samples before the pending pluck, newest first */
     float zh6[2];                           /* SY test 25: the soft click's 6 kHz high-pass, */
     float hf6[TT_PEAKS];                    /*   the blocks' energy over 6 kHz */
+    s32 old_at;                             /* SY test 27: the block the synth's note was last read steady */
+    u32 move_quick;                         /*   the last note-on a quick move (a fret change, for the SY voices) */
     u32 stack[STACK_BYTES / 4];             /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
 } tt_block_t;
 _Static_assert((__builtin_offsetof(tt_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");

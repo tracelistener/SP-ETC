@@ -332,7 +332,8 @@ u32 sy_fp_step(sy_t *s) {
         b->yan = an;
         b->mono = mono;                                 /* SY test 24: VOICES 1 runs it for a poly tone too */
         kn.ynote = (u8)(fresh && (code & 0x100u) ? (code & 0x7Fu) + 1u : 0u);
-        kn.yflag = (u8)((run ? 0x80u : 0u) | (fresh ? 1u : 0u) | (fresh && (code & 0x200u) ? 2u : 0u));
+        kn.yflag = (u8)((run ? 0x80u : 0u) | (fresh ? 1u : 0u) | (fresh && (code & 0x200u) ? 2u : 0u) |
+                        (run && y->move_quick ? 4u : 0u));   /* SY test 27: its last note-on a quick move */
         s32 ys = (s32)y->blk - 1 - y->onset_blk;
         kn.ysince = (u8)(!run ? 255 : ys < 0 ? 0 : ys > 255 ? 255 : ys);
         kn.ysyn = (u8)(run && y->syn_note >= 0 && y->syn_note <= 126 ? y->syn_note + 1 : 0);

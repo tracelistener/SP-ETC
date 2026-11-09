@@ -1304,6 +1304,30 @@ tones" (`testsp25.wav`: the neck pickup, the dry guitar isolated out, so only th
 Demos (twin renders of `testttt.wav`'s neck notes and chords; test 25 at 100, then test 26 at 75 and 100):
 `E:\Claude\sy26_demos`.
 
+## SY synth test 27 (sy-synth-test27): picked note changes attack
+
+The user on test 26's question: the lead's glided notes (G4 -> G#4, F4 -> G4 in `testsp25.wav`) were picked.
+
+- **Why they glided.** The fret goes down before the pick, so the pitch changes first: the tracker reads the new
+  note and moves its note there (no pluck: a move), and the voices glide. The pick then sounds on the note already
+  playing, as loud: no jump, a click too small; twice in the recording a lock attacked it 70-160 ms later.
+- **Quick moves.** The tracker keeps the block its note was last read steady (`old_at`: clean, within `MOVE_STEADY`
+  15 cents) and marks a move quick (`move_quick`) when that was at most `MOVE_QUICK` 24 blocks before. Blocks from
+  that reading to the move: hammer-ons (synthetic) G4 -> G#4 14, E2 -> G2 24; the take's moves near real picks
+  median 20 (6 of 8 at 24 or less), near other onsets 19; bends: a semitone in 60 ms 28, a tone in 170 ms 38, in
+  300 ms 62. sy_fp.c passes it as yflag bit 4; `bands_mono` attacks a quick move on a retriggering tone (SYNC LEAD,
+  LADDER LEAD, any tone on VOICES MONO), glides a slow one (a bend, a slide) and every move on a legato tone (ACID
+  BASS) as before. `tt_block` 8 bytes more.
+- **On the take**, SYNC LEAD: picks played 269 -> 271 of 318, the first note right 249 -> 251, no note 49 -> 47,
+  attacks off the take's real picks 30 -> 48: 16 on semitone or tone steps the pick finder hears (picked softly
+  or played legato), 1 on none, 1 a step of -11; two attacks on one pick 2 -> 3.
+- **Room** (the user: "ensure efficient coding of this build to leave more room"): the two new fields took
+  `tt_block` (aligned 32) up 32 bytes and the module's memory to 0x83fd3ff8, 8 bytes under its 0x83fd4000 limit.
+  `d_last` (a copy of `d6`, which keeps the last analysis' function until the next: a pluck now copies `d6`) and
+  `dsub` (the subtraction now normalised in `dn6`, `yin()` working in place: it reads each value before writing it,
+  and never again) are gone: `tt_block` 9,920 -> 9,088 bytes, the module 45,048 -> 44,152, its memory ending at
+  0x83fd3c78, 904 bytes free. The FPU side's stack (2,048 bytes; the suite's peak 1,164) is unchanged.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.

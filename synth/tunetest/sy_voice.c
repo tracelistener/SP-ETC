@@ -777,7 +777,11 @@ SYV_MORE static void bands_mono(syv_state_t *s, const syv_patch_t *p, const floa
                 s->yowe = 0;
                 s->yact = 2;
             } else if (k != n->band || !sounding) {
-                if (sounding) {
+                if (sounding && (kn->yflag & 4u) && p->retrig && yloud) {
+                    y_start(n, k, tg, rc, e, blk, lm); /* SY test 27: a quick move (a fret change: the user picks
+                                                          them, the pick unheard over the note): a retriggering tone
+                                                          attacks */
+                } else if (sounding) {
                     y_move(n, k, on, tg, rc, e, blk);  /* legato: the pitch moves (glide), no attack */
                 } else if (kn->ysince <= Y_WIN + Y_WIN && yloud) {   /* a pluck's note the readings missed: it */
                     y_start(n, k, tg, rc, e, blk, lm);                 /*   starts */

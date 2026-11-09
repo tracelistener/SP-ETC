@@ -100,7 +100,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test26'
+REVISION = 'sy-synth-test27'
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -1138,7 +1138,15 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 26: test 25 on the unit: "glitch still does barely anything except lower chords" and lead '
+        description='SY synth test 27: test 26 (not yet on the unit) plus the lead: on test 25 the user\'s lick (F4 G4 G#4) glided into '
+                    'new notes, and the user says those were picked: the fret goes down first (the pitch changes, the tracker moves '
+                    'its note) and the pick then sounds on the note already playing, unheard. The tracker now marks a move quick '
+                    '(move_quick, yflag bit 4) when its readings left the note sounding (its last reading within 15 cents) at most '
+                    '24 blocks before: a fret change (hammer-ons 14-24 blocks, moves near the take\'s picks median 20), not a bend or '
+                    'slide (28-62); a retriggering tone (SYNC LEAD, LADDER LEAD, VOICES MONO) attacks a quick move, others glide as '
+                    'before. On the take, SYNC LEAD: picks played 269 -> 271, the first note right 249 -> 251, 18 more attacks off the '
+                    'take\'s real picks (16 on semitone or tone steps the pick finder hears, 1 on none). '
+                    'SY synth test 26: test 25 on the unit: "glitch still does barely anything except lower chords" and lead '
                     'notes still missed (the user\'s take with the dry guitar isolated out: the lead glides into many of its new '
                     'notes). GLITCH\'s top half (50-100) on a chord tone now plays test 11\'s own poly notes (its notes_poly: a '
                     'band beginning takes a free voice, else the quietest young one, else the oldest note; 4 voices), which match '

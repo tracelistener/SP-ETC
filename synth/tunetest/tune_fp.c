@@ -115,7 +115,11 @@
                                             missed picks came as loud as the note sounding, the 2 kHz click +0.9 dB) */
 #define HF6_FROM 3u
 #define HF6_TO 18u
-#define SOFT_LEVEL 0.7f                  /* the soft click's 2 blocks' peak at least this x the pluck reference (no click
+#define MOVE_STEADY 15                   /* SY test 27: a move whose readings left the note sounding (its last reading */
+#define MOVE_QUICK 24                    /*   within MOVE_STEADY cents) at most MOVE_QUICK blocks before is a fret change
+                                            (picked or hammered: 14-24 blocks), not a bend or slide (28-62): move_quick,
+                                            for the SY voices (a retriggering tone attacks it) */
+#define SOFT_LEVEL 0.7f                 /* the soft click's 2 blocks' peak at least this x the pluck reference (no click
                                             while a pick's attack falls away: an overdriven low E 140 ms on, 0.51) */
 #define SOFT_HOLD 0.7f                   /* a soft-only pluck plays only with the level now at this x its reference (a
                                             let-go's level falls: nothing) */
@@ -228,6 +232,7 @@ static void syn_send(tt_t *t, tt_block_t *b, s32 note, u32 vel) {
     t->syn = seq << 16 | (note >= 0 ? vel << 8 | ((u32)note + 1u) : 0u);
     b->syn_note = note;
     b->syn_sends++;
+    b->move_quick = 0;                                   /* SY test 27 (a quick move sets it after) */
 }
 
 /* A pick's peak as a velocity, VEL_FLOOR..127 (not rounded): a gentle curve, so a soft pick stays audible. */
@@ -395,9 +400,9 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                                                            24: none, its span is this block's; test 23: age < 3) */
     if (pre && b->lock_pending)
         copy_d(b->d_base, d);
-    copy_d(b->d_last, d);
     if (!pre && b->lock_pending && b->pluck_ref >= RING_MIN * b->pick_peak) {   /* test 6: over strings ringing */
-        float *dn = b->dsub, e_new = 0.0f, e_all = 0.0f, mabs = 0.0f, mn = 0.0f;
+        float *dn = b->dn6, e_new = 0.0f, e_all = 0.0f, mabs = 0.0f, mn = 0.0f;   /* SY test 27: in dn6 (yin() */
+                                                                                  /*   normalises it in place) */
         for (u32 k = 1; k <= TT_T6MAX; k++) {           /* what the pick added */
             float v = d[k] - b->d_base[k];
             dn[k] = v;
@@ -452,6 +457,8 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         b->agree = b->agree && b->prev_note == note ? b->agree + 1u : 1u;
         b->prev_note = note;
         u32 same = b->syn_note >= 0 && note == b->syn_note;
+        if (same && r->cents <= MOVE_STEADY && r->cents >= -MOVE_STEADY)
+            b->old_at = (s32)blk;                        /* SY test 27: the synth's note, read steady */
         if (b->agree >= AGREE && !(b->lock_pending && same && age < LOCK_SAME)) {   /* SY test 24: LOCK_SAME */
             r->note = note;
             if (b->lock_pending) {
@@ -481,10 +488,13 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                 }
             } else if (b->syn_note >= 0 && !same && !t->drum && !b->sub_lock && b->agree >= MOVE_AGREE &&
                        r->cents <= MOVE_CENTS && r->cents >= -MOVE_CENTS && !harmonic_jump(note, b->syn_note)) {
-                if (now < MOVE_HOLD * b->env)
+                if (now < MOVE_HOLD * b->env) {
                     b->blocked++;                        /* far quieter than the note: a let-go, not a slide */
-                else
+                } else {
+                    const u32 quick = (s32)blk - b->old_at <= MOVE_QUICK;   /* SY test 27: a fret change */
                     syn_send(t, b, note, velocity(level(b, blk)));  /* the pitch moved while it plays */
+                    b->move_quick = quick;
+                }
             }
         }
     } else {
@@ -521,6 +531,7 @@ u32 tune_fp_step(tt_t *t) {
         b->prev_note = -1;
         b->unvoiced = 99;
         b->syn_note = -1;
+        b->old_at = -1000;                               /* SY test 27 */
     }
     float z00 = b->z[0][0], z01 = b->z[0][1], z10 = b->z[1][0], z11 = b->z[1][1], pk = 0.0f;
     float h0 = b->zh[0], h1 = b->zh[1], e = 0.0f;
@@ -592,7 +603,7 @@ u32 tune_fp_step(tt_t *t) {
             b->last_onset = b->onset_blk = (s32)blk;
             b->first_pending = b->lock_pending = 1;
             b->agree = 0;
-            copy_d(b->d_base, b->d_last);                /* test 6: what rang before it */
+            copy_d(b->d_base, b->d6);                    /* test 6: what rang before it (the last analysis') */
             for (u32 j = 0; j < TT_BASE; j++)
                 b->base_x[j] = b->ring[(b->w - FRAMES / 4u - 1u - j) & RING_MASK];
             begin(t);

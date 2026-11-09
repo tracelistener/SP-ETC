@@ -38,7 +38,13 @@ HF_FC, HF_RATIO, HF_MIN, HF_FROM, HF_TO = 2000.0, 2.0, 1e-4, 2, 16   # the click
 # take, SYNC LEAD: picks played 257 -> 269 of 318, the first note right 243 -> 248, 29 more attacks on softer onsets
 # (semitone steps, soft repeats) and 2 on none; in held notes about one false click a minute.
 HF6_FC, HF6_RATIO, HF6_FROM, HF6_TO = 6000.0, 2.8183829, 3, 18
-SOFT_LEVEL, SOFT_HOLD = 0.7, 0.7                  # the 2 blocks' peak at least SOFT_LEVEL x the pluck reference (no
+# SY test 27 (the user on test 26's lead: those glides were picked notes): a move whose readings left the note
+# sounding (its last reading within MOVE_STEADY cents of it) at most MOVE_QUICK blocks before is a fret change (picked
+# or hammered: YIN's window makes the jump 14-24 blocks; on the user's take the moves near picks 15-34, median 20),
+# not a bend or a slide (a semitone bent in 60 ms 28 blocks, a tone in 170 ms 38, in 300 ms 62): move_quick, for the
+# SY voices (a retriggering tone attacks it)
+MOVE_STEADY, MOVE_QUICK = 15, 24
+SOFT_LEVEL, SOFT_HOLD = 0.7, 0.7                 # the 2 blocks' peak at least SOFT_LEVEL x the pluck reference (no
                                                   # click while a pick's attack falls away: an overdriven low E 140 ms
                                                   # after its pick, 0.51); a soft-only pluck plays only with the level
                                                   # now at SOFT_HOLD x its reference (a let-go's falls: nothing)
@@ -145,6 +151,8 @@ class Tracker:
         self.base_x = np.zeros(BASE)                            # the samples before the pluck, newest first
         self.sub_lock = False                                   # the synth's note came from the subtraction
         self.stops = self.drops = self.sub_locks = self.blocked = 0
+        self.old_at = -1000                                     # SY test 27: the synth's note last read steady
+        self.move_quick = 0                                     # the last note-on a quick move (a fret change)
 
     def recent_peak(self, blk):
         return max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(4))
@@ -172,6 +180,7 @@ class Tracker:
         self.syn = seq << 16 | (vel << 8 | (note + 1) if note >= 0 else 0)
         self.syn_note = note
         self.syn_sends += 1
+        self.move_quick = 0                                     # SY test 27 (the move sets it after)
 
     def step(self, block):
         """block: the 64 int16 values the integer side copies, (L + R) >> 1 of pair 0."""
@@ -347,6 +356,8 @@ class Tracker:
             self.agree = self.agree + 1 if self.agree and self.prev_note == note else 1
             self.prev_note = note
             same = self.syn_note >= 0 and note == self.syn_note
+            if same and abs(r['cents']) <= MOVE_STEADY:
+                self.old_at = blk                           # SY test 27: the synth's note, read steady
             if self.agree >= AGREE and not (self.lock_pending and same and age < LOCK_SAME):   # SY test 24
                 r['note'] = note
                 if self.lock_pending:
@@ -378,7 +389,9 @@ class Tracker:
                     if self.test6 and now < MOVE_HOLD * self.env:
                         self.blocked += 1                   # far quieter than the note: a let-go, not a slide
                     else:
+                        quick = blk - self.old_at <= MOVE_QUICK   # SY test 27: a fret change, not a bend or slide
                         self.syn_send(note, velocity(self.level(blk)))  # the pitch moved while it plays
+                        self.move_quick = int(quick)
         else:
             if voiced:
                 self.murky += 1                             # strings ringing together: counts as nothing heard
