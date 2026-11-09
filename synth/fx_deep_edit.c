@@ -107,6 +107,7 @@ typedef unsigned char u8;
 #define KEY_HOLD 0x11
 #define TOGGLE_MS 1500                                   /* the HIDDEN FX OFF / ON popup */
 #define KEYS ((const volatile u8 *)0x80592448u)          /* held keys: bit (k & 7) of KEYS[k >> 3] */
+#define KEYS_RW ((volatile u8 *)0x80592448u)
 #define KNOB_MAX 127
 #define PER_SCREEN 3
 #define SCREEN_MS 600000                                 /* an extra screen's popup: until it is left */
@@ -561,6 +562,15 @@ static void toggle(void) {
     POPUP(fde.off ? "HIDDEN FX OFF" : "HIDDEN FX ON", TOGGLE_MS);
 }
 
+/* Test15: a VALUE press taken for an FX screen or an extra screen keeps VALUE's held bit as the dispatcher's own press
+ * would (0x8003abee): stock asks whether VALUE is held in 28 places, the FX screen's update and show among them, and
+ * "hold VALUE + turn CTRL" is stock's way to screen 2's settings. Its taken release clears the bit. */
+static u32 take_value(void) {
+    KEYS_RW[KEY_VALUE >> 3] |= (u8)(1u << (KEY_VALUE & 7));
+    fde.value_taken = 2;
+    return 1;
+}
+
 /* Every key press, on any page, before the dispatcher's own handling (test10): 1 takes it. HOLD + VALUE switches
  * the hidden settings off or on (test11). VALUE + EXT SOURCE opens the input FX's extra screens; on them VALUE steps
  * (and closes after the last), SHIFT passes, any other key leaves and goes on. */
@@ -593,14 +603,12 @@ EXPORT u32 fde_key_down(const s16 *ev) {
         u8 *v = fx_up();
         if (v) {                                       /* test15: VALUE on an FX screen up on any page steps it here: */
             fde_value(v);                              /*   stock's generic key handler sends it to the screen on the */
-            fde.value_taken = 1;                       /*   main page only (page 34's and the Sound Generator page's */
-            return 1;                                  /*   own handlers keep it) */
-        }
+            return take_value();                       /*   main page only (page 34's and the Sound Generator page's */
+        }                                              /*   own handlers keep it) */
         if (fde.screen) {                              /* test15: an extra screen whose FX screen is gone (page 34, */
             next_screen();                             /*   REMAIN + FX on an unlit effect, closes when the popup */
-            fde.value_taken = 1;                       /*   opens: DM-404): VALUE steps it, and leaves after the */
-            return 1;                                  /*   last */
-        }
+            return take_value();                       /*   opens: DM-404): VALUE steps it, and leaves after the */
+        }                                              /*   last */
     }
     return 0;
 }
@@ -613,6 +621,8 @@ EXPORT u32 fde_key_up(const s16 *ev) {
     if (fde.dirty && !fde.screen && !fx_up())          /* test15: an FX screen up on any page */
         save();
     if (key == KEY_VALUE && fde.value_taken) {
+        if (fde.value_taken == 2)                      /* test15: the held bit take_value set */
+            KEYS_RW[KEY_VALUE >> 3] &= (u8)~(1u << (KEY_VALUE & 7));
         fde.value_taken = 0;
         fde.value_down = 0;                            /* test15: a taken press counts as held until here */
         return 1;

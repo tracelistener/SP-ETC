@@ -471,7 +471,10 @@ guitar synth screen they never come.
   still edit it. Keeping page 34 up would take a change to stock's page 34.
 - **Checked:** `test_fx_deep_edit.py` 107 of 107 (5 new: VALUE, CTRL 1 and leaving with TOP's object gone and only
   stock's pointer to the screen; VALUE not taken with the settings off or no screen up; VALUE stepping and leaving
-  with the FX screen gone). The blob is 9,952 bytes (test14: 10,112): TOP's filter no longer works the extra
+  with the FX screen gone). A VALUE press taken this way keeps VALUE's held bit (`0x80592448`) until its release, as
+  the dispatcher's own press sets it: stock asks whether VALUE is held in 28 places (the FX screen's update and show
+  among them; hold VALUE + turn CTRL is stock's way to screen 2's settings). The blob is 9,984 bytes (test14: 10,112):
+  TOP's filter no longer works the extra
   screens (the dispatcher's handlers do, on every page), and one function steps them for every caller, so the module
   stays below the guitar synth's voice state at `0x83FE4800` in the tune-test builds.
 
