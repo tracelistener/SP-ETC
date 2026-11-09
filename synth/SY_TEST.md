@@ -1362,6 +1362,32 @@ The user on test 27: "really good". Then: was it the best it could be? Not in ro
   and SENS 20), every block identical, the tracker running throughout (40,124-43,124 analyses and 137-220 plucks a
   run).
 
+## SY synth test 29 (sy-synth-test29): test 28 on combined-test20, the hidden FX settings on every FX screen
+
+The user on v9.52's hidden FX settings: in pad mode HOLD + VALUE, FX and VALUE reach them, and REMAIN + FX keeps them
+while the effect is lit; with it unlit, REMAIN + FX holds the FX screen but never reaches them (nor once the FX button
+lights it there, until off and on); and none on the Sound Generator page, a kit or the guitar synth screen.
+
+- **Cause** (DM-404 on test 27): stock's generic key handler sends VALUE to the FX screen on the main page (1) only.
+  REMAIN + FX on an unlit effect opens page 34, and the Sound Generator page (the kits, this screen) is page 30;
+  TOP's object (`0x80cfd350`) is gone on both and their own handlers keep VALUE. This screen already hands VALUE on
+  while an FX screen is up (test 6), so the fix is FX deep edit's alone: `fx-deep-edit-test15` (FX_DEEP_EDIT.md on
+  `claude/fx-deep-edit`) sends VALUE to the FX screen up on any page from the dispatcher's key press handler; the
+  knobs and leaving work there too. Page 34 closes when the hidden settings' popup opens (its FX screen with it), so
+  VALUE then steps the hidden pages and leaves after the last.
+- **combined-test20** = combined-test19's chain with `fx-deep-edit-test15` (APP1 `f0fac6e4...45ee`, `release/combined-test20`;
+  COMBINED.md section 21). The module had to stay below this build's voice state at `0x83FE4800` (a first test15
+  ran 64 bytes into it, which the builder refused): TOP's filter lost its extra-screen code and one function steps
+  them, 9,984 bytes (test14: 10,112). A VALUE press it takes keeps VALUE's held bit until the release, as stock's
+  own press does (stock asks for VALUE held in 28 places; hold VALUE + turn CTRL edits screen 2).
+- **The builder:** the guards on the dispatcher's key press and release jumps named fx-deep-edit-test14's bridge
+  addresses; `fde_bridges` checks those jumps into FX deep edit's slot wherever the bridges are, so they are gone.
+- **DM-404 on test 29** (`hfx29.py`, `hfx29d.py`): the main page, page 34 (unlit; and lit there), the Sound Generator
+  page and this screen: VALUE to screen 2, then the hidden page, CTRL 1 edits it (one DT1), VALUE on past the last;
+  with no FX screen up VALUE is this screen's again. On page 34 the hidden page comes over the main page.
+- The guitar synth is test 28's (its module has the same size; only FX deep edit's addresses in it differ). APP1
+  `e6a22131...b2dc`, `release/sy-synth-test29`; 397 suite checks pass.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
