@@ -1392,6 +1392,64 @@ def pointer_checks(img, parent, man, st):
           'with no FX screen up, TOP\'s filter leaves stock\'s pointer alone')
 
 
+KEY_PRESS, KEY_RELEASE, KNOB_HANDLER = 0x8003ABD0, 0x8003ADA0, 0x8003A8D8   # the dispatcher's type 5, 6, 9 handlers
+
+
+def anypage_checks(img, parent, man, st):
+    """Test15: an FX screen up where TOP's object is gone (on the unit: page 34 after REMAIN + FX on an unlit effect,
+    the Sound Generator page 30 with the kits and the guitar synth screen), stock's pointer to it the only way there:
+    VALUE through the dispatcher's key press handler steps it (screen 2, then the hidden settings) and is taken, its
+    release too; CTRL 1 edits the setting shown; a key but VALUE and SHIFT leaves; with the hidden settings off, or no
+    FX screen up, VALUE goes on as before."""
+    rt = Runtime(parent)
+    e = man['entries']
+    m, sc = fx_machine(img, man)
+    v = sc.open()
+    m.bus_effect(1, TAPE_ECHO)
+    m.w32(TOP_PAGE, 0)                                  # TOP's object gone, as on those pages; stock's pointer kept
+
+    def ev(kind, a1=0, a2=0):
+        m.uc.mem_write(EVENT, struct.pack('<6h', kind, a1, a2, 0, 0, 0))
+        return EVENT
+
+    seq = []
+    for _ in range(2):
+        m.clear()
+        m.call(KEY_PRESS, ev(EV_KEY, KEY_VALUE), count=20_000_000)
+        taken = m.state()['value_taken']
+        m.call(KEY_RELEASE, ev(EV_KEY_UP, KEY_VALUE), count=20_000_000)
+        seq.append((sc.flag(VIEW_SCREEN2), m.popups, taken, m.state()['value_taken'], m.state()['value_down']))
+    want = [(1, [], 1, 0, 0), (1, [(screen_text(rt, st, 1, TAPE_ECHO, 1), SCREEN_MS)], 1, 0, 0)]
+    check(m.r32(FX_SHOWN) == v and m.r32(TOP_PAGE) == 0 and seq == want,
+          f'test15: with TOP\'s object gone and only stock\'s pointer to the FX screen (page 34, the Sound Generator '
+          f'page), VALUE through the dispatcher\'s key press handler steps to screen 2, then the hidden settings, '
+          f'press and release taken ({seq})')
+    x0 = st.by_fx[TAPE_ECHO][0]
+    m.clear()
+    sent = m.state()['sent']
+    m.call(KNOB_HANDLER, ev(EV_KNOB, 1, 127), count=20_000_000)
+    got = m.frames()[0]
+    text = screen_text(rt, st, 1, TAPE_ECHO, 1, {x0['name']: x0['max']})
+    check(got == [fx_frame(TAPE_ECHO, 1, x0['aa'], x0['max'])] and m.state()['sent'] == sent + 1 and
+          m.popups == [(text, SCREEN_MS)],
+          f'test15: there CTRL 1 edits the first hidden setting shown ({x0["name"]} to {x0["max"]}: {len(got)} DT1, '
+          f'the screen again)')
+    m.clear()
+    left = m.call(e['fde_key_down'], ev(EV_KEY, KEY_EXIT))
+    check(left == 0 and m.state()['screen'] == 0 and m.popups and m.popups[-1][1] == GONE_MS,
+          'test15: there a key but VALUE and SHIFT leaves the hidden settings and goes on (not taken)')
+    m.uc.mem_write(e['fde'] + 6, b'\x01')               # the hidden settings off
+    off = m.call(e['fde_key_down'], ev(EV_KEY, KEY_VALUE))
+    m.call(e['fde_key_up'], ev(EV_KEY_UP, KEY_VALUE))
+    m.uc.mem_write(e['fde'] + 6, b'\x00')
+    m.w32(FX_SHOWN, 0)                                  # no FX screen up
+    none = m.call(e['fde_key_down'], ev(EV_KEY, KEY_VALUE))
+    held = m.state()['value_down']
+    m.call(e['fde_key_up'], ev(EV_KEY_UP, KEY_VALUE))
+    check(off == 0 and none == 0 and held == 1 and m.state()['value_down'] == 0,
+          'test15: with the hidden settings off, or no FX screen up, VALUE is not taken (held until its release)')
+
+
 def main():
     out = Path(sys.argv[1])
     man = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
@@ -1416,6 +1474,7 @@ def main():
     screen_stay_checks(img, parent, man, st)
     chip_redraw_checks(img, parent, man, st)
     pointer_checks(img, parent, man, st)
+    anypage_checks(img, parent, man, st)
     print(json.dumps(dict(cases=cases[0])))
     print('ALL PASS' if not fails else f'{len(fails)} FAILED')
     sys.exit(1 if fails else 0)
