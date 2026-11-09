@@ -58,7 +58,7 @@ from build_start_fix import refs_into
 HERE = Path(__file__).resolve().parent
 FLASH, COPY, DECOMPRESS = 0x60080000, 0x600800E4, 0x60080088
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'fx-deep-edit-test14'
+REVISION = 'fx-deep-edit-test15'
 SLOT = 0x4000                       # reserved: [base, base + SLOT)
 # Settings left out on purpose: (effect, fxmap name) -> why. test6 and test8: users' reports on v9.47 and v9.48.
 SUPER_FILTER_OUT = ('FLT SLOPE', 'FLT GAIN', 'MOD SW', 'MOD WAVE', 'ATTACK', 'LEVEL')
@@ -595,7 +595,12 @@ def build(inp: Path, out: Path, zig: Path, fxmap_path: Path, base: int, build_di
                'is up ([0x805922b4] < 1), its next update finds 0x8059232c (screen 2 as last drawn) at -1 and draws '
                'the whole screen again. The DT1s go to the effect the chip has on each slot: what its last FxType '
                '(through fde_dt1) selected',
-        fx_screen='test14: the FX screen is the view on TOP\'s list (TOP + 0x38, 0x800a01c0) whose vtable is 0x802269c0; '
+        fx_screen='test15: the FX screen up on any page: stock\'s pointer 0x8059259c when it holds a view whose vtable '
+                  'is 0x802269c0, else TOP\'s; the dispatcher\'s key press handler sends VALUE there and takes it (stock '
+                  'sends it to the FX screen on the main page only: REMAIN + FX on an unlit effect opens page 34, and the '
+                  'Sound Generator page 30, where the kits and the guitar synth screen are, keeps it), the knob handler '
+                  'works any extra screen, and any key but VALUE and SHIFT leaves one, on any page. '
+                  'test14: the FX screen is the view on TOP\'s list (TOP + 0x38, 0x800a01c0) whose vtable is 0x802269c0; '
                   'at each event TOP\'s filter sees, stock\'s pointer 0x8059259c is put back on it if it isn\'t '
                   '(every page constructor clears it while TOP keeps the FX screen up, and the generic key handler '
                   'routes VALUE through it)',

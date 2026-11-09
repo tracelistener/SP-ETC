@@ -446,6 +446,29 @@ The kit suites (test_kits, capture, chord, shortcut, midi, restart, hot resample
 trim and threshold checks pass and its 4 structural checks fail by design (they assert the start fix is
 the top stage). Two builds from different build folders are byte-identical.
 
+## Test15: the hidden settings on every page
+
+The user on v9.52: in pad mode HOLD + VALUE, FX and VALUE reach the hidden settings, and REMAIN + FX keeps them while
+the effect is lit; with the effect unlit, REMAIN + FX holds the FX screen but VALUE never reaches them (nor after the
+FX button lights the effect there, until it goes off and on again); and on the Sound Generator page, the kits and the
+guitar synth screen they never come.
+
+- **Cause** (DM-404, the real firmware): stock's generic key handler sends VALUE to the FX screen (`0x800cba46` ->
+  `0x801479a0`, the toggle this module hooks) on the main page (1) only. REMAIN + FX on an unlit effect opens page 34
+  (TOP's object gone, `0x80cfd350` = 0), whose own handler toggles screen 2 itself while the screen is held and does
+  nothing once the FX button has lit the effect there; the Sound Generator page (30: the kits and the guitar synth
+  screen are on it) keeps VALUE. Stock's pointer `0x8059259c` holds the FX screen on both, and is cleared when it
+  closes (EXIT, or after its 2 s), as on the main page.
+- **Now** the dispatcher's key press handler (`fde_key_down`, every page, before the page) sends VALUE to the FX
+  screen that is up and takes it (press and release): TOP's list while TOP's object is there (the pointer put back,
+  as TOP's filter does), else stock's pointer if it holds a view with the FX screen's vtable (`fx_up`). The knob
+  handler works the BUS extra screens too, and any key but VALUE and SHIFT leaves one, on any page (TOP's filter did
+  both on TOP only). With the hidden settings off, or no FX screen up, VALUE goes on as before. The file is held while
+  an FX screen is up on any page; HOLD + VALUE holds an FX screen on any page.
+- **Checked:** `test_fx_deep_edit.py` 106 of 106 (4 new: VALUE, CTRL 1 and leaving with TOP's object gone and only
+  stock's pointer to the screen; VALUE not taken with the settings off or no screen up). The blob is 10,208 bytes
+  (test14: 10,112).
+
 ## Not known (the hardware test, or later)
 
 - What the numbers mean, and whether the chip uses the firmware's ranges.
