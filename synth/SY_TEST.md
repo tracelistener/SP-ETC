@@ -1431,6 +1431,33 @@ The user on tests 27-29: lead tones "either missing notes or extra notes sometim
 - The other tracker tones (LADDER LEAD, FAT BASS, POLY PAD on VOICES MONO) score as SYNC LEAD (the rules do not
   depend on the tone, only on retriggering). The module 39,864 -> 40,184 bytes (4,872 free).
 
+## SY synth test 31 (sy-synth-test31): the guitar's notes switch, REMAIN + FX on a lit effect
+
+The user on test 30: "better but still issues with synth but almost there"; on the Sound Generator page and the kits,
+a way to turn the guitar's notes off; and there, REMAIN + FX on an effect already lit showed and stepped the preview
+bus instead of keeping the FX screen (on an unlit one it worked). The guitar synth's sound is test 30's.
+
+- **The switch.** Hold EXT SOURCE and press SUB PAD on the Sound Generator page (the plain page, the kits; not the
+  guitar synth screen, where SUB PAD is the screen's): `gsyn.off` flips, a popup says `GUITAR NOTES OFF` or `ON`, and
+  SUB PAD's key press and pad hit are taken (no preview). The file keeps it in byte 6, bit 1 (bit 0 is SOUND OFF; a
+  test 30 file reads as on), written at EXT SOURCE's release. Off, `syn_ui` lets a sounding note go and plays none,
+  the tracker is not asked for on the page, and the ROUTING hold for the page is given back (the guitar synth, if
+  armed, keeps its own). The input is left alone: stock ignores EXT SOURCE on that page (DM-404: a plain EXT SOURCE
+  press there never changes the input, setting byte `0x82e011a0`, while on the main screen it flips it).
+- **REMAIN.** Test 6 let REMAIN's press on to the page whenever an FX screen was up but not frozen, and the page's own
+  REMAIN steps the preview bus. That is the 2 s screen an FX button shows, so lighting an effect and then pressing
+  REMAIN + FX stepped the bus. Now REMAIN is taken the same way with or without an FX screen up (its held bit set by
+  hand, so the FX button opens its screen frozen with the effect left on); with a frozen screen up it closes it with
+  an EXIT and stays held, so REMAIN + FX there opens it frozen again; and any key pressed while REMAIN is held makes
+  its release no tap (REMAIN + EXT SOURCE, the input's bus, stepped the preview bus too).
+- **DM-404** (session scratchpad `hfx31.py`, `hfx31p.py`): on the Sound Generator page, DELAY lit with its screen up,
+  then REMAIN + DELAY: frozen, DELAY lit, the bus left; after 3 s still up; REMAIN + DELAY over the frozen screen: the
+  same; a REMAIN tap over it closes it, the bus left; a tap alone: "Preview on BUS 2". EXT SOURCE + SUB PAD: the
+  popup, off; again: on.
+- **Checks:** section 11 of the screen checks (REMAIN) rewritten; `gnotes_checks` (4 checks): the chord, where it is
+  not (the main screen, the guitar synth screen), off on the page (the note let go, the hold given back, no tracker),
+  the file's bit. All 413 pass on `release/sy-synth-test31` (APP1 `bb677bc8…5120`, 3,226,272 bytes).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.

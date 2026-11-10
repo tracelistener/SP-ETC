@@ -1929,6 +1929,102 @@ def sy_tone_checks(img, man):
     sy_knob_checks(img, man)
     sy_screen_checks(img, man)
     sy_route_checks(img, man)
+    gnotes_checks(img, man)                                          # SY test 31
+
+
+GN_OFF_TEXT, GN_ON_TEXT = 'GUITAR NOTES\nOFF', 'GUITAR NOTES\nON'
+
+
+def gn(m):
+    """SY test 31: gsyn's off flag and switch count (after test 5's seven words)."""
+    return struct.unpack('<2I', m.bytes(m.sym['gsyn'] + 28, 8))
+
+
+def gnotes_checks(img, man):
+    """SY test 31: EXT SOURCE + SUB PAD on the Sound Generator page switches the guitar's notes there off and on."""
+    sym = man['symbols']
+    # 1. EXT SOURCE held + SUB PAD on the plain page: its pad hit and key press taken (no preview, nothing to note
+    #    repeat), the notes off, a popup, the input left as it is (stock ignores EXT SOURCE there: no setter call, no
+    #    ext_fix); its releases taken; EXT SOURCE's release goes on and writes the file (byte 6 bit 1, muted bit 0
+    #    kept). Again: on, its popup.
+    g = ScreenMachine(img, man, page=SG_PAGE)
+    g.start()
+    g.popups()
+    g.hold(KEY_EXT, True)
+    first = [g.ev(EV_PAD, KEY_SUB_PAD, 90), g.ev(EV_KEY, KEY_SUB_PAD)]
+    off1, text1 = gn(g), g.posted()
+    st1 = g.sy()
+    ups = [g.ev(EV_KEY_UP, KEY_SUB_PAD), g.ev(EV_PAD_UP, KEY_SUB_PAD)]
+    g.hold(KEY_EXT, False)
+    ext_up = g.ev(EV_KEY_UP, KEY_EXT)
+    wrote = g.files.writes[-1][1] if g.files.writes else b''
+    g.popups()
+    g.hold(KEY_EXT, True)
+    second = [g.ev(EV_PAD, KEY_SUB_PAD, 90), g.ev(EV_KEY, KEY_SUB_PAD)]
+    off2, text2 = gn(g), g.posted()
+    g.ev(EV_KEY_UP, KEY_SUB_PAD)
+    g.ev(EV_PAD_UP, KEY_SUB_PAD)
+    g.hold(KEY_EXT, False)
+    g.ev(EV_KEY_UP, KEY_EXT)
+    wrote2 = g.files.writes[-1][1] if g.files.writes else b''
+    plain = [g.ev(EV_KEY, KEY_SUB_PAD), g.ev(EV_KEY_UP, KEY_SUB_PAD)]       # SUB PAD alone: on to stock
+    check(first == [(1, False), (1, False)] and off1 == (1, 1) and text1 == GN_OFF_TEXT and st1['ext_fix'] == 0 and
+          not g.sets and ups == [(1, False), (1, False)] and ext_up == (0, True) and len(wrote) == 136 and
+          wrote[6] == 2 and second == [(1, False), (1, False)] and off2 == (0, 2) and text2 == GN_ON_TEXT and
+          len(wrote2) == 136 and wrote2[6] == 0 and plain == [(0, True), (0, True)],
+          f'SY test 31: EXT SOURCE + SUB PAD on the Sound Generator page: SUB PAD\'s pad hit and press taken, the '
+          f'guitar\'s notes off ({off1}), popup {text1!r}, the input left alone (no setter call, ext_fix '
+          f'{st1["ext_fix"]}), the releases '
+          f'taken; EXT SOURCE\'s release goes on and writes the file (byte 6 = {wrote[6] if wrote else None}); again: '
+          f'on ({off2}), {text2!r}, byte 6 = {wrote2[6] if wrote2 else None}; SUB PAD alone goes on')
+    # 2. Where it is not: the main screen (EXT SOURCE + SUB PAD goes on, nothing switched), the guitar synth screen (its
+    #    own SUB PAD, taken silently as before, nothing switched).
+    mn = ScreenMachine(img, man)
+    mn.start()
+    mn.hold(KEY_EXT, True)
+    on_main = [mn.ev(EV_PAD, KEY_SUB_PAD, 90), mn.ev(EV_KEY, KEY_SUB_PAD)]
+    sc = ScreenMachine(img, man, page=SG_PAGE)
+    sc.start()
+    sc.open_screen()
+    sc.hold(KEY_EXT, True)
+    on_screen = [sc.ev(EV_PAD, KEY_SUB_PAD, 90), sc.ev(EV_KEY, KEY_SUB_PAD)]
+    check(on_main == [(0, True), (0, True)] and gn(mn) == (0, 0) and on_screen == [(1, False), (1, False)] and
+          gn(sc) == (0, 0) and sc.sy()['mode'] == 1,
+          f'SY test 31: EXT SOURCE + SUB PAD on the main screen goes on ({on_main}); on the guitar synth screen SUB PAD '
+          f'stays the screen\'s ({on_screen}); neither switches the notes')
+    # 3. Off on the page: a note sounding is let go, the tracker is not asked for, no ROUTING hold for the page (the
+    #    synth disarmed); on again: the hold and the tracker come back.
+    p = ScreenMachine(img, man, page=SG_PAGE, armed=False, routing=0)   # the user's ROUTING: Mix
+    p.start()
+    p.call(sym['tune_ui'])
+    held_on = p.tt()['hold'], p.tt()['req']
+    p.put(sym['gsyn'], 50, '<i')                                      # a note sounding
+    p.put(sym['gsyn'] + 28, 1, '<I')                                  # off
+    p.midi.clear()
+    p.call(sym['syn_ui'])
+    let_go = list(p.midi)
+    p.call(sym['tune_ui'])
+    p.call(sym['tune_ui'])
+    held_off = p.tt()['hold'], p.tt()['req']
+    sends_off = p.routing_dt1()
+    p.put(sym['gsyn'] + 28, 0, '<I')
+    p.call(sym['tune_ui'])
+    held_back = p.tt()['hold']
+    check(held_on[0] == 1 and let_go == [(0, 2, 50, 0, 1)] and p.gsyn()['sounding'] == -1 and held_off == (0, 0) and
+          1 in sends_off and sends_off[-1] == 0 and held_back == 1 and p.routing_dt1()[-1] == 1,
+          f'SY test 31: the notes off on the page: the note sounding let go ({let_go}), the hold given back '
+          f'(ROUTING sends {sends_off}) and no tracker ({held_off}); on again: held ({held_back})')
+    # 4. The file: byte 6 bit 1 reads back as off (muted bit 0 apart); test 30's file (bit clear) as on.
+    fo = ScreenMachine(img, man, store={SY_PATH: sy_file_bytes(0, 3, [[0, 0, 0]] * 20)})
+    fo.start()
+    fo.ev(EV_KEY, KEY_EXIT)
+    f30 = ScreenMachine(img, man, store={SY_PATH: sy_file_bytes(0, 1, [[0, 0, 0]] * 20)})
+    f30.start()
+    f30.ev(EV_KEY, KEY_EXIT)
+    check(gn(fo)[0] == 1 and fo.sy()['muted'] == 1 and fo.sy()['loads'] == 1 and gn(f30)[0] == 0 and
+          f30.sy()['muted'] == 1,
+          'SY test 31: the file\'s byte 6 bit 1 reads back as the notes off (bit 0 SOUND OFF as before); test 30\'s file '
+          'as on')
 
 
 FILE_OPEN, FILE_READ, FILE_WRITE, FILE_CLOSE = 0x800DEC60, 0x800DEC48, 0x800DD9B8, 0x800DEBD8
@@ -2416,8 +2512,11 @@ def sy_screen_checks(img, man):
           'held (then it goes on: MFX + a pad picks an effect); the FX screen gone, the knobs are the screen\'s again')
     # 11. SY test 6: REMAIN on the Sound Generator page: its press taken and its held bit set (an FX screen opened while
     #     it is held reads it and freezes); let go alone: the stock press and release follow (the preview bus); held +
-    #     an FX button: the button goes on, no stock REMAIN; with a frozen FX screen up: an EXIT closes it and the flag
-    #     is cleared; with one up not frozen, and on another page: REMAIN goes on as stock.
+    #     an FX button: the button goes on, no stock REMAIN; on another page: REMAIN goes on as stock. SY test 31: with a
+    #     frozen FX screen up an EXIT closes it, the flag is cleared and REMAIN stays held (the FX button after it opens
+    #     it frozen again), its release no tap; with one up not frozen (the 2 s after an FX button) REMAIN is taken as
+    #     with none (on the unit REMAIN + FX on a lit effect stepped the preview bus), a tap still the preview bus; any
+    #     key while REMAIN is held makes it no tap (REMAIN + EXT SOURCE, the input's bus).
     rm = ScreenMachine(img, man, page=SG_PAGE)
     rm.start()
 
@@ -2436,14 +2535,30 @@ def sy_screen_checks(img, man):
     st_r = rm.sy()
     up_r = fx_view(rm)
     rm.put(FX_FROZEN, 1, '<B')
-    d3 = rm.ev(EV_KEY, KEY_REMAIN)
-    u3 = rm.ev(EV_KEY_UP, KEY_REMAIN)
+    d3 = rm.ev(EV_KEY, KEY_REMAIN)                                          # a frozen FX screen up
+    held3 = bit(rm)
     closed = list(rm.stock_keys)
     frozen = rm.get(FX_FROZEN, '<B')
     rm.stock_keys.clear()
-    d4 = rm.ev(EV_KEY, KEY_REMAIN)
+    fx3 = [rm.ev(EV_KEY, KEY_FX1 + 2), rm.ev(EV_KEY_UP, KEY_FX1 + 2)]       # DELAY, REMAIN still held
+    u3 = rm.ev(EV_KEY_UP, KEY_REMAIN)
+    held3b = bit(rm)
+    after_close = list(rm.stock_keys)
+    d4 = rm.ev(EV_KEY, KEY_REMAIN)                                          # one up, not frozen: REMAIN + DELAY
+    held4 = bit(rm)
+    fx4 = [rm.ev(EV_KEY, KEY_FX1 + 2), rm.ev(EV_KEY_UP, KEY_FX1 + 2)]
     u4 = rm.ev(EV_KEY_UP, KEY_REMAIN)
+    after_fx4 = list(rm.stock_keys)
+    d4b = rm.ev(EV_KEY, KEY_REMAIN)                                         # the same, REMAIN alone: a tap
+    u4b = rm.ev(EV_KEY_UP, KEY_REMAIN)
+    tap4 = list(rm.stock_keys)
+    rm.stock_keys.clear()
     up_r[0] = False
+    d6 = rm.ev(EV_KEY, KEY_REMAIN)                                          # REMAIN + EXT SOURCE: no tap
+    ext6 = [rm.ev(EV_KEY, KEY_EXT), rm.ev(EV_KEY_UP, KEY_EXT)]
+    u6 = rm.ev(EV_KEY_UP, KEY_REMAIN)
+    after_ext = list(rm.stock_keys)
+    st_r2 = rm.sy()
     mm = ScreenMachine(img, man)
     mm.start()
     d5 = mm.ev(EV_KEY, KEY_REMAIN)
@@ -2452,13 +2567,19 @@ def sy_screen_checks(img, man):
           tap == [(EV_KEY, KEY_REMAIN, 0), (EV_KEY_UP, KEY_REMAIN, 0)] and
           d2 == (1, False) and fxk == [(0, True), (0, True)] and u2 == (1, False) and after_hold == [] and
           st_r['rem_taps'] == 1 and st_r['rem_holds'] == 1 and st_r['rem_down'] == 0 and
-          d3 == (1, False) and u3 == (1, False) and closed == [(EV_KEY, KEY_EXIT, 0), (EV_KEY_UP, KEY_EXIT, 0)] and
-          frozen == 0 and d4 == (0, True) and u4 == (0, True) and not rm.stock_keys and
+          d3 == (1, False) and held3 == 1 and closed == [(EV_KEY, KEY_EXIT, 0), (EV_KEY_UP, KEY_EXIT, 0)] and
+          frozen == 0 and fx3 == [(0, True), (0, True)] and u3 == (1, False) and held3b == 0 and after_close == [] and
+          d4 == (1, False) and held4 == 1 and fx4 == [(0, True), (0, True)] and u4 == (1, False) and after_fx4 == [] and
+          d4b == (1, False) and u4b == (1, False) and tap4 == [(EV_KEY, KEY_REMAIN, 0), (EV_KEY_UP, KEY_REMAIN, 0)] and
+          d6 == (1, False) and ext6 == [(0, True), (0, True)] and u6 == (1, False) and after_ext == [] and
+          st_r2['rem_taps'] == 2 and st_r2['rem_holds'] == 4 and st_r2['rem_down'] == 0 and
           d5 == (0, True) and u5 == (0, True) and not mm.stock_keys,
           'REMAIN on the Sound Generator page: its press taken, its held bit set (an FX screen opened now freezes) and '
           'cleared at the release; alone, the stock press and release follow it (the preview bus); held + DELAY: the '
-          'button goes on, no stock REMAIN; with a frozen FX screen up: taken, an EXIT closes it, the flag cleared; '
-          'not frozen, and on the main screen: REMAIN goes on as stock')
+          'button goes on, no stock REMAIN; SY test 31: a frozen FX screen up: an EXIT closes it, the flag cleared, '
+          'REMAIN held on (DELAY after it goes on with it held), its release no tap; one up not frozen: taken as with '
+          'none (REMAIN + DELAY: no stock REMAIN; alone: the tap); REMAIN + EXT SOURCE: no tap; on the main screen: '
+          'REMAIN goes on as stock')
     # 12. SY test 7: VALUE's push steps the synth's bus, DRY -> BUS 1 -> BUS 2 -> BOTH -> DRY, its press and release
     #     taken; the bar shows each ("OUT: BUS 2"), redrawn after each; written to the file's byte 128 (SY test 11's
     #     version 4; 98 in version 3) at a key release

@@ -346,6 +346,8 @@ typedef struct {
     u32 ons, offs;                                     /* note-ons and note-offs sent */
     u32 mix, hint_due, hints;                          /* on the page with EXT SOURCE on and ROUTING Mix; the hint
                                                           still to show; hints shown */
+    u32 off, toggles;                                  /* SY test 31: the guitar's notes off on the page (EXT SOURCE +
+                                                          SUB PAD there; the file keeps it); times switched */
 } gsyn_t;
 EXPORT gsyn_t gsyn = {-1, 0, 0, 0, 0, 0, 0};
 
@@ -1083,8 +1085,9 @@ static inline u32 syn_live(const tt_t *t) { return t->ext && t->hold && DWT_CYCC
  * firmware sends into ExtIn too (the RECORD SETTING and looper screens, its chip resets). The recorder meanwhile gets
  * the mix (pair 1 x 2) on ROUTING Mix, the input and the synth on ExtIn (sy_rec). */
 UI_SMALL static void route_hold(tt_t *t, u32 now) {
-    u32 want = t->ext && ((PAGE == SG_PAGE && !sy.mode) || (!sy.muted && sy.armed));   /* test 5: the SG page's own
-                                                                                           synth; SY test 8: armed */
+    u32 want = t->ext && ((PAGE == SG_PAGE && !sy.mode && !gsyn.off) ||   /* test 5: the SG page's own synth (SY test
+                                                                             31: unless its notes are off) */
+                          (!sy.muted && sy.armed));                      /* SY test 8: armed */
     if (want && !t->hold) {
         t->hold = 1;
         t->hold_at = now;
@@ -1122,7 +1125,8 @@ EXPORT UI_SMALL void tune_ui(void) {
         t->routing = (u32)SYS_GET(SYSPRM, ROUTING, -1);
     }
     route_hold(t, now);
-    u32 want = meter.shown || (PAGE == SG_PAGE && !sy.mode && syn_live(t)) ||   /* test 5: not in the SY screen */
+    u32 want = meter.shown || (PAGE == SG_PAGE && !sy.mode && !gsyn.off && syn_live(t)) ||   /* test 5: not in the SY
+                                                                                               screen; SY test 31 */
                (sy.req && sy.state == SY_RUN && sy_block.mono);                /* SY test 19 */
     if (!want) t->req = 0;
     if (want && !t->req && t->state == TT_OFF) tune_start(t);
@@ -1267,6 +1271,7 @@ UI_SMALL static void sy_ready(void) {
     }
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
     s->muted = sy_file[6] & 1u;
+    gsyn.off = (sy_file[6] >> 1) & 1u;                  /* SY test 31: the guitar's notes off on the SG page */
     s->loads++;
 }
 
@@ -1291,7 +1296,7 @@ UI_SMALL static void sy_save(void) {
     put32(sy_file, SY_FILE_MAGIC);
     sy_file[4] = SY_FILE_VERSION;
     sy_file[5] = (u8)s->tone_req;
-    sy_file[6] = (u8)s->muted;
+    sy_file[6] = (u8)(s->muted | (gsyn.off ? 2u : 0u)); /* SY test 31: bit 1, the guitar's notes off on the SG page */
     sy_file[7] = SY_TONE_COUNT;
     for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) sy_file[SY_FILE_KNOB + i] = (u8)(s->knob[i / 3u][i % 3u] + 64);
     for (u32 i = 0; i < SY_TONE_COUNT; i++) {
@@ -1343,6 +1348,18 @@ static inline u32 sy_tone(const sy_t *s) { return s->tone_req < SY_TONE_COUNT ? 
 UI_SMALL SCREEN static void sy_ext_on(void) {
     SET_SET(SETTINGS, EXT_SOURCE, 1, 0);
     LIGHTS |= 0x10;
+}
+
+/* SY test 31: EXT SOURCE + SUB PAD on the Sound Generator page (the plain page, the kits): the guitar's notes there off,
+ * or on again, with a popup; the file keeps it (written at the next key release: EXT SOURCE's). The input is left as
+ * it is: stock ignores EXT SOURCE on that page (DM-404: its press there never switches the input). */
+#define GN_POPUP_MS 1500
+UI_SMALL SCREEN static void gsyn_toggle(sy_t *s) {
+    gsyn_t *g = &gsyn;
+    g->off = !g->off;
+    g->toggles++;
+    s->dirty = 1;
+    POPUP_POST(g->off ? "GUITAR NOTES\nOFF" : "GUITAR NOTES\nON", GN_POPUP_MS);
 }
 
 UI_SMALL SCREEN static void sy_mode_off(sy_t *s) {
@@ -1505,22 +1522,24 @@ UI_SMALL SCREEN static void sy_stock_key(s32 key, s32 val) {
     KEY_UP_FN(e);
 }
 
+/* SY test 31: an FX screen up but not frozen (the one an FX button shows for 2 s) no longer lets REMAIN's press on to
+ * the page, which stepped the preview bus (REMAIN + FX on a lit effect, on the unit); a frozen one is closed and REMAIN
+ * stays held, so the FX button after it opens it frozen again with the effect left on, as on the other pages. Any key
+ * while REMAIN is held makes it no tap (REMAIN + EXT SOURCE, the input's bus, stepped the preview bus too). */
 UI_SMALL SCREEN static u32 sy_remain(sy_t *s, s32 type, s32 what, s32 val) {
     if (what != KEY_REMAIN) {
-        if (type == EV_KEY && s->rem_down && (u32)(what - KEY_FX1) <= (u32)(KEY_MFX - KEY_FX1)) s->rem_fx = 1;
+        if (type == EV_KEY && s->rem_down) s->rem_fx = 1;
         return 0;
     }
     if (type == EV_KEY && PAGE == SG_PAGE) {
-        if (sy_fx_screen()) {
-            if (!FX_FROZEN) return 0;
-            sy_take(s, KEY_REMAIN);                     /* its release taken too */
+        u8 closed = 0;
+        if (FX_FROZEN && sy_fx_screen()) {
             FX_FROZEN = 0;
             sy_stock_key(KEY_EXIT, 0);
-            s->rem_holds++;
-            return 1;
+            closed = 1;
         }
         s->rem_down = 1;
-        s->rem_fx = 0;
+        s->rem_fx = closed;                             /* a close is no tap: the preview bus stays */
         sy_key_bit(KEY_REMAIN, 1);
         return 1;
     }
@@ -1614,6 +1633,16 @@ EXPORT SCREEN s32 sy_event(const s16 *ev) {
         (PAGE == MAIN_PAGE || PAGE == SG_PAGE || PAGE == LOOPER_PAGE)) {   /* test 10: the looper too */
         sy_take(s, what);
         sy_mode_on(s);
+        return 1;
+    }
+    if ((type == EV_KEY || type == EV_PAD) && what == KEY_SUB_PAD && key_held(KEY_EXT_SOURCE) && PAGE == SG_PAGE &&
+        !sy.mode) {                                     /* SY test 31: the guitar's notes on the page off / on */
+        if (type == EV_PAD) {
+            s->pads_taken |= 1u << 16;                  /* the pad hit too (no preview), its release with it */
+        } else {
+            sy_take(s, what);
+            gsyn_toggle(s);
+        }
         return 1;
     }
     if (sy_shown()) {
@@ -1866,8 +1895,10 @@ EXPORT UI_SMALL void syn_ui(void) {
     tt.drum = drum;                                     /* the tracker plays only plucks in drum mode */
     u32 w = tt.syn, seq = w >> 16;
     s32 note = (s32)(w & 0xFFu) - 1, vel = (s32)((w >> 8) & 0x7Fu);
-    if (PAGE != SG_PAGE || sy.mode) {                  /* SY test 5: the SY screen plays the SY synth instead */
-        if (PAGE == SG_PAGE && s->sounding >= 0) {     /* the screen opened on the page: let our note go */
+    if (PAGE != SG_PAGE || sy.mode || s->off) {        /* SY test 5: the SY screen plays the SY synth instead; SY */
+                                                       /*   test 31: the guitar's notes switched off there */
+        if (PAGE == SG_PAGE && s->sounding >= 0) {     /* the screen opened on the page (or the notes went off): let
+                                                          our note go */
             SG_MIDI_EVENT(2u, s->sounding, 0, 1);
             s->offs++;
         }
