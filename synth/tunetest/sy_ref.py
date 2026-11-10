@@ -464,6 +464,8 @@ class Engine:
         self.dyns = np.zeros(n, np.int64)                # test 6: DYNAMICS (0 as designed, 1..101)
         self.trk = [0, 0, 0]                             # SY test 15: the TRACK page: WAIT, SENS, GUARD (every tone);
                                                          # test 18: LAW, SENS, GUARD; SY test 24: GLITCH, SENS, (none)
+        self.shape = np.zeros((n, 3), np.int64)          # SY test 32: SHAPE (ATTACK, RELEASE, GLIDE ms; 0 as designed)
+        self.filt = np.zeros((n, 2), np.int64)           # SY test 32: FILTER (ENV, RESO knob offsets; 0 as designed)
         self._host = None                                # SY test 11: the voices (sy_voices.Host)
         self.ykn = (0, 0, 255, 0, 0)                     # SY test 19: the SG tracker's word (ynote, yflag, ysince, ysyn;
                                                          # test 20: yseq, its note-ons' count)
@@ -668,8 +670,10 @@ class Engine:
         h = self.host()
         # SY test 24: TRACK is GLITCH (0..100) and SENS (0..100); LAW SY 1:1 and GUARD PICK fixed (GLITCH undoes them)
         h.set_knobs(*[int(v) for v in self.knobs[t]], int(self.octs[t]), int(self.suss[t]), int(self.dyns[t]),
-                    min(int(self.trk[0]), 100), min(int(self.trk[1]), 100), 2, min(self.blocks - self.last_pick, 255),
-                    1, *self.ykn, voices=int(self.trk[2]) if int(self.trk[2]) <= 6 else 0)   # SY test 24: VOICES
+                    min(int(self.trk[0]), 100), 0, 2, min(self.blocks - self.last_pick, 255),   # SY test 32: SENS is
+                    1, *self.ykn, voices=int(self.trk[2]) if int(self.trk[2]) <= 6 else 0,     # the tracker's floors
+                    env=int(self.filt[t][0]), res=int(self.filt[t][1]), atk=int(self.shape[t][0]),
+                    rel=int(self.shape[t][1]), gli=int(self.shape[t][2]))   # SY test 32: FILTER and SHAPE
         mgt = F32(0) if stopping or tone_req != self.tone else F32(1)
         res, mg = h.block(t, tg, per, e, self.struck, mg=float(self.mg), mgt=float(mgt), fade=float(G['FADE']),
                           scale=float(G['OUT_SCALE']))   # SY test 18: the strikes (tests 12-17: nper, unused)

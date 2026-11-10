@@ -84,6 +84,8 @@ typedef struct {
     u32 grace, grace_at;                    /* rec_mix after the release, from when */
     u32 holds, route_sends, route_held, route_last;   /* hold starts; ROUTING DT1s seen, sent as ExtIn; the last value */
     u32 rec_blocks, rec_adds, rec_other;    /* blocks given pair 1, given the synth, left as the feed took another pair */
+    volatile s32 sens_db;                   /* SY test 32 (UI task): SENS, dB the tracker's floors go down (-12..+12,
+                                               0 as tests 1-31; the TRACK page, every UI tick) */
 } tt_t;
 
 /* The tracker's memory, in the module. The UI clears it before a start. */
@@ -236,6 +238,10 @@ typedef struct {
        is a new note), SENS (0..50: a new note's least level, % of the loudest band), GUARD (0/1), 0; 0 each is test
        11's tracking */
     volatile u8 trk[4];
+    /* SY test 32, UI task: the SHAPE page per tone (ATTACK, RELEASE, GLIDE in ms; 0 as designed, GLIDE 0xFFFF off)
+       and the FILTER page (ENV, RESO as knob position - 64; a tone whose own setting is ENV or RESO keeps it in knob) */
+    volatile u16 shape[SY_NTONES][3];
+    volatile s8 filt[SY_NTONES][2];
 } sy_t;
 
 /* The engine's memory, in the module. The UI clears it before a start. Test 2: no stack of its own: the engine runs

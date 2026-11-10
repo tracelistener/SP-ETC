@@ -255,7 +255,17 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define FILE_WRITE ((s32 (*)(s32, const void *, s32))0x800DD9B9u)
 #define FILE_CLOSE ((s32 (*)(s32))0x800DEBD9u)
 #define SY_FILE_MAGIC 0x4E545953u                              /* "SYTN" */
-#define SY_FILE_VERSION 4u                                     /* SY test 11: the 20 tones */
+#define SY_FILE_VERSION 5u                                     /* SY test 11: the 20 tones; SY test 32: 5 */
+/* Version 5 (SY test 32): version 4's 132 bytes (SENS's byte now 0 = 50, else 1..101; a tone whose own setting is
+ * ATTACK or GLIDE keeps it on the SHAPE page), the SHAPE page (20 x ATTACK, RELEASE, GLIDE: u16 ms, little-endian)
+ * and the FILTER page (20 x ENV, RESO: knob position - 64), FNV-1a of the first 292. A version 4 file is read with
+ * SENS 50, those tones' own setting as designed and SHAPE / FILTER as designed. */
+#define SY_LAST_PAGE 4u                                        /* SY test 32: main, OTHERS, TRACK, SHAPE, FILTER */
+#define SY_GLIDE_OFF 0xFFFFu                                   /* SY test 32: a SHAPE GLIDE of none */
+#define SY_FILE5_BYTES 296
+#define SY_FILE5_SUM 292
+#define SY_FILE_SHAPE 132
+#define SY_FILE_FILT (SY_FILE_SHAPE + 6 * SY_NTONES)
 /* Version 4: magic, version, tone, muted, 20; 60 knob positions, 20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, SY test
  * 15's WAIT, SENS and GUARD (zero in tests 11-14's files: test 11's tracking; test 18: LAW in WAIT's byte, marked
  * 0x80; SY test 24: GLITCH there, unmarked, and VOICES in GUARD's byte, marked 0x40); FNV-1a of the first 132. Version 3 (tests 6-10, 104 bytes, the sum of the first 100 at 100: the old 15 tones): only
@@ -1125,6 +1135,11 @@ EXPORT UI_SMALL void tune_ui(void) {
         t->routing = (u32)SYS_GET(SYSPRM, ROUTING, -1);
     }
     route_hold(t, now);
+    {   /* SY test 32: SENS (the TRACK page's, every tone, the SG page's notes too; 0 = 50): the tracker's floors go down
+         * (SENS - 50) x 12 / 50 dB, rounded: -12..+12 */
+        const s32 v = sy.trk[1] ? (s32)sy.trk[1] - 1 : 50, d = (v - 50) * 12;
+        t->sens_db = (d + (d >= 0 ? 25 : -25)) / 50;
+    }
     u32 want = meter.shown || (PAGE == SG_PAGE && !sy.mode && !gsyn.off && syn_live(t)) ||   /* test 5: not in the SY
                                                                                                screen; SY test 31 */
                (sy.req && sy.state == SY_RUN && sy_block.mono);                /* SY test 19 */
@@ -1209,7 +1224,7 @@ EXPORT UI_SMALL void sy_ui(void) {
 }
 
 EXPORT const char sy_path[] = "B:/_sy_tones.bin";
-EXPORT u8 sy_file[SY_FILE_BYTES] __attribute__((aligned(4)));
+EXPORT u8 sy_file[SY_FILE5_BYTES] __attribute__((aligned(4)));   /* SY test 32: version 5's */
 
 UI_SMALL static u32 sy_fnv(const u8 *p, u32 n) {
     u32 h = FNV;
@@ -1232,7 +1247,7 @@ UI_SMALL static void sy_ready(void) {
     s->loaded = 1;
     s32 fd = FILE_OPEN(sy_path, 0);
     if (fd < 0) return;
-    s32 n = FILE_READ(fd, sy_file, SY_FILE_BYTES);
+    s32 n = FILE_READ(fd, sy_file, SY_FILE5_BYTES);
     FILE_CLOSE(fd);
     if (n == SY_FILE3_BYTES && get32(sy_file) == SY_FILE_MAGIC && sy_file[4] == 3u &&
         get32(sy_file + SY_FILE3_SUM) == sy_fnv(sy_file, SY_FILE3_SUM)) {   /* SY test 11: tests 6-10's file */
@@ -1243,8 +1258,10 @@ UI_SMALL static void sy_ready(void) {
         s->loads++;
         return;
     }
-    if (n != SY_FILE_BYTES || get32(sy_file) != SY_FILE_MAGIC || sy_file[4] != SY_FILE_VERSION ||
-        sy_file[7] != SY_TONE_COUNT || get32(sy_file + SY_FILE_SUM) != sy_fnv(sy_file, SY_FILE_SUM)) {
+    const u32 v5 = n == SY_FILE5_BYTES && sy_file[4] == SY_FILE_VERSION &&   /* SY test 32: version 5, or 4 */
+                   get32(sy_file + SY_FILE5_SUM) == sy_fnv(sy_file, SY_FILE5_SUM);
+    if (get32(sy_file) != SY_FILE_MAGIC || sy_file[7] != SY_TONE_COUNT ||
+        (!v5 && (n != SY_FILE_BYTES || sy_file[4] != 4u || get32(sy_file + SY_FILE_SUM) != sy_fnv(sy_file, SY_FILE_SUM)))) {
         s->bad_files++;
         return;
     }
@@ -1265,10 +1282,24 @@ UI_SMALL static void sy_ready(void) {
         s->trk[0] = (u8)(w <= SY_GLITCH_MAX ? w : 0u);  /* SY test 24: GLITCH in LAW's byte (a test 18-23 file's LAW */
                                                         /*   is 0 or marked 0x81 / 0x82: GLITCH 0, clean); LAW and */
                                                         /*   GUARD fixed (SY 1:1, PICK) */
-        s->trk[1] = (u8)(se <= SY_SENS_MAX ? se : 0u);
+        s->trk[1] = (u8)(v5 && se <= SY_SENS_MAX + 1u ? se : 0u);   /* SY test 32: SENS 0 = 50, else 1..101 (a */
+                                                                       /*   version 4 file's gate: 50) */
         u32 vb = sy_file[SY_FILE_BUS + 3u];             /* SY test 24: VOICES in GUARD's byte, marked (a test 16-23 */
         s->trk[2] = (u8)((vb & ~7u) == SY_VOICES_MARK && (vb & 7u) <= SY_VOICES_MAX ? vb & 7u : 0u);   /* GUARD: 0) */
     }
+    for (u32 t = 0; t < SY_TONE_COUNT; t++) {           /* SY test 32: the SHAPE and FILTER pages */
+        if (!v5) {
+            if (SYV_P2KIND[t] == SYV_PK_ATTACK || SYV_P2KIND[t] == SYV_PK_GLIDE) s->knob[t][1] = 0;
+            continue;
+        }
+        for (u32 k = 0; k < 3u; k++) {
+            const u8 *q = sy_file + SY_FILE_SHAPE + 6u * t + 2u * k;
+            s->shape[t][k] = (u16)(q[0] | q[1] << 8);
+        }
+        s->filt[t][0] = (s8)sy_file[SY_FILE_FILT + 2u * t];
+        s->filt[t][1] = (s8)sy_file[SY_FILE_FILT + 2u * t + 1u];
+    }
+    if (!v5) s->dirty = 1;                              /* written as version 5 at the next save */
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
     s->muted = sy_file[6] & 1u;
     gsyn.off = (sy_file[6] >> 1) & 1u;                  /* SY test 31: the guitar's notes off on the SG page */
@@ -1308,14 +1339,22 @@ UI_SMALL static void sy_save(void) {
     sy_file[SY_FILE_BUS + 1u] = s->trk[0];              /* SY test 24: GLITCH in LAW's byte, unmarked (LAW OFF to */
     sy_file[SY_FILE_BUS + 2u] = s->trk[1];              /*   tests 18-23); SENS; VOICES in GUARD's byte, marked */
     sy_file[SY_FILE_BUS + 3u] = (u8)(SY_VOICES_MARK | s->trk[2]);   /*   (GUARD OFF to tests 16-23) */
-    for (u32 i = SY_FILE_BUS + 4u; i < SY_FILE_SUM; i++) sy_file[i] = 0;
-    put32(sy_file + SY_FILE_SUM, sy_fnv(sy_file, SY_FILE_SUM));
+    for (u32 t = 0; t < SY_TONE_COUNT; t++) {           /* SY test 32: version 5's SHAPE and FILTER pages */
+        for (u32 k = 0; k < 3u; k++) {
+            u8 *q = sy_file + SY_FILE_SHAPE + 6u * t + 2u * k;
+            q[0] = (u8)s->shape[t][k];
+            q[1] = (u8)(s->shape[t][k] >> 8);
+        }
+        sy_file[SY_FILE_FILT + 2u * t] = (u8)s->filt[t][0];
+        sy_file[SY_FILE_FILT + 2u * t + 1u] = (u8)s->filt[t][1];
+    }
+    put32(sy_file + SY_FILE5_SUM, sy_fnv(sy_file, SY_FILE5_SUM));
     s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
     if (fd >= 0) {
-        n = FILE_WRITE(fd, sy_file, SY_FILE_BYTES);
+        n = FILE_WRITE(fd, sy_file, SY_FILE5_BYTES);
         FILE_CLOSE(fd);
     }
-    if (n == SY_FILE_BYTES) {
+    if (n == SY_FILE5_BYTES) {
         s->dirty = 0;
         s->saves++;
     } else {
@@ -1442,8 +1481,28 @@ UI_SMALL SCREEN static u32 sy_pad_sound(sy_t *s, u32 pad) {
  * turned shows (and edits) OTHERS, or the main page from OTHERS. SY test 17: only once a knob has turned (test 15-16
  * showed it from SHIFT's press, so a tap from OTHERS flashed the main page's names before TRACK). */
 UI_SMALL SCREEN static u32 sy_page(const sy_t *s) {
-    u32 p = s->shift_page <= 2u ? s->shift_page : 0u;
+    u32 p = s->shift_page <= SY_LAST_PAGE ? s->shift_page : 0u;   /* SY test 32: 3 SHAPE, 4 FILTER */
     return s->shift_down && (s->shift_used & 2u) ? (p == 1u ? 0u : 1u) : p;
+}
+
+/* SY test 32: the SHAPE page's values a knob sweeps through, in ms (round numbers; GLIDE's first is OFF). */
+static const u16 SY_ATK_STEPS[] = {1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250,
+                                   300, 400, 500, 600, 800, 1000, 1200, 1500, 2000};
+static const u16 SY_REL_STEPS[] = {10, 15, 20, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250, 300, 400, 500, 600, 800,
+                                   1000, 1200, 1500, 2000, 2500, 3000, 4000, 5000, 6000, 8000};
+static const u16 SY_GLI_STEPS[] = {SY_GLIDE_OFF, 5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250, 300, 400,
+                                   500, 600, 800, 1000};
+
+/* SY test 32: SHAPE value k (0 ATTACK, 1 RELEASE, 2 GLIDE) of the tone from a knob's position (0..127). */
+UI_SMALL static void sy_shape_set(sy_t *s, u32 tone, u32 k, s32 pos) {
+    const u16 *st = k == 0u ? SY_ATK_STEPS : k == 1u ? SY_REL_STEPS : SY_GLI_STEPS;
+    const u32 n = k == 0u ? sizeof(SY_ATK_STEPS) / 2u : k == 1u ? sizeof(SY_REL_STEPS) / 2u : sizeof(SY_GLI_STEPS) / 2u;
+    s->shape[tone][k] = st[((u32)pos * n) >> 7];
+}
+
+/* SY test 32: where a FILTER value lives: a tone whose own setting is ENV (RESO) keeps it there, the main page's CTRL 1. */
+UI_SMALL static volatile s8 *sy_filt_at(sy_t *s, u32 tone, u32 k) {
+    return SYV_P2KIND[tone] == (k ? SYV_PK_RESO : SYV_PK_ENV) ? &s->knob[tone][1] : &s->filt[tone][k];
 }
 
 /* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): test 6: the tone's own setting, TONE and LEVEL (knob -
@@ -1451,13 +1510,19 @@ UI_SMALL SCREEN static u32 sy_page(const sy_t *s) {
  * -2..+2), SUSTAIN (0..100) and DYNAMICS (0..100). SY test 15, the TRACK page (every tone): WAIT (0..12 blocks), SENS
  * (0..50 %), GUARD (the upper half on). SY test 18: LAW (OFF, SY 1:1, SY 2:1 in thirds) in WAIT's place. SY test 24:
  * GLITCH (0..100), SENS (0..100) and VOICES (sevenths: the tone's, 1, 2..6); LAW and GUARD fixed. */
-UI_SMALL SCREEN static void sy_screen_knob(sy_t *s, u32 k, s32 pos) {
+UI_SMALL static void sy_screen_knob(sy_t *s, u32 k, s32 pos) {
     pos = pos < 0 ? 0 : pos > 127 ? 127 : pos;
     if (s->shift_down) s->shift_used |= 2u;            /* SY test 17: before the page (a held SHIFT's turn peeks) */
-    u32 tone = sy_tone(s), page = sy_page(s);
+    u32 tone = sy_tone(s), page = sy_page(s), kind = SYV_P2KIND[tone];
     s->turns++;
-    if (page == 2u)
-        s->trk[k] = (u8)(k == 2u ? (pos * 7) >> 7 : (pos * 101) >> 7);   /* SY test 24: GLITCH, SENS 0..100; VOICES */
+    if (page == 2u)                                     /* SY test 24: GLITCH 0..100; VOICES; SY test 32: SENS */
+        s->trk[k] = (u8)(k == 2u ? (pos * 7) >> 7 : (u32)(k == 1u) + (((u32)pos * 101u) >> 7));   /* 1..101 */
+    else if (page == 3u)                                /* SY test 32: SHAPE */
+        sy_shape_set(s, tone, k, pos);
+    else if (page == 4u) {                              /* SY test 32: FILTER (ENV, RESO; CTRL 3 nothing) */
+        if (k < 2u) *sy_filt_at(s, tone, k) = (s8)(pos - 64);
+    } else if (!page && !k && (kind == SYV_PK_ATTACK || kind == SYV_PK_GLIDE))
+        sy_shape_set(s, tone, kind == SYV_PK_ATTACK ? 0u : 2u, pos);   /* SY test 32: the SHAPE page's value */
     else if (!page)
         s->knob[tone][k == 0 ? 1 : k == 1u ? 0 : 2] = (s8)(pos - 64);
     else if (k == 0)
@@ -1611,7 +1676,8 @@ UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val)
         return 0;
     }
     if (type == EV_KEY_UP && what == KEY_SHIFT && s->shift_down) {
-        if (!s->shift_used) s->shift_page = (u8)(s->shift_page >= 2u ? 0u : s->shift_page + 1u);   /* test 15: 3 */
+        if (!s->shift_used) s->shift_page = (u8)(s->shift_page >= SY_LAST_PAGE ? 0u : s->shift_page + 1u);   /* test */
+                                                                                    /* 15: 3; SY test 32: 5 */
         s->shift_down = 0;
         s->rev++;
     }
@@ -1661,9 +1727,21 @@ UI_SMALL SCREEN static char *put_signed(char *p, s32 v) {
     return put_u(p, (u32)(v < 0 ? -v : v));
 }
 
-static const char *const SY_LABELS[9] = {0, "TONE", "LEVEL", "OCTAVE", "SUSTAIN", "DYNAMICS", "GLITCH", "SENS",
-                                        "VOICES"};   /* SY test 18: LAW where WAIT MS was; SY test 24: GLITCH, SENS, */
-                                                     /*   VOICES */
+static const char *const SY_LABELS[15] = {0, "TONE", "LEVEL", "OCTAVE", "SUSTAIN", "DYNAMICS", "GLITCH", "SENS",
+                                         "VOICES", "ATTACK", "RELEASE", "GLIDE", "ENV", "RESO", ""};   /* SY test 18: */
+                                         /* LAW where WAIT MS was; 24: GLITCH, SENS, VOICES; 32: SHAPE, FILTER */
+
+/* SY test 32: a SHAPE value: "8ms", "350ms", "1.2s", "8s", "OFF". */
+UI_SMALL static char *put_ms(char *p, u32 ms) {
+    if (ms == SY_GLIDE_OFF) return put_str(p, "OFF");
+    if (ms < 1000u) return put_str(put_u(p, ms), "ms");
+    p = put_u(p, ms / 1000u);
+    if (ms % 1000u) {
+        *p++ = '.';
+        p = put_u(p, (ms % 1000u) / 100u);
+    }
+    return put_str(p, "s");
+}
 
 /* Test 6: a knob's offset from 64 (-64..63) as -50..+50, and a position (0..127) as 0..100 with 64 at 50. */
 UI_SMALL SCREEN static s32 sy_pm50(s32 d) { return d >= 0 ? (d * 50 + 31) / 63 : -((-d * 50 + 32) / 64); }
@@ -1673,12 +1751,24 @@ UI_SMALL SCREEN static u32 sy_pct(u32 pos) { return pos <= 64u ? (pos * 50u + 32
  * designed); the SHIFT page: OCTAVE (-2..+2), SUSTAIN and DYNAMICS (0..100); SY test 15, TRACK: WAIT in ms (0..16),
  * SENS (0..50), GUARD (OFF / ON); SY test 18: LAW (OFF / 1:1 / 2:1) in WAIT's place; SY test 24: GLITCH, SENS (0..100)
  * and VOICES (AUTO: the tone's own, MONO, 2..6). */
-EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
-    const sy_t *s = &sy;
-    u32 tone = sy_tone(s), i = col + 3u * sy_page(s);
+EXPORT UI_SMALL void sy_col_text(u32 col, char *label, char *value) {
+    sy_t *s = &sy;
+    u32 tone = sy_tone(s), i = col + 3u * sy_page(s), kind = SYV_P2KIND[tone];
     *put_str(label, i == 0u ? SYV_P2NAME[tone] : SY_LABELS[i]) = 0;
     char *p = value;
-    if (i == 0 && SYV_P2KIND[tone] == SYV_P_ENVSEL) {   /* SY test 11: the ENV preset itself, by name */
+    if (i == 0 && (kind == SYV_PK_ATTACK || kind == SYV_PK_GLIDE))   /* SY test 32: the SHAPE page's value */
+        i = kind == SYV_PK_ATTACK ? 9u : 11u;
+    if (i >= 9u && i <= 11u) {                          /* SY test 32: SHAPE, in ms (as designed until turned) */
+        u32 k = i - 9u, ms = s->shape[tone][k];
+        if (!ms)
+            ms = k == 0u ? SYV_ATK_MS[tone] : k == 1u ? SYV_REL_MS[tone] : SYV_GLI_MS[tone] ? SYV_GLI_MS[tone]
+                                                                                           : SY_GLIDE_OFF;
+        p = ms ? put_ms(p, ms) : put_str(p, "AUTO");   /* a Sound Generator tone's: its ENV preset's */
+    } else if (i == 12u || i == 13u) {                  /* SY test 32: FILTER (no filter, or the SG's: nothing) */
+        p = SYV_FLT[tone] == 0u || SYV_FLT[tone] == 6u ? put_str(p, "--")
+                                                       : put_signed(p, sy_pm50(*sy_filt_at(s, tone, i - 12u)));
+    } else if (i == 14u) {
+    } else if (i == 0 && kind == SYV_P_ENVSEL) {        /* SY test 11: the ENV preset itself, by name */
         s32 k = s->knob[tone][1], z = ((64 + k) * 10) >> 7;
         u32 pre = k ? (u32)(z < 0 ? 0 : z > 9 ? 9 : z) : SYV_PRESET_OF[tone];
         p = put_str(p, SYV_PRESET_NAME[pre]);
@@ -1697,7 +1787,7 @@ EXPORT UI_SMALL SCREEN void sy_col_text(u32 col, char *label, char *value) {
     else if (i == 6)
         p = put_u(p, s->trk[0]);                       /* SY test 24: GLITCH */
     else if (i == 7)
-        p = put_u(p, s->trk[1]);
+        p = put_u(p, s->trk[1] ? s->trk[1] - 1u : 50u);   /* SY test 32: SENS, 50 as tests 1-31 */
     else if (s->trk[2] >= 2u)                          /* SY test 24: VOICES */
         p = put_u(p, s->trk[2]);
     else

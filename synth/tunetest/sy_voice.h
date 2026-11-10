@@ -59,6 +59,10 @@ typedef struct {
     syv_u8 yseq;                     /* SY test 20: its note-ons' count (low byte): a pluck's lock on the same note too */
     syv_u8 voices;                   /* SY test 24, TRACK's CTRL 3: 0 the tone's own, 1 single notes (a poly tone on
                                         the tracker's notes, each pick attacking), 2..6 at most that many voices */
+    syv_s8 env, res;                 /* SY test 32, the FILTER page: ENV and RESO as knob position - 64 (0 as designed;
+                                        a tone whose own setting is ENV or RESO keeps it in p2) */
+    unsigned short atk, rel, gli;    /* SY test 32, the SHAPE page: ATTACK, RELEASE, GLIDE in ms (0 as designed; GLIDE
+                                        0xFFFF off) */
 } syv_knobs_t;
 
 /* P2 kinds (CTRL 1): what it moves */
@@ -131,6 +135,12 @@ typedef struct {
     syv_u32 cost;                    /* voices rendered in the last block */
     syv_patch_t eff;                 /* the tone with its settings, this block */
     float pre[14];                   /* its ENV preset with SUSTAIN (flt 6) */
+    float f_duck[SYV_NV], f_g[SYV_NV];   /* SY test 32, CLEAN chords (f_post): each voice's level factor this block;
+                                            the factor render() reached */
+    syv_s8 f_band[SYV_NV];           /*   each voice's band last block (-1: none) */
+    syv_u8 f_keep[SYV_NV];           /*   not to be faded (to its note's end) */
+    syv_u8 f_on, f_pad;              /*   f_post ran this block */
+    syv_u8 f_nt[SYV_BANDS];          /*   the notes this block: bands sounding, voices' pitches */
     /* the block's work (here, not on the tracker's 2 KB stack) */
     float acc[SYV_FRAMES], buf[SYV_FRAMES], rc[SYV_BANDS];
     float gab[SYV_FRAMES], gfb[SYV_FRAMES];   /* SY test 17: the pick's envelopes over the block */

@@ -315,7 +315,13 @@ u32 sy_fp_step(sy_t *s) {
     kn.dyn = s->dynk[t];
     kn.glitch = s->trk[0] <= 100u ? s->trk[0] : 100u;   /* SY test 15: the TRACK page (every tone); test 24: GLITCH */
     kn.law = 1u;                                        /*   and SENS, LAW SY 1:1 and GUARD PICK fixed (GLITCH */
-    kn.sens = s->trk[1];                                /*   undoes them towards test 11's voices) */
+    kn.sens = 0u;                                       /*   undoes them towards test 11's voices); SY test 32: SENS */
+                                                        /*   is the tracker's floors (tt.sens_db), the gate off */
+    kn.env = s->filt[t][0];                             /* SY test 32: the FILTER and SHAPE pages */
+    kn.res = s->filt[t][1];
+    kn.atk = s->shape[t][0];
+    kn.rel = s->shape[t][1];
+    kn.gli = s->shape[t][2];
     kn.guard = 2u;
     const u32 vo = s->trk[2] <= 6u ? s->trk[2] : 0u;    /* SY test 24: VOICES (CTRL 3): 1 single notes, 2..6 a cap */
     const u32 mono = vo == 1u ? 1u : vo >= 2u ? 0u : SYV_TONE[t].mono;   /*   (syv_block's knobs() the same) */

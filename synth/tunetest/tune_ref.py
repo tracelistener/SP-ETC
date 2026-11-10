@@ -17,6 +17,9 @@ PEAKS = 32
 EVERY = 2                                          # SY test 24: an analysis every 2 blocks, on the newest samples
 LEVEL_MIN = 0.0019952622
 P_MIN, P_RATIO, P_FROM, P_TO = 0.0039810717, 2.0, 3, 18   # a pluck: -48 dBFS, twice the peaks 3..18 blocks back
+# SY test 32: SENS moves the floors (LEVEL_MIN, P_MIN, HF_MIN) by sens_db, -12..+12 dB (up: lower floors, more
+# sensitive; 0 as tests 1-31): x FLOOR_G[12 + sens_db] = 10^(-sens_db / 20), float32 as tune_fp.c has them
+FLOOR_G = tuple(float(np.float32(10 ** (-(i - 12) / 20))) for i in range(25))
 THRESHOLD, APER_MAX = 0.2, 0.35
 REFRACTORY, AGREE, RELEASE = 24, 3, 7             # SY test 24: 2n - 1 analyses for test 23's n (2, 4)
 REPICK, MOVE_AGREE, MOVE_CENTS = 1.2, 5, 30       # the synth: a pluck on its own note; a move without a pluck
@@ -130,8 +133,9 @@ def period_blocks(freq):
 
 
 class Tracker:
-    def __init__(self, drum=False, click=True, hf_ratio=HF_RATIO, hf_min=HF_MIN, repick=REPICK, test6=True):
+    def __init__(self, drum=False, click=True, hf_ratio=HF_RATIO, hf_min=HF_MIN, repick=REPICK, test6=True, sens_db=0):
         self.drum = drum            # tt.drum: the kits' drum mode, only plucks play notes
+        self.sens_db = sens_db      # SY test 32: tt.sens_db, SENS: the floors' dB down (-12..+12)
         self.click, self.hf_ratio, self.hf_min, self.repick = click, hf_ratio, hf_min, repick
         self.test6 = test6          # False: test 5's rules (for the checks' before/after)
         self.ring = np.zeros(RING)
@@ -168,6 +172,10 @@ class Tracker:
         self.stops = self.drops = self.sub_locks = self.blocked = 0
         self.old_at = -1000                                     # SY test 27: the synth's note last read steady
         self.move_quick = 0                                     # the last note-on a quick move (a fret change)
+
+    def floor_g(self):
+        d = self.sens_db
+        return FLOOR_G[12 + d] if -12 <= d <= 12 else 1.0
 
     def recent_peak(self, blk):
         return max(self.peaks[(blk - k) & (PEAKS - 1)] for k in range(4))
@@ -235,14 +243,16 @@ class Tracker:
             loud = pk >= JUMP_ENV * env_prev or not self.test6
             quiet = (not loud and ref <= QUIET_REF * env_prev and pk >= QUIET_RATIO * ref and
                      pk >= QUIET_ENV * env_prev)            # SY test 30: a pick from quiet, softer than the note before
-            jump = pk >= P_MIN and pk >= P_RATIO * ref and (loud or quiet)
-            click = self.click and e >= self.hf_min and e >= self.hf_ratio * href and pk >= P_MIN
+            g = self.floor_g()                              # SY test 32: SENS
+            pmin, hfmin = P_MIN * g, self.hf_min * g * g
+            jump = pk >= pmin and pk >= P_RATIO * ref and (loud or quiet)
+            click = self.click and e >= hfmin and e >= self.hf_ratio * href and pk >= pmin
             soft = False
             if self.click and self.syn_note >= 0:           # SY test 25: the soft click, while a note plays
                 m6 = sum(self.hf6[(blk - k) & (PEAKS - 1)] for k in range(HF6_FROM, HF6_TO + 1))
                 pk2 = max(pk, self.peaks[(blk - 1) & (PEAKS - 1)])
                 soft = ((e6 + self.hf6[(blk - 1) & (PEAKS - 1)]) * 0.5 >= HF6_RATIO * m6 * (1 / 16) and
-                        pk2 >= P_MIN and pk2 >= SOFT_LEVEL * ref)
+                        pk2 >= pmin and pk2 >= SOFT_LEVEL * ref)
             if (jump or click or soft) and blk - self.last_onset >= REFRACTORY:
                 self.clicks += not jump
                 self.softs += not (jump or click)
@@ -333,7 +343,9 @@ class Tracker:
         x, d = self.span, self.d6
         aper, clean, freq = self.yin(d, x)
         power = float(np.dot(x[:W12], x[:W12])) / W12
-        voiced = power >= LEVEL_MIN * LEVEL_MIN and aper < APER_MAX
+        lm = LEVEL_MIN * self.floor_g()                     # SY test 32: SENS
+        lmin2 = lm * lm
+        voiced = power >= lmin2 and aper < APER_MAX
         age = blk - self.onset_blk
         pre = age < 0                                       # its samples were taken before the last pluck (SY test 24:
                                                             # none, the span is this block's; test 23: age < 3)
@@ -348,7 +360,7 @@ class Tracker:
             tmax = (age + 1) * 8 - W6                       # lags whose samples all came after the pluck (test 24)
             if e_new >= SUB_MIN * e_all and e_new > 0 and mn >= -SUB_NEG * mabs and tmax >= T6MIN + 2:
                 a2, c2, f2 = self.yin(np.maximum(dnew, 0.0), x, self.base_x, min(tmax, T6MAX), THR_SUB)
-                v2 = power >= LEVEL_MIN * LEVEL_MIN and a2 < APER_MAX
+                v2 = power >= lmin2 and a2 < APER_MAX
                 ratio = f2 / freq
                 k = int(ratio + 0.5)
                 common = 2 <= k <= 6 and abs(ratio / k - 1) < COMMON_TOL
@@ -419,7 +431,7 @@ class Tracker:
                 self.murky += 1                             # strings ringing together: counts as nothing heard
             self.agree = 0
             self.prev_note = -1
-            if not (self.sub_lock and power >= LEVEL_MIN * LEVEL_MIN):   # test 6: a chord's note holds while heard
+            if not (self.sub_lock and power >= lmin2):     # test 6: a chord's note holds while heard
                 self.unvoiced += 1
             if self.unvoiced >= RELEASE:
                 r['note'] = -1

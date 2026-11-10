@@ -1458,6 +1458,65 @@ bus instead of keeping the FX screen (on an unlit one it worked). The guitar syn
   not (the main screen, the guitar synth screen), off on the page (the note let go, the hold given back, no tracker),
   the file's bit. All 413 pass on `release/sy-synth-test31` (APP1 `bb677bc8…5120`, 3,226,272 bytes).
 
+## SY synth test 32 (sy-synth-test32): SENS, the low-note fix, SHAPE and FILTER, cleaner chords
+
+The user on test 31: "better but still issues with synth but almost there"; asked for improvement ideas run through
+the model guitar, chose three (a pick sensitivity, more sound controls, cleaner chords) with knobs a guitarist
+understands ("guard" was not), then: ENV and RESO are good labels, no worse latency, test with the model synthetic
+guitar, not their recordings. The prototype tools are in the session scratchpad `pick/` (model.py: the model guitar
+set; ptrk.py, floors.py, timing.py, blips.py, render.py, demos32m.py) and `chords/` (a forked agent's).
+
+- **SENS** (TRACK, CTRL 2; the byte 0 = 50, else 1..101): `tt.sens_db` = (SENS - 50) x 12 / 50 dB, rounded, every UI
+  tick (`tune_ui`). `tune_fp.c` scales the floors `LEVEL_MIN`, `P_MIN` and `HF_MIN` (x g, g, g^2) by
+  `FLOOR_G[12 + sens_db]` = 10^(-d / 20) in float32; `tune_ref.py` the same (`Tracker(sens_db=)`). At 50 the tracker is
+  test 31's. The voices' old SENS gate is off (`kn.sens` 0). Why: on the model guitar a phrase picked about 40 dB
+  quieter (picks near -50 dBFS, under the -48 dBFS pluck floor) played 0 of 30 separate notes; 12 dB lower floors played
+  30 of 30 (1 stray; 18 dB: 8 strays), note to note 42 of 46, each on pitch by 40 ms. The band analysis already hears
+  to -60 dB, so only the tracker's floors move. A pick detector from a filter bank's spectral flux was tried and dropped:
+  in the tracker it added more stray notes than picks.
+- **The low-note fix** (`bands_mono`): in note-to-note picking (the model's 16th notes, even picks) the first readings
+  after a pick read the old and new strings together as a low note (E2), murky; read twice, test 30's `Y_EARLY` rule
+  started the note there for 5-20 ms. Such a reading (murky, 5+ semitones under the note, its band silent) now attacks
+  at the same moment on the note sounding (`yact` 3), and the next clean reading, or one whose band sounds, moves it
+  there with no second attack (nor a quick-move attack meanwhile). Model guitar: no attack moved on any set, far-off
+  starts 8 -> 0. (A first version that waited for a good reading made starts 1-4 ms later: dropped.)
+- **SHAPE** (SHIFT x 3): ATTACK (1 ms .. 2 s, 31 steps), RELEASE (10 ms .. 8 s, 28) and GLIDE (OFF, 5 ms .. 1 s, 22) per
+  tone (`sy.shape`, u16 ms, 0 as designed: shown as the tone's own, `SYV_ATK_MS` / `SYV_REL_MS` / `SYV_GLI_MS` from
+  `sy_voices.py`, a Sound Generator tone's AUTO). A tone whose own setting is ATTACK or GLIDE (POLY PAD, STRINGS, LADDER
+  LEAD) shows and sets the same value on the main page (its old relative P2 cases gone; a version 4 file's are dropped).
+  The voices (`shape()` from `knobs()`, before GLITCH's `g_envs`): `aa` = 1 - e^(-1.466 / 48 ms), `ar` = e^(-4.6 / 48
+  ms), the glide's pole e^(-2.3 / 48 ms), each by its cubic series (no exp; ms >= 1); an SG tone's ENV preset attack
+  and release (`pre[0]`, `pre[3]`).
+- **FILTER** (SHIFT x 4): ENV (the pick envelopes `fenv` and `penv` x 1 + c; a filter tone with neither gets up to 3
+  octaves of `fenv`) and RESO (+0.5 c), as knob offsets (`sy.filt`), shared with a tone whose own setting is ENV or
+  RESO (`knob[t][1]`); "--" for a tone with no filter or the Sound Generator's; CTRL 3 nothing.
+- **The file** is version 5 (296 bytes): version 4's 132, SHAPE (120), FILTER (40), the sum. A version 4 file reads
+  with SENS 50 and is written back as version 5.
+- **Cleaner chords** (a forked agent's; `f_post`, `render`): the note manager runs as before (every voice starts,
+  steals and ends as it did: no start moved in 131,400 blocks); a voice whose pitch is the 3rd, 5th, 6th, 7th, 9th or
+  10th harmonic of another note fades x 0.95 a block to -12 dB, to its end, except the root's fifth or major third when
+  no other voice has that pitch class, and a note picked over a chord held 340 ms. Model chord set (381 notes: strums,
+  arpeggios, changes, barre and power chords, notes over chords): POLY PAD wrong notes 18.0% -> 8.9% of the sound
+  (204 -> 140), strings at their own pitch 177 -> 174, pitch classes 213 -> 205, clicks 0.67 -> 0.94 a second (only
+  0.01 a second louder than today's sound there); STRINGS 17.1% -> 8.3%. GLITCH 50-100 and the mono tones sample for
+  sample the same. Its per-voice state (`f_duck`, `f_g`, `f_band`, `f_keep`, `f_on`, `f_nt`) is in `syv_state_t` (the
+  agent had file statics: shared by the twin's two engines, kept over an engine restart).
+- **Builder:** the module's `.bss` ends `ALIGN(4)` (the chords' statics had made the module's boot row 42,630 bytes,
+  which the builder refuses: the stock boot copy drops a row's last size % 4 bytes).
+- **DM-404** (`hfx32.py`): TRACK "SENS 50"; SHAPE on POLY PAD "350ms / 1s / OFF", turned "2s / 400ms / OFF"; FILTER
+  "+27 / -23" and a blank third column; the main page's ATTACK "2s" (shared); SG ACID "AUTO / AUTO / OFF", "-- / --".
+- **Checks:** `sy32_checks` (SENS: module = twin at +12, 0 and -12 on a quiet model phrase, notes only at +12; a
+  version 4 file; SHAPE and FILTER in the engine, module = twin and unlike as designed); the TRACK page check rewritten
+  for five pages, SHAPE / FILTER texts and the version 5 file; layouts (`tt_t.sens_db`, `sy_t.shape` / `filt`).
+- **Room:** module 42,520 bytes, `.sytext` 4,240 of 4,992 (the column text and knob
+  functions moved to the module), `.syvnotes` 3,456 of 5,632 (`shape()`), `.syvdata` 3,584 of 3,840, `.syvmore` 8,912
+  of 9,728, voice state 5,488 of 6,144.
+- **On the model guitar, the build's voices** (`pick/blips.py`): far-off starts 0 on the fast, even, quiet and lick sets,
+  the median starts test 31's (17.3, 16.7, 14.7, 10.7 ms).
+- A first build of test 32 (APP1 `d49b70d1`) lost `shape()` and the low-note fix: the chords agent's tools reset
+  `sy_voice.c` while it worked. `sy32_checks`' "unlike as designed" caught it (no block differed); this build has them.
+  All 428 checks pass on `release/sy-synth-test32` (APP1 `1a341f9b…2d90`, 3,229,296 bytes).
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.

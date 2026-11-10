@@ -93,7 +93,7 @@ ROUTING, EXTIN = 0x5C, 1           # system 0x5c, INPUT SETTING's ROUTING: 0 Mix
 TT_MID = 'w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_req reset_ack rseq'.split()
 # SY test 4: the hold and the recorder, after drum
 TT_TAIL = ('hold hold_at rec_mix rec_ext grace grace_at holds route_sends route_held route_last rec_blocks rec_adds '
-           'rec_other').split()
+           'rec_other sens_db').split()                       # SY test 32: SENS's dB (s32: tt_state signs it)
 FEED_PAIR1, FEED_PAIR = 0x82E011A8, 0x82E0E974     # the recorder feed takes pair 1 if the first is set, else this pair
 LED, LED_REFRESH = 0x800D4910, 0x802496F0          # the key light (key, mode, level); |= 2: stock paints the pads
 FEED_FN = 0x0001CA80
@@ -130,6 +130,7 @@ def tt_state(m, sym, lay):
     st['syn'] = struct.unpack('<I', m.bytes(t + lay.syn, 4))[0]
     st['drum'] = struct.unpack('<I', m.bytes(t + lay.syn + 4, 4))[0]
     st.update(zip(TT_TAIL, struct.unpack(f'<{len(TT_TAIL)}I', m.bytes(t + lay.hold, 4 * len(TT_TAIL)))))
+    st['sens_db'] = struct.unpack('<i', struct.pack('<I', st['sens_db']))[0]
     return st
 
 
@@ -1101,12 +1102,15 @@ class SyLayout:
          self.per, self.ph, self.amp, self.owned, self.env, self.started, self.tone, self.nper, self.tone_req,
          self.fe, self.knob, self.dirty, self.loads, self.mode, self.rec, self.oct, self.susk, self.fund_cut,
          self.dynk, self.rem_down, self.hold, self.out_bus, self.armed, self.trk) = v
+        self.shape = self.trk + 4                      # SY test 32: shape[20][3] (u16 ms), then filt[20][2] (s8)
+        self.filt = self.shape + 6 * SY_NT
         check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
               self.dirty == SY_KNOB_AT + 60 and self.oct == SY_KNOB_AT + 64 and self.susk == self.oct + 20 and
               self.dynk == self.susk + 20 and self.loads == SY_FILE_AT and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
               self.mode == self.tot_max_ever + 24 and self.rem_down == self.mode + 64 and self.rec == self.mode + 88 and
-              self.trk == self.rec + 128 and self.sy_bytes == self.trk + 4 and
+              self.trk == self.rec + 128 and self.sy_bytes == self.trk + 4 + 8 * SY_NT and   # SY test 32: shape, filt
+              self.shape == self.trk + 4 and
               self.tone_req == 4 * SY_HEAD.index('tone_req') and
               self.started + 12 <= self.block_bytes and self.fund_cut + 4 <= self.block_bytes and
               self.hold + 49 <= self.block_bytes and self.out_bus == self.rem_down + 2 and
@@ -1176,7 +1180,9 @@ class SyMachine(SynthMachine):
         st.update(zip(SY_REM, struct.unpack('<5I', self.bytes(s + self.sl.rem_down + 4, 20))))
         st['rec'] = list(struct.unpack('<64h', self.bytes(s + self.sl.rec, 128)))
         st['trk'] = list(self.bytes(s + self.sl.trk, 4))           # SY test 15: WAIT, SENS, GUARD, 0
-        return st
+        st['shape'] = [list(struct.unpack('<3H', self.bytes(s + self.sl.shape + 6 * t, 6))) for t in range(SY_NT)]
+        st['filt'] = [list(struct.unpack('<2b', self.bytes(s + self.sl.filt + 2 * t, 2))) for t in range(SY_NT)]
+        return st                                                  # SY test 32: SHAPE (ms), FILTER (knob - 64)
 
     def ev(self, kind, what, val=0):
         """One UI event through sy_event: (what it returned, whether it reached note repeat's handler)."""
@@ -1727,10 +1733,10 @@ def sy_tone_checks(img, man):
     for tone, glitch, vo in ((0, 40, 3), (7, 80, 0), (18, 100, 1)):
         mt = SyMachine(img, man)
         mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
-        mt.uc.mem_write(sym['sy'] + mt.sl.trk, bytes([glitch, 20, vo, 0]))
-        mt.start()
+        mt.uc.mem_write(sym['sy'] + mt.sl.trk, bytes([glitch, 0, vo, 0]))   # SY test 32: SENS is the tracker's
+        mt.start()                                                           # floors (sens_checks), not the voices'
         eng = sy_ref.Engine(tone)
-        eng.trk = [glitch, 20, vo]
+        eng.trk = [glitch, 0, vo]
         plain = sy_ref.Engine(tone)
         differs = 0
         for b, values in enumerate(blocks):
@@ -1930,6 +1936,7 @@ def sy_tone_checks(img, man):
     sy_screen_checks(img, man)
     sy_route_checks(img, man)
     gnotes_checks(img, man)                                          # SY test 31
+    sy32_checks(img, man)                                            # SY test 32
 
 
 GN_OFF_TEXT, GN_ON_TEXT = 'GUITAR NOTES\nOFF', 'GUITAR NOTES\nON'
@@ -1969,9 +1976,9 @@ def gnotes_checks(img, man):
     wrote2 = g.files.writes[-1][1] if g.files.writes else b''
     plain = [g.ev(EV_KEY, KEY_SUB_PAD), g.ev(EV_KEY_UP, KEY_SUB_PAD)]       # SUB PAD alone: on to stock
     check(first == [(1, False), (1, False)] and off1 == (1, 1) and text1 == GN_OFF_TEXT and st1['ext_fix'] == 0 and
-          not g.sets and ups == [(1, False), (1, False)] and ext_up == (0, True) and len(wrote) == 136 and
+          not g.sets and ups == [(1, False), (1, False)] and ext_up == (0, True) and len(wrote) == 296 and
           wrote[6] == 2 and second == [(1, False), (1, False)] and off2 == (0, 2) and text2 == GN_ON_TEXT and
-          len(wrote2) == 136 and wrote2[6] == 0 and plain == [(0, True), (0, True)],
+          len(wrote2) == 296 and wrote2[6] == 0 and plain == [(0, True), (0, True)],
           f'SY test 31: EXT SOURCE + SUB PAD on the Sound Generator page: SUB PAD\'s pad hit and press taken, the '
           f'guitar\'s notes off ({off1}), popup {text1!r}, the input left alone (no setter call, ext_fix '
           f'{st1["ext_fix"]}), the releases '
@@ -2018,13 +2025,94 @@ def gnotes_checks(img, man):
     fo = ScreenMachine(img, man, store={SY_PATH: sy_file_bytes(0, 3, [[0, 0, 0]] * 20)})
     fo.start()
     fo.ev(EV_KEY, KEY_EXIT)
-    f30 = ScreenMachine(img, man, store={SY_PATH: sy_file_bytes(0, 1, [[0, 0, 0]] * 20)})
+    f30 = ScreenMachine(img, man, store={SY_PATH: sy_file_bytes(0, 1, [[0, 0, 0]] * 20, version=4)})
     f30.start()
     f30.ev(EV_KEY, KEY_EXIT)
     check(gn(fo)[0] == 1 and fo.sy()['muted'] == 1 and fo.sy()['loads'] == 1 and gn(f30)[0] == 0 and
           f30.sy()['muted'] == 1,
           'SY test 31: the file\'s byte 6 bit 1 reads back as the notes off (bit 0 SOUND OFF as before); test 30\'s file '
           'as on')
+
+
+def sy32_checks(img, man):
+    """SY test 32: SENS (the tracker's floors), a version 4 file read, the SHAPE and FILTER pages in the engine."""
+    import numpy as np
+    import sy_ref
+    sym = man['symbols']
+    fs = 48000
+    # 1. SENS: a quiet model phrase (each note picked from silence, its peak near -51 dBFS): the module's tracker =
+    #    tune_ref.py's at the same floors, note for note; up 12 dB it plays them, at 50 (as tests 1-31) and down 12
+    #    dB none.
+    parts = [np.zeros(fs // 5)]
+    for k, n in enumerate((45, 50, 55, 59, 64)):
+        parts += [ref.guitar(440 * 2 ** ((n - 69) / 12), 0.5, amp=0.45 * 10 ** (-44 / 20), seed=k), np.zeros(fs // 4)]
+    x = np.concatenate(parts + [np.zeros(fs // 2)])
+    res = {}
+    for db, trk1 in ((12, 101), (0, 0), (-12, 1)):
+        ms = SyMachine(img, man, page=SG_PAGE)
+        ms.put(sym['sy'] + ms.sl.trk + 1, trk1, '<B')
+        ms.ui(0)
+        ms.ui(0)
+        tr = ref.Tracker(sens_db=db)
+        wm, wt, pm, pt = [], [], 0, 0
+        for b, values in enumerate(ref.to_blocks(x, seed=4)):
+            st = ms.tick(values)
+            tr.step(values)
+            if st['syn'] != pm:
+                wm.append((b, st['syn']))
+                pm = st['syn']
+            if tr.syn != pt:
+                wt.append((b, tr.syn))
+                pt = tr.syn
+        notes = sum(1 for _, w in wm if w & 0xFF)
+        res[db] = (wm == wt, notes, ms.tt()['sens_db'])
+    check(all(v[0] for v in res.values()) and [v[2] for v in res.values()] == [12, 0, -12] and res[12][1] >= 4 and
+          res[0][1] == 0 and res[-12][1] == 0,
+          f'SY test 32: SENS moves the tracker\'s floors: tt.sens_db from the TRACK page (100: +12, 50: 0, 0: -12); a '
+          f'quiet model phrase (peaks near -51 dBFS): the module = tune_ref.py at the same floors, note for note, '
+          f'notes played +12 / 0 / -12: {[v[1] for v in res.values()]}')
+    # 2. A version 4 file (tests 11-31): SENS back to 50 (its old gate), ATTACK and GLIDE own settings (POLY PAD,
+    #    LADDER LEAD) as designed (the SHAPE page has them now), ENV kept (ENSEMBLE); written back as version 5.
+    f4 = ScreenMachine(img, man, store={SY_PATH: sy_file_bytes(0, 0, [[0, 20, 0]] * 20, version=4, trk=(10, 37, 0x41))})
+    f4.start()
+    f4.ev(EV_KEY, KEY_EXIT)
+    s4 = f4.sy()
+    f4.ev(EV_KEY_UP, KEY_EXIT)
+    w4 = f4.files.writes[-1][1] if f4.files.writes else b''
+    check(s4['loads'] == 1 and s4['trk'][:3] == [10, 0, 1] and s4['knob'][0][1] == 0 and s4['knob'][7][1] == 0 and
+          s4['knob'][3][1] == 20 and s4['dirty'] == 1 and len(w4) == 296 and w4[4] == 5,
+          f'SY test 32: a version 4 file: GLITCH and VOICES kept, SENS back to 50 ({s4["trk"][:3]}), POLY PAD\'s and '
+          f'LADDER LEAD\'s own ATTACK / GLIDE as designed, ENSEMBLE\'s ENV kept; written back as version 5 '
+          f'({len(w4)} bytes)')
+    # 3. The SHAPE and FILTER pages reach the engine: POLY PAD with ATTACK 50 ms, RELEASE 2 s, ENV +20, RESO +30 (and
+    #    SYNC LEAD's GLIDE OFF): the module = sy_ref.py with the same, value for value, and unlike as designed.
+    xc, _ = ref.arpeggio(ref.CHORDS['C'], gap=0.04)
+    blocks = ref.to_blocks(xc, seed=5)[:600]
+    mism, diff = [], {}
+    for tone, shape, filt in ((0, (50, 2000, 0), (20, 30)), (6, (0, 0, 0xFFFF), (0, 0))):
+        mt = SyMachine(img, man)
+        mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
+        mt.uc.mem_write(sym['sy'] + mt.sl.shape + 6 * tone, struct.pack('<3H', *shape))
+        mt.uc.mem_write(sym['sy'] + mt.sl.filt + 2 * tone, struct.pack('<2b', *filt))
+        mt.start()
+        eng, plain = sy_ref.Engine(tone), sy_ref.Engine(tone)
+        eng.shape[tone] = list(shape)
+        eng.filt[tone] = list(filt)
+        d = 0
+        for b, values in enumerate(blocks):
+            mt.feed(values)
+            mt.call(sym['sy_rx'])
+            got = list(struct.unpack('<64i', mt.bytes(sym['sy'] + mt.sl.out, 256)))
+            want, _ = eng.step(values, bpm100=mt.sy()['bpm100'])
+            base_, _ = plain.step(values, bpm100=mt.sy()['bpm100'])
+            d += want != base_
+            if got != want:
+                mism.append((tone, b))
+        diff[tone] = d
+    check(not mism and diff[0] > 0,
+          f'SY test 32: SHAPE and FILTER reach the voices: POLY PAD (ATTACK 50 ms, RELEASE 2 s, ENV +20, RESO +30) and '
+          f'SYNC LEAD (GLIDE OFF): the module = sy_ref.py, value for value (first differences {mism[:3]}), unlike as '
+          f'designed in {diff} blocks')
 
 
 FILE_OPEN, FILE_READ, FILE_WRITE, FILE_CLOSE = 0x800DEC60, 0x800DEC48, 0x800DD9B8, 0x800DEBD8
@@ -2074,19 +2162,25 @@ class Files:
         self._ret(uc, 0)
 
 
-def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=4, bus=0, trk=(0, 0, 0x40)):
-    """B:/_sy_tones.bin as sy_save writes it (SY test 11, version 4): "SYTN", 4, tone, muted, 20, 60 knob positions,
+def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=5, bus=0, trk=(0, 0, 0x40), shape=None,
+                  filt=None):
+    """B:/_sy_tones.bin as sy_save writes it (SY test 32, version 5): "SYTN", 5, tone, muted, 20, 60 knob positions,
     20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, SY test 15's WAIT, SENS and GUARD (trk; zeros before; SY test 24:
-    GLITCH, SENS and VOICES marked 0x40, AUTO as 0x40), FNV-1a of the first 132. version=3: tests 6-10's (15
-    tones: 104 bytes, the bus at 98, the sum of the first 100); version=2: test 5's (88 bytes)."""
-    n = 20 if version == 4 else 15
+    GLITCH, SENS and VOICES marked 0x40, AUTO as 0x40; SY test 32: SENS 0 = 50, else 1..101), the SHAPE page (20 x
+    ATTACK, RELEASE, GLIDE, u16 ms) and the FILTER page (20 x ENV, RESO, knob - 64), FNV-1a of the first 292.
+    version=4: tests 11-31's (136 bytes, the sum of the first 132); version=3: tests 6-10's (15 tones: 104 bytes, the
+    bus at 98, the sum of the first 100); version=2: test 5's (88 bytes)."""
+    n = 20 if version >= 4 else 15
     octs = octs or [0] * n
     suss = suss or [0] * n
     dyns = dyns or [0] * n
     body = (b'SYTN' + bytes([version, tone, muted, n]) + bytes(64 + d for row in knobs[:n] for d in row) +
             bytes(o & 0xFF for o in octs[:n]) + bytes(suss[:n]))
-    if version == 4:
+    if version >= 4:
         body += bytes(dyns[:n]) + bytes([bus, *trk])
+        if version == 5:
+            body += b''.join(struct.pack('<3H', *row) for row in (shape or [(0, 0, 0)] * 20))
+            body += bytes(f & 0xFF for row in (filt or [(0, 0)] * 20) for f in row)
     elif version == 3:
         body += bytes(dyns[:n]) + bytes([bus, 0])
     else:
@@ -2144,9 +2238,9 @@ def sy_knob_checks(img, man):
     st3 = m.sy()
     want = sy_file_bytes(3, 0, st3['knob'], st3['oct'], st3['susk'], st3['dynk'])
     check(up1 == (0, True) and held_back == (1, 1) and up2 == (0, True) and len(files.writes) == 2 and
-          files.writes[-1] == (SY_PATH, want) and st3['dirty'] == 0 and st3['saves'] == 2 and len(want) == 136,
+          files.writes[-1] == (SY_PATH, want) and st3['dirty'] == 0 and st3['saves'] == 2 and len(want) == 296,
           f'a key release with an FX screen up: no file yet; at the next release with none, {SY_PATH} written once '
-          f'({len(want)} bytes: "SYTN", version 4, tone 4, 60 knobs, 20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, '
+          f'({len(want)} bytes: "SYTN", version 5, tone 4, 60 knobs, 20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, SHAPE, FILTER, '
           f'FNV-1a); both releases go on to note repeat')
     # 3. A fresh start with that file: read at the first key event; the engine as the twin with the same settings.
     mf, f2 = machine({SY_PATH: want})
@@ -2305,7 +2399,8 @@ def sy_screen_checks(img, man):
     keys = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE), m.ev(EV_KEY, KEY_REC), m.ev(EV_KEY_UP, KEY_REC)]
     other = m.ev(EV_KNOB, 4, 30)
     other2 = m.ev(EV_ENC, 1, 1)
-    check(k1 == (1, False) and st_k1['knob'][0][1] == 36 and st_k1['tone_req'] == 0 and st_k1['muted'] == 0 and
+    check(k1 == (1, False) and st_k1['knob'][0][1] == 0 and st_k1['shape'][0][0] == 500 and   # SY test 32: POLY
+          st_k1['tone_req'] == 0 and st_k1['muted'] == 0 and                                    # PAD's ATTACK: SHAPE's
           all(s == (1, False) for s in steps) and st5['tone_req'] == 2 and st5['muted'] == 0 and
           top == SY_NT - 1 and bottom == 1 and all(k == (1, False) for k in keys) and other == (0, True) and
           other2 == (0, True),
@@ -2330,8 +2425,8 @@ def sy_screen_checks(img, man):
           'edits the first page\'s LEVEL and the release keeps the second page')
     # 5. The draws: each knob column (descriptor type 0, parameter 0x7b..0x80) cleared, its name small, its value big;
     #    the footer the sound's name; a column of another type, or outside the screen, to the kits' draws.
-    for _ in range(2):                                                 # SY test 15: OTHERS -> TRACK -> the first page
-        m.ev(EV_KEY, KEY_SHIFT)
+    for _ in range(4):                                                 # SY test 15: OTHERS -> TRACK -> the first page
+        m.ev(EV_KEY, KEY_SHIFT)                                        # (SY test 32: -> SHAPE -> FILTER -> first)
         m.ev(EV_KEY_UP, KEY_SHIFT)
     m.ev(EV_PAD, 3, 100)
     m.ev(EV_PAD_UP, 3)                                                 # SOUND 4 (ENSEMBLE)
@@ -2343,6 +2438,7 @@ def sy_screen_checks(img, man):
     m.ev(EV_KEY, KEY_SHIFT)
     m.ev(EV_KEY_UP, KEY_SHIFT)
     cols2 = [m.draw_column(c, 0x7B + c) for c in range(3)]
+    tone4 = m.sy()['tone_req']                                         # ENSEMBLE
     # SY test 15: a third tap, the TRACK page (SY test 24: CTRL 1 GLITCH 0..100, CTRL 2 SENS 0..100 (64: 50), CTRL 3
     # VOICES in sevenths: AUTO, MONO, 2..6); the columns; the next tap back to the first page; the settings in the file
     m.ev(EV_KEY, KEY_SHIFT)
@@ -2361,17 +2457,45 @@ def sy_screen_checks(img, man):
     m.ev(EV_KNOB, 3, 100)
     m.ev(EV_KEY, KEY_SHIFT)
     m.ev(EV_KEY_UP, KEY_SHIFT)
+    page_s = m.sy()['shift_page']                                      # SY test 32: SHAPE (ENSEMBLE: 3 ms, 450 ms,
+    sh_before = [[d[3] for d in m.draw_column(c, 0x7B + c) if d[0] == 'text'] for c in range(3)]   # no glide)
+    m.ev(EV_KNOB, 1, 127)                                              # ATTACK: the top step, 2 s
+    m.ev(EV_KNOB, 2, 64)                                               # RELEASE: step 14 of 28, 400 ms
+    m.ev(EV_KNOB, 3, 0)                                                # GLIDE: OFF
+    glide_off = m.sy()['shape'][tone4][2]
+    m.ev(EV_KNOB, 3, 127)                                              # GLIDE: the top step, 1 s
+    sh_after = [[d[3] for d in m.draw_column(c, 0x7B + c) if d[0] == 'text'] for c in range(3)]
+    m.ev(EV_KEY, KEY_SHIFT)
+    m.ev(EV_KEY_UP, KEY_SHIFT)
+    page_f = m.sy()['shift_page']                                      # SY test 32: FILTER (ENSEMBLE's own setting
+    m.ev(EV_KNOB, 1, 96)                                               # is ENV: shared with the first page's CTRL 1)
+    m.ev(EV_KNOB, 2, 0)                                                # RESO -50
+    m.ev(EV_KNOB, 3, 50)                                               # CTRL 3: nothing
+    fl_after = [[d[3] for d in m.draw_column(c, 0x7B + c) if d[0] == 'text'] for c in range(3)]
+    st_f = m.sy()
+    m.ev(EV_KEY, KEY_SHIFT)
+    m.ev(EV_KEY_UP, KEY_SHIFT)
     page_back = m.sy()['shift_page']
+    main_env = [d[3] for d in m.draw_column(0, 0x7B) if d[0] == 'text']
     t_writes = [w for w in m.files.writes if w[0] == SY_PATH]
     t_file = t_writes[-1][1] if t_writes else b''
     texts3 = [[d[3] for d in c if d[0] == 'text'] for c in cols3]
-    check(page_t == 2 and t_before == [0, 0, 0, 0] and trk == [100, 50, 5, 0] and guard_off == 1 and page_back == 0 and
+    shp = 132 + 6 * tone4
+    check(page_t == 2 and t_before == [0, 0, 0, 0] and trk == [100, 51, 5, 0] and guard_off == 1 and
           guard_on == (3, ['VOICES', '3']) and texts3 == [['GLITCH', '100'], ['SENS', '50'], ['VOICES', '5']] and
-          len(t_file) == 136 and list(t_file[129:132]) == [100, 50, 0x45],
+          page_s == 3 and sh_before == [['ATTACK', '3ms'], ['RELEASE', '450ms'], ['GLIDE', 'OFF']] and
+          glide_off == 0xFFFF and sh_after == [['ATTACK', '2s'], ['RELEASE', '400ms'], ['GLIDE', '1s']] and
+          page_f == 4 and fl_after == [['ENV', '+25'], ['RESO', '-50'], ['', '']] and
+          st_f['knob'][tone4][1] == 32 and st_f['filt'][tone4] == [0, -64] and st_f['shape'][tone4] == [2000, 400, 1000]
+          and page_back == 0 and main_env == ['ENV', '+25'] and
+          len(t_file) == 296 and list(t_file[129:132]) == [100, 51, 0x45] and
+          struct.unpack('<3H', t_file[shp:shp + 6]) == (2000, 400, 1000) and
+          list(t_file[252 + 2 * tone4:254 + 2 * tone4]) == [0, 0xC0],
           f'SY test 15: SHIFT\'s third tap shows the TRACK page (every tone): SY test 24: CTRL 1 GLITCH 0..100, CTRL 2 '
-          f'SENS 0..100 (64: 50), CTRL 3 VOICES in sevenths (20: MONO, 64: 3, 100: 5); the next tap goes back to the '
-          f'first page; the file keeps GLITCH in LAW\'s byte (129), SENS, VOICES in GUARD\'s marked 0x40 '
-          f'({texts3}, {trk}, {list(t_file[129:132]) if t_file else None})')
+          f'SENS 0..100 (64: 50; SY test 32: kept 1..101, 0 = 50), CTRL 3 VOICES in sevenths (20: MONO, 64: 3, 100: '
+          f'5); SY test 32: the next tap SHAPE (ATTACK, RELEASE, GLIDE in round ms steps: {sh_before} -> {sh_after}), '
+          f'then FILTER (ENV shared with ENSEMBLE\'s own setting, RESO; CTRL 3 nothing: {fl_after}), then the first '
+          f'page ({main_env}); the file (version 5, {len(t_file)} bytes) keeps GLITCH, SENS, VOICES, SHAPE and FILTER')
     foot = m.draw_footer()
     texts = [[d[3] for d in c if d[0] == 'text'] for c in cols + cols2]
     t3 = m.sy()
@@ -2607,7 +2731,7 @@ def sy_screen_checks(img, man):
     vb.start()
     vb.ev(EV_KEY, KEY_EXT)
     check(all(x == (1, False) for x in pushes) and seen == [1, 2, 3, 0] and all(polls) and
-          texts == [['OUT: BUS 1'], ['OUT: BUS 2'], ['OUT: BOTH'], ['OUT: DRY']] and len(wrote) == 136 and
+          texts == [['OUT: BUS 1'], ['OUT: BUS 2'], ['OUT: BOTH'], ['OUT: DRY']] and len(wrote) == 296 and
           wrote[128] == 2 and vf.sy()['out_bus'] == 2 and vf.sy()['loads'] == 1 and vb.sy()['out_bus'] == 0 and
           vb.sy()['loads'] == 1,
           f'SY test 7: VALUE\'s push steps the synth\'s bus DRY -> BUS 1 -> BUS 2 -> BOTH -> DRY ({seen}), press and '

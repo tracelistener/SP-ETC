@@ -82,6 +82,19 @@
 #define IN_SCALE (1.0f / 32768.0f)
 #define LEVEL_MIN 0.0019952622f          /* -54 dBFS */
 #define P_MIN 0.0039810717f              /* a pluck's peak: -48 dBFS */
+/* SY test 32: SENS (the TRACK page) moves the floors (LEVEL_MIN, P_MIN, HF_MIN) by tt.sens_db, -12..+12 dB (up: more
+ * sensitive, the floors lower; 0 as tests 1-31). On the model guitar ~40 dB down (picks near -50 dBFS) 0 of 30 notes
+ * played at 0, 30 of 30 at +12 dB (1 stray; +18: 8). FLOOR_G[12 + d] = 10^(-d / 20), float32. */
+static const float FLOOR_G[25] = {
+    3.98107171f, 3.54813389f, 3.16227766f, 2.81838293f, 2.51188643f, 2.23872114f, 1.99526231f, 1.77827941f,
+    1.58489319f, 1.41253754f, 1.25892541f, 1.12201845f, 1.0f, 0.891250938f, 0.794328235f, 0.707945784f,
+    0.630957344f, 0.562341325f, 0.501187234f, 0.446683592f, 0.398107171f, 0.354813389f, 0.316227766f, 0.281838293f,
+    0.251188643f};
+
+static inline float floor_g(const tt_t *t) {
+    const s32 d = t->sens_db;
+    return FLOOR_G[d >= -12 && d <= 12 ? 12 + d : 12];
+}
 #define P_RATIO 2.0f                     /* over the peaks P_FROM..P_TO blocks back */
 #define P_FROM 3u
 #define P_TO 18u
@@ -443,7 +456,8 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     for (u32 j = 0; j < TT_W12; j++)
         power += x[j] * x[j];
     power *= 1.0f / (float)TT_W12;
-    u32 voiced = power >= LEVEL_MIN * LEVEL_MIN && y.aper < APER_MAX;
+    const float lmin = LEVEL_MIN * floor_g(t), lmin2 = lmin * lmin;   /* SY test 32: SENS */
+    u32 voiced = power >= lmin2 && y.aper < APER_MAX;
     s32 age = (s32)blk - b->onset_blk;
     u32 pre = age < 0, sub = 0;                         /* pre: its samples were taken before the last pluck (SY test
                                                            24: none, its span is this block's; test 23: age < 3) */
@@ -469,7 +483,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                 dn[k] = dn[k] > 0.0f ? dn[k] : 0.0f;
             yin_t s;
             yin(dn, dn, x, b->base_x, tmax < (s32)TT_T6MAX ? (u32)tmax : TT_T6MAX, THR_SUB, &s);
-            u32 v2 = power >= LEVEL_MIN * LEVEL_MIN && s.aper < APER_MAX;
+            u32 v2 = power >= lmin2 && s.aper < APER_MAX;
             float ratio = s.freq / y.freq;
             s32 kk = (s32)(ratio + 0.5f);
             u32 common = kk >= 2 && kk <= 6 && __builtin_fabsf(ratio / (float)kk - 1.0f) < COMMON_TOL;
@@ -552,7 +566,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
             b->murky++;                                  /* strings ringing together: counts as nothing heard */
         b->agree = 0;
         b->prev_note = -1;
-        if (!(b->sub_lock && power >= LEVEL_MIN * LEVEL_MIN))   /* test 6: a chord's note holds while heard */
+        if (!(b->sub_lock && power >= lmin2))           /* test 6: a chord's note holds while heard */
             b->unvoiced++;
         if (b->unvoiced >= RELEASE) {
             r->note = -1;
@@ -637,8 +651,9 @@ u32 tune_fp_step(tt_t *t) {
         const u32 loud = pk >= JUMP_ENV * env_prev;
         const u32 quiet = !loud && ref <= QUIET_REF * env_prev && pk >= QUIET_RATIO * ref &&   /* SY test 30: a pick */
                           pk >= QUIET_ENV * env_prev;                                        /*   from quiet */
-        u32 jump = pk >= P_MIN && pk >= P_RATIO * ref && (loud || quiet);
-        u32 click = e >= HF_MIN && e >= HF_RATIO * href && pk >= P_MIN;
+        const float g = floor_g(t), pmin = P_MIN * g, hfmin = HF_MIN * g * g;   /* SY test 32: SENS */
+        u32 jump = pk >= pmin && pk >= P_RATIO * ref && (loud || quiet);
+        u32 click = e >= hfmin && e >= HF_RATIO * href && pk >= pmin;
         u32 soft = 0;
         if (b->syn_note >= 0) {                          /* SY test 25: the soft click, while a note plays */
             float m6 = 0.0f;
@@ -646,7 +661,7 @@ u32 tune_fp_step(tt_t *t) {
                 m6 += b->hf6[(blk - k) & PEAK_MASK];
             const float p1 = b->peaks[(blk - 1u) & PEAK_MASK], pk2 = pk > p1 ? pk : p1;
             soft = (e6 + b->hf6[(blk - 1u) & PEAK_MASK]) * 0.5f >= HF6_RATIO * m6 * (1.0f / 16.0f) &&
-                   pk2 >= P_MIN && pk2 >= SOFT_LEVEL * ref;
+                   pk2 >= pmin && pk2 >= SOFT_LEVEL * ref;
         }
         if ((jump || click || soft) && (s32)blk - b->last_onset >= REFRACTORY) {
             b->clicks += !jump;
