@@ -1,12 +1,13 @@
-"""combined-test20: the fork's latest feature test builds in one APP1 (combined-test17's chain with FX deep edit test15:
-the hidden settings on every page, the Sound Generator page and page 34 (REMAIN + FX on an unlit effect) too; then the
-fast boot, the kit footer and the SG level step as for combined-test19).
+"""combined-test21: the fork's latest feature test builds in one APP1 (combined-test20's chain with FX deep edit test16:
+HOLD + MFX switches the hidden settings and HOLD + VALUE opens the input FX's extra screens, VALUE + EXT SOURCE is
+stock's again; then the fast boot, the kit footer and the SG level step as for combined-test20). combined-test20:
+FX deep edit test15, the hidden settings on every page, the Sound Generator page and page 34 too.
 
 Each feature's own builder runs in turn on the output of the one before, from bounce-3-test9's parent (the
 published v9.46's kit stage plus the RESAMPLE start fix v3, resample-startfix-3):
 
   1 bounce in place, stage 3   build_bounce.py            0x83FE8000   as in bounce-3-test9
-  2 FX deep edit               build_fx_deep_edit.py      0x83FE2000   fx-deep-edit-test15
+  2 FX deep edit               build_fx_deep_edit.py      0x83FE2000   fx-deep-edit-test16
   3 pad envelopes, stage 1     build_pad_env.py           0x83FDE000   pad-env-test6's stage 1
   4 pad envelopes, stage 2     build_pad_pitch_filter.py  0x83FD9000   pad-env-test6
   5 kit edits saved            build_kits_save.py         0x83FD5000   kits-save-test2
@@ -46,7 +47,7 @@ from build_arp import file_offset
 from build_kits_save import Runtime
 
 HERE = Path(__file__).resolve().parent
-REVISION = 'combined-test20'
+REVISION = 'combined-test21'
 FLASH = 0x60080000
 PCM_BANK, FLASH_LIMIT = 0x60376000, 0x60400000   # kits/build_arp_kit.py: kit PCM bank, flash planning limit
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
@@ -55,7 +56,7 @@ NAMES = ('SP404MKII_APP0.bin', 'SP404MKII_APP1.bin', 'manifest.json')
 # (step, builder, the feature's own test build, where its manifest keeps this module)
 STEPS = [
     ('bounce', 'build_bounce.py', 'bounce-3-test9', None),
-    ('fx-deep-edit', 'build_fx_deep_edit.py', 'fx-deep-edit-test15', None),
+    ('fx-deep-edit', 'build_fx_deep_edit.py', 'fx-deep-edit-test16', None),
     ('pad-env-1', 'build_pad_env.py', 'pad-env-test6', 'stage1'),
     ('pad-env-2', 'build_pad_pitch_filter.py', 'pad-env-test6', None),
     ('kits-save', 'build_kits_save.py', 'kits-save-test2', None),
@@ -242,7 +243,7 @@ def build(parent: Path, out: Path, zig: Path, fxmap: Path, refs: Path):
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False,
         description='every latest feature test build in one APP1: bounce in place (bounce-3-test9), FX deep edit '
-                    '(fx-deep-edit-test15), pad envelopes stages 1 and 2 (pad-env-test6), kit edits and the Sound '
+                    '(fx-deep-edit-test16), pad envelopes stages 1 and 2 (pad-env-test6), kit edits and the Sound '
                     'Generator saved with the project (kits-save-test2), note repeat (note-repeat-test6), chromatic '
                     'scales (chroma-test2) and SUB PAD on the Sound Generator page (sg-subpad-test1), each module '
                     'byte for byte its own build\'s, on the RESAMPLE start fix v3; not the FX probe',

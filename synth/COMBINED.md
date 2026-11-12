@@ -544,3 +544,19 @@ screen, CTRL 1 editing it.
 
 **Not run:** the unit.
 
+## 22. combined-test21
+
+The user, laying out the fork's buttons (2026-11-11): HOLD for switches, VALUE for screens. The hidden settings'
+switch moves to HOLD + MFX and the input FX's extra screens to HOLD + VALUE; VALUE + EXT SOURCE is stock's again (the
+input switches), since HOLD + EXT SOURCE now switches the guitar synth (MIDI out test 5). FX deep edit at
+`fx-deep-edit-test16` (FX_DEEP_EDIT.md, "Test16"): 108 of 108 on its own parent.
+
+The chain as combined-test20's: `build_combined.py` (step 2 at fx-deep-edit-test16, refs in
+`analysis/kit_pr1_audit/dev_combined21/refs`), `build_fast_boot.py`, `build_kit_footer.py`, then
+`build_sg_level.py ... --revision combined-test21` (log `dev_combined21/build.log`).
+
+- **APP1:** `1d314649...4406`, 3,158,448 bytes, in `analysis/kit_pr1_audit/release/combined-test21` (the base before the
+  fast boot `8618c5c6...9907`). Every module byte for byte its own test build's; the same 7 reviewed overlaps. Only the
+  FX deep edit module differs from combined-test20 (same size, 9,984 bytes at `0x83FE2000`).
+
+**Not run:** the other feature suites on this image (their modules are combined-test20's byte for byte); the unit.

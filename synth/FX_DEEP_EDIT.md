@@ -478,6 +478,27 @@ guitar synth screen they never come.
   screens (the dispatcher's handlers do, on every page), and one function steps them for every caller, so the module
   stays below the guitar synth's voice state at `0x83FE4800` in the tune-test builds.
 
+## Test16: HOLD for switches, VALUE for screens
+
+The user, laying out the fork's chords with the guitar synth's MIDI out test 5 ("HOLD = switches, VALUE = screens"):
+"what if hold+MFX turned on/off hidden fx parameters and on input fx hold + value shows the hidden fx", then "hold+ext
+source turns guitar synth on/off".
+
+- **HOLD + MFX** (press, on any page) is the switch: HIDDEN FX OFF / ON as test11's HOLD + VALUE was. The MFX press
+  and its release are taken (`mfx_held`, the state's spare byte), so MFX's own effect stays as it is. An FX screen up
+  is held as before, and draws again after the popup (test13).
+- **HOLD + VALUE** opens the input FX's extra screens (slot 0), as VALUE + EXT SOURCE did in tests 9-15. On them
+  VALUE, or HOLD + VALUE again, steps (HOLD passes there, as SHIFT does). With the hidden settings off, HOLD + VALUE
+  goes on as VALUE does.
+- **EXT SOURCE is never taken now:** VALUE + EXT SOURCE switches the input as on stock. In the tune-test builds HOLD
+  + EXT SOURCE is the guitar synth's switch, taken before this module sees it.
+- The blob stays 9,984 bytes at `0x83FE2000` (`value_held` went with the EXT SOURCE chord).
+
+**Checked:** `test_fx_deep_edit.py` on fx-deep-edit-test16 (its own parent, kits-v9.46-test3): the switch checks on
+HOLD + MFX (the MFX press and release taken, MFX alone as on the parent), the input FX checks on HOLD + VALUE (HOLD
++ VALUE again steps; off: as on the parent), and VALUE + EXT SOURCE as on the parent. The parent in test12's check
+still gets HOLD + VALUE (nothing holds its screen).
+
 ## Not known (the hardware test, or later)
 
 - What the numbers mean, and whether the chip uses the firmware's ranges.
