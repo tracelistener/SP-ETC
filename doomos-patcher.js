@@ -200,8 +200,7 @@ if (typeof module === 'object' && module.exports) {
       '</div>' +
       '<p class="status" id="status" role="status">Ready. No file loaded yet.</p>' +
       (window.DOOMOS_KITS ?
-        '<p class="synth-choice" id="build">Builds Sound Generator + Kits ' + window.DOOMOS_KITS.release + ' on DOOM OS ' + release.version + ' (' + release.build +
-        '): Sound Generator v9.9.3, 13 synthesized kits and DOOM OS in one firmware.</p>' : '') +
+        '<p class="synth-choice" id="build">Builds SP-ETC on DOOM OS ' + release.version + ' (' + release.build + ').</p>' : '') +
       '<div class="actions">' +
       '<button type="button" class="btn" id="patch" disabled>Patch firmware</button>' +
       '<a class="btn" id="download" download="SP404MKII_APP1.bin" hidden>Download patched firmware ↓</a>' +

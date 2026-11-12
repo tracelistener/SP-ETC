@@ -91,7 +91,8 @@ async function download(page) {
   // One build, no selector: drop in stock, press Patch, get v9.53.
   const panel = page.get('doomos-patcher').innerHTML;
   assert.equal((panel.match(/type="checkbox"/g) || []).length, 0, 'no build selector');
-  assert.match(panel, /Builds Sound Generator \+ Kits v9\.53 on DOOM OS 0\.6\.1 \(ED5E\)/);
+  assert.match(panel, /Builds SP-ETC on DOOM OS 0\.6\.1 \(ED5E\)\./);    // v9.53 (the user): no other version there
+  assert.doesNotMatch(panel, /v9\.|Sound Generator \+ Kits/);
   await choose(page, stock);
   assert.equal(page.get('patch').disabled, false);
   await page.get('patch').listeners.click();
@@ -124,7 +125,7 @@ async function download(page) {
 
   // Without the kit data the script still makes the DOOM OS base, as upstream does.
   const plain = load(false);
-  assert.doesNotMatch(plain.get('doomos-patcher').innerHTML, /Builds Sound Generator/);
+  assert.doesNotMatch(plain.get('doomos-patcher').innerHTML, /Builds SP-ETC/);
   await choose(plain, stock);
   await plain.get('patch').listeners.click();
   assert.equal(await download(plain), doom.digest);
@@ -134,7 +135,7 @@ async function download(page) {
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
   assert.match(html, /kits-data\.js\?v=kits-v9-53-faeea5b0/);
-  assert.match(html, /doomos-patcher\.js\?v=kits-v9-53-doom-os/);
+  assert.match(html, /doomos-patcher\.js\?v=sp-etc-v9-53-doom-os"/);
   assert.doesNotMatch(html, /synth-data\.js|waves-data\.js|kits-midi-data|MIDI test guide|v9\.43|v9\.44/);
   assert.doesNotMatch(html, /[Tt]ick one|unticked|Pick one of/);
   // The page is the patcher and what it gives: no version header and no version history (that is on GitHub).
