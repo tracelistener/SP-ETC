@@ -1371,6 +1371,17 @@ UI_SMALL static void sy_ready(void) {
 /* Test 3: an FX screen on TOP's list (writing the file with one up sent the display to the main screen: FX deep edit's
  * test 12 on the unit). SY test 6: TOP (the main page's object) is gone on the Sound Generator page (DM-404: 0 there),
  * whose own object holds its views the same way: the page sy_sg_poll last had, while the page is up. */
+/* MIDI out test 15: FX deep edit's state (FDE_STATE from the builder, fx-deep-edit-test16's `fde`): byte 0 the extra
+ * screen shown (the input FX's after HOLD + VALUE, or a BUS one whose FX screen is gone), byte 6 the hidden settings
+ * switched off (HOLD + MFX). */
+#define FDE_SCREEN (*(volatile const u8 *)FDE_STATE)
+#define FDE_OFF (*(volatile const u8 *)(FDE_STATE + 6u))
+/* MIDI out test 15: a stock dialog (CANCEL / OK, such as SHIFT + VALUE's "Enable Skipback?") is up. Its objects sit at
+ * 0x80591a10/14 only meanwhile (DM-404, the main screen and the Sound Generator page; 0 during a popup and an FX
+ * screen), and the byte at 0x805922ac is set with it; that byte alone is not enough: the popup post (0x800d3ff0) sets
+ * it too, until the popup is built. */
+#define DIALOG_UP (*(volatile const u32 *)0x80591A10u != 0u && *(volatile const u8 *)0x805922ACu != 0u)
+
 UI_SMALL SCREEN static u32 sy_fx_screen(void) {
     u8 *top = TOP_OBJECT;
     if (!top && PAGE == SG_PAGE) top = (u8 *)sy.sg_page;
@@ -1563,9 +1574,8 @@ UI_SMALL static void gsyn_ext(s32 type, s32 what) {
         } else if (g->ext_tap && PAGE == SG_PAGE) {
             const u32 on = !SET_GET(SETTINGS, EXT_SOURCE, 0);
             SET_SET(SETTINGS, EXT_SOURCE, (s32)on, 0);
-            gsyn_light_now(g);
-            POPUP_POST(on ? "EXT IN\nON" : "EXT IN\nOFF", GN_POPUP_MS);
-            g->ext_taps++;
+            gsyn_light_now(g);                          /* MIDI out test 15 (the user): no EXT IN ON / OFF popup, the */
+            g->ext_taps++;                              /*   light tells */
         }
         g->ext_tap = 0;
         g->ext_gate = 0;
@@ -2030,6 +2040,18 @@ UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val)
             return 1;
         }
         if (what == KEY_REC && LOOPER_ON) return 0;    /* test 10: the looper's REC (a loop), as on the stock page */
+        if (what == KEY_VALUE && (key_held(KEY_SHIFT) || key_held(KEY_HOLD))) {
+            /* MIDI out test 15 (the user: "only value is supposed to change the out setting"): SHIFT + VALUE goes on
+             * to stock (MARK Function), and SHIFT's release turns no page; HOLD + VALUE goes on to FX deep edit (the
+             * input FX's hidden settings), or with the hidden settings switched off is taken and does nothing. */
+            if (key_held(KEY_SHIFT)) {
+                s->shift_used = 1;
+                return 0;
+            }
+            if (!FDE_OFF) return 0;
+            sy_take(s, what);
+            return 1;
+        }
         if (what == KEY_SUB_PAD || what == KEY_REC || what == KEY_VALUE) {
             sy_take(s, what);
             if (what == KEY_VALUE) {                    /* SY test 7: the synth's bus, DRY -> BUS 1 -> BUS 2 -> BOTH */
@@ -2107,7 +2129,11 @@ EXPORT SCREEN s32 sy_event(const s16 *ev) {
         return 1;
     }
     if (sy_shown()) {
-        if (sy_fx_screen() && sy_fx_event(type, what)) {
+        if (DIALOG_UP) {                                /* MIDI out test 15: a stock dialog (SHIFT + VALUE's "Enable */
+            if (type == EV_KEY_UP && what == KEY_SHIFT) s->shift_down = 0;   /* Skipback?") takes everything: */
+            return NR_EVENT(ev);                        /*   VALUE turns and presses it, EXIT cancels (DM-404) */
+        }                                               /* MIDI out test 15: FX deep edit's extra screens too (the */
+        if ((sy_fx_screen() || FDE_SCREEN) && sy_fx_event(type, what)) {   /* input FX's after HOLD + VALUE) */
             s->fx_passes++;                             /* test 6: the FX screen's */
             return NR_EVENT(ev);
         }

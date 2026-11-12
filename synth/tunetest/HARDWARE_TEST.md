@@ -1,9 +1,11 @@
-# MIDI out test 14: your final 32 sounds
+# MIDI out test 15: your final 32 sounds, VALUE alone for OUT
 
 A test build: {{PARENT_REVISION}} (v9.52 with LEVEL for MIDI notes, the quieter Sound Generator and kits, hidden FX
 on every page, the hidden FX buttons moved) plus the guitar synth with MIDI out. Not for sharing. To go back, patch
 v9.52 again. It is MIDI out test 13 (banks, the current pad lit) with your picks as its sounds, each as it played in
-the audition build you picked it from.
+the audition build you picked it from, and on the guitar synth screen only VALUE alone steps OUT: HOLD + VALUE opens
+the input FX's hidden settings and SHIFT + VALUE switches MARK Function, as on the other screens. An EXT SOURCE tap
+no longer shows EXT IN ON / OFF: its light tells.
 
 | File | SHA-256 |
 | --- | --- |
@@ -39,3 +41,5 @@ On the guitar synth screen (VALUE + RECORD SETTING), SHIFT + pad 1 or 2 picks th
 1. Play a few sounds from each bank: the lit pad follows.
 2. With the guitar synth on (EXT SOURCE green), turn GAIN all the way up and strum hard: does EXT SOURCE blink red?
    Then set GAIN just below where it blinks.
+3. On the guitar synth screen: VALUE steps OUT; HOLD + VALUE (with an input FX like Gt Amp Sim) opens its hidden
+   settings, CTRL 1-3 edit them, VALUE steps their pages; SHIFT + VALUE switches MARK Function. OUT stays as it was.

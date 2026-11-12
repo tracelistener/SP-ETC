@@ -2086,6 +2086,38 @@ for 16 chord pads).
 - **Checks:** all 578 pass. The heaviest sounds a step: AAH CHOIR 172,617 instructions, RAVE ORGAN 140,695, FM
   CHORUS EP 122,628, SG ORGAN 120,333.
 
+## MIDI out test 15 (midi-out-test15): VALUE alone for OUT
+
+The user, on the publish review's finding that HOLD + VALUE and SHIFT + VALUE stepped OUT on the guitar synth screen:
+"only value is supposed to change the out setting".
+
+- **On the screen** (`sy_screen_event`): VALUE pressed with SHIFT held goes on to stock (MARK Function), and SHIFT's
+  release then turns no page (`shift_used`); with HOLD held it goes on to FX deep edit (the input FX's hidden settings),
+  or, with the hidden settings switched off, is taken and does nothing. VALUE alone steps OUT as before.
+- **FX deep edit's extra screens** (`FDE_SCREEN`, byte 0 of fx-deep-edit-test16's `fde` at `0x83FE36C8`; the builder
+  takes the address from that build's symbols and refuses a parent whose FX deep edit blob isn't that build's): while
+  one is up (the input FX's after HOLD + VALUE, or a BUS one whose FX screen is gone), the knobs, VALUE and SHIFT go on
+  to it, as they do for an FX screen.
+- **No EXT IN popup** (the user: "get rid of it everywhere as pad lights to tell me ext in"): an EXT SOURCE tap on the
+  Sound Generator page, the kits or the screen switches the input with no popup; EXT SOURCE's light tells.
+- **Stock's dialogs** (`DIALOG_UP`: the dialog's objects at `0x80591A10`/`14` set and the byte at `0x805922AC` set; the
+  byte alone is not enough, since the popup post `0x800D3FF0` sets it too, until the popup is built: the first
+  build's suite caught that after the EXT IN popups): SHIFT + VALUE's "Enable Skipback? (Looper will reset)" is a dialog
+  (CANCEL / OK) drawn over the page, not a view of the page and not a popup. DM-404 (`mark_rec_dm404.py dialogflag`):
+  `0x805922AC` is 1 while a dialog is up, on the main screen and the Sound Generator page, and 0 otherwise, also during
+  a popup (HIDDEN FX OFF); its objects sit at `0x80591A10`/`14` meanwhile. With the first fix alone the dialog came up
+  over the screen and stayed: the screen took VALUE's turn and press (`valuemod`). Now every event goes on while it is
+  up (SHIFT's release still clears `shift_down`).
+- **DM-404 (`valuemod`, the real firmware):** VALUE alone: OUT: DRY -> BUS 1; SHIFT + VALUE: the dialog; VALUE turned:
+  OK; VALUE pressed: the dialog gone, the screen back on SYNC LEAD, OUT: BUS 1, the main page; HOLD + VALUE (input FX
+  Bypass): nothing, OUT kept; VALUE alone: BUS 2. HOLD + VALUE with an input FX that has hidden settings was not
+  set up in DM-404 (the module's side is in the suite; FX deep edit's own checks cover the pages).
+- **DM-404 (`fxflag`):** with FILTER+DRIVE's FX screen up on the guitar synth screen, its VALUE page and REMAIN +
+  DELAY (frozen), the dialog's objects stay 0; an EXT SOURCE tap shows no popup; VALUE alone steps OUT after EXIT.
+- **Suite:** `value_mod_checks` (VALUE alone; SHIFT + VALUE; HOLD + VALUE on and off; FX deep edit's extra screen up;
+  a popup just posted is no dialog; a stock dialog up); the EXT SOURCE tap check expects no popup.
+- **Build:** `release/midi-out-test15` (APP1 `faeea5b0...b75e`, 3,239,840 bytes). **Checks:** all 582 pass.
+
 ## Chord fixes prototype (twin only, not in a build)
 
 `analysis\midi-out\playability\chordfix_eval.py` on the scratchpad copy `chordfix/sy_voice.c` (three defines), 34 chord
