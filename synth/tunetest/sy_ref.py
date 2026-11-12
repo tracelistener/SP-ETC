@@ -705,7 +705,10 @@ def host_dll():
         here = Path(__file__).resolve().parent
         srcs = [here / 'sy_voice.c', here / 'sy_voice.h', here / 'sy_voices.py',
                 here.parent / 'ram' / 'waves_v8_ram' / 'waves.c']
-        key = hashlib.sha256(b''.join(f.read_bytes() for f in srcs)).hexdigest()[:16]
+        toneset = os.environ.get('SY_TONESET')        # an audition build's tones (MIDI out test 4): its own build
+        extra = Path(toneset or here / 'sy_final.py').read_bytes()   # (the audition builds once cached theirs under
+                                                       # the plain key; MIDI out test 14: the final set's file too)
+        key = hashlib.sha256(b''.join(f.read_bytes() for f in srcs) + extra).hexdigest()[:16]
         root = here.parents[3]
         out = root / 'out' / 'syv_host' / key
         dll = out / 'syv_host.dll'

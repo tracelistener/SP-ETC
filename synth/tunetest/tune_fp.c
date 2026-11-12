@@ -10,7 +10,7 @@
  * readings count (strings ringing together read murky and made wrong low notes); a murky one counts as nothing
  * heard, so the synth lets go rather than hold or guess. A pluck going steady on another note always plays it;
  * on the note playing, only if it clicked and the level kept half of what it was, or rose 1.2 x (a thump has
- * no click). Moves stay test 2's (not in drum mode). Velocity 50..127 from the pick.
+ * no click). Moves stay test 2's (MIDI out test 4: in drum mode too, marked). Velocity 50..127 from the pick.
  *
  * One step per RX block (tune_rx in tune_test.c decides when):
  *   - the block's 64 frames (48 kHz, (L + R) / 2 of pair 0) through a 4th-order Butterworth low-pass at 1.6 kHz,
@@ -36,7 +36,9 @@
  *     string; synth test 1 heard extra notes) and the note goes on (test 2 asked this of any note, and missed
  *     new notes picked while the one before rang: synth test 3 on the unit). Without a pluck it moves
  *     (a slide, a hammer-on) once 3 analyses in a row agree on a note within 30 cents of it, never by an octave
- *     or a harmonic's interval (the tracker's own mistakes), and never in drum mode (each move would be a hit).
+ *     or a harmonic's interval (the tracker's own mistakes). MIDI out test 4: in drum mode too, marked as a move
+ *     (the word's bit 15): syn_ui strikes the kits' pads on picks only, and the MIDI out to the SG's channel
+ *     follows the moves (tests 1-3 held moves back in drum mode: each would have been a hit).
  *     It lets go once the steady note is gone and the newest 4 blocks' peak is under 0.3 x what it was at the
  *     last voiced analysis (a hand on the string), else after 12 unvoiced analyses (64 ms): a thump or a scrape
  *     spoils the analyses that span it while the string rings on (synth test 1 let go there, then started the
@@ -152,6 +154,15 @@ static inline float floor_g(const tt_t *t) {
 #define MOVE_HOLD 0.4f                   /* a move: the level now at least this x env */
 #define PLUCK_HOLD 0.25f                 /* a pluck going steady: the level now at least this x its reference */
 #define DROP 0.2f                        /* the synth lets go under this x env */
+/* Playability (a repeat picked softer than the note before: the jump and click tests miss it, 24 of 140
+ * repeated picks on the model guitar): a re-pick by a break. The synth's own note read clean BRK_PRE times,
+ * then BRK_MIN..BRK_MAX readings that are not (the pick touching the string), then clean on it again with the
+ * level at BRK_HOLD x the level follower or more: picked again, a note-on now (repeats 116 -> 132 of 140,
+ * bass lines 78 -> 80 of 92; nothing else moved). */
+#define BRK_PRE 5u
+#define BRK_MIN 4u
+#define BRK_MAX 16u
+#define BRK_HOLD 0.4f
 #define RING_MIN 0.08f                   /* a pluck over strings ringing: its reference at least this x its peak */
 #define SUB_MIN 0.2f                     /* the subtraction: what is left at least this part of the whole, */
 #define SUB_NEG 0.5f                     /* never under -this x its mean, */
@@ -264,16 +275,6 @@ static s32 round_s(float x) { return (s32)(x < 0.0f ? x - 0.5f : x + 0.5f); }
 
 static u32 ms(u32 blocks) { return (blocks * 4u + 1u) / 3u; }   /* 64 frames at 48 kHz: 4/3 ms */
 
-/* The highest peak of the newest 4 blocks (5.3 ms). */
-static float recent_peak(const tt_block_t *b, u32 blk) {
-    float m = 0.0f;
-    for (u32 k = 0; k < 4u; k++) {
-        float v = b->peaks[(blk - k) & PEAK_MASK];
-        m = v > m ? v : m;
-    }
-    return m;
-}
-
 /* A jump the tracker makes by mistake rather than a player: an octave, an octave and a fifth, two octaves... */
 static int harmonic_jump(s32 a, s32 b) {
     s32 d = a > b ? a - b : b - a;
@@ -281,13 +282,14 @@ static int harmonic_jump(s32 a, s32 b) {
 }
 
 /* The synth note for the UI task (tune_test.c's syn_ui plays it on the Sound Generator): one word, so the UI reads
- * it whole; seq << 16 | velocity << 8 | (note + 1), 0 none. A note-on bumps seq, so a new pluck of the same note
- * starts it again. */
-static void syn_send(tt_t *t, tt_block_t *b, s32 note, u32 vel) {
+ * it whole; seq << 16 | move << 15 | velocity << 8 | (note + 1), 0 none. A note-on bumps seq, so a new pluck of the
+ * same note starts it again. MIDI out test 4: move (bit 15) marks a slide or hammer-on (no pick): the kits strike
+ * on picks only. */
+static void syn_send(tt_t *t, tt_block_t *b, s32 note, u32 vel, u32 move) {
     u32 seq = t->syn >> 16;
     if (note >= 0)
         seq = (seq + 1u) & 0xFFFFu;
-    t->syn = seq << 16 | (note >= 0 ? vel << 8 | ((u32)note + 1u) : 0u);
+    t->syn = seq << 16 | (note >= 0 ? move << 15 | vel << 8 | ((u32)note + 1u) : 0u);
     b->syn_note = note;
     b->syn_sends++;
     b->move_quick = 0;                                   /* SY test 27 (a quick move sets it after) */
@@ -496,6 +498,19 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     }
     float midi = 69.0f + SEMI_PER_LN * ln(y.freq * (1.0f / 440.0f));
     s32 note = round_s(midi);
+    if (!pre) {
+        /* Playability: after a pluck over ringing strings, a plain reading of the note read just before the pluck is
+         * the ringing strings' own note or their common period (an open D chord reads D2, a barre chord its root),
+         * not the string picked: it counts as murky, unless it is the synth's own note (a re-pick). The tracker
+         * locked it and sent it as the pick's note (11 of 408 picks over held strings on the model guitar). */
+        if (b->lock_pending && b->pluck_ref >= RING_MIN * b->pick_peak && !sub && voiced && note == b->ring_note &&
+            note != b->syn_note && b->syn_note >= 0)
+            y.clean = 1.0f;
+        if (!sub) {
+            b->last_note = note;
+            b->last_voiced = voiced;
+        }
+    }
     tt_result *r = &t->res;
     begin(t);
     r->analyses++;
@@ -510,9 +525,38 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         return;
     }
     float now = win_peak(b, blk, period_blocks(y.freq), b->onset_blk + 4);   /* test 6: the level over a period */
+    const u32 clean = voiced && y.clean <= CLEAN_APER;  /* playability: a re-pick by a break (BRK_*) */
+    if (b->syn_note < 0 || b->lock_pending || b->sub_lock) {
+        b->pre_run = b->brk_run = 0;
+    } else if (clean && note == b->syn_note) {
+        const float lvl = win_peak(b, blk, period_blocks(y.freq), -0x7FFFFFFF);
+        if (b->pre_run >= BRK_PRE && b->brk_run >= BRK_MIN && b->brk_run <= BRK_MAX && lvl >= BRK_HOLD * b->env &&
+            (s32)blk - b->last_onset >= REFRACTORY) {
+            b->breaks++;                                 /* the same note again after a break, its level held */
+            b->last_onset = b->onset_blk = (s32)blk;
+            b->pluck_click = 3u;
+            b->pluck_ref = b->voiced_level;
+            b->pick_peak = lvl;
+            r->onsets++;
+            b->first_pending = 0;
+            syn_send(t, b, note, velocity(lvl), 0u);
+            b->pre_run = 0;
+        }
+        b->pre_run = b->brk_run == 0u ? b->pre_run + 1u : 1u;
+        b->brk_run = 0;
+    } else if (clean) {
+        b->pre_run = b->brk_run = 0;                     /* another note, clean: the move's business */
+    } else if (b->pre_run >= BRK_PRE) {
+        b->brk_run++;                                    /* not clean: the break */
+    } else {
+        b->pre_run = 0;
+    }
     if (voiced && y.clean <= CLEAN_APER) {               /* clean: one string (or what a pick added to several) */
         b->unvoiced = 0;
-        b->voiced_level = recent_peak(b, blk);
+        b->voiced_pb = period_blocks(y.freq);            /* playability: the level over a period of the note (was */
+        b->voiced_level = win_peak(b, blk, b->voiced_pb, -0x7FFFFFFF);   /* the newest 4 blocks: a low string's */
+                                                         /* swing within its period, E2's 9 blocks, so murky readings */
+                                                         /* after a soft pick on it read as a stopped string) */
         if (b->first_pending) {
             b->first_pending = 0;
             r->first_ms = ms((u32)age);
@@ -538,25 +582,25 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
                 if (now < PLUCK_HOLD * b->pluck_ref) {
                     b->stops++;                          /* the level fell after it: a let-go, not a pick */
                     if (b->syn_note >= 0)
-                        syn_send(t, b, -1, 0u);
+                        syn_send(t, b, -1, 0u, 0u);
                 } else if (b->pluck_click == 2u && now < SOFT_HOLD * b->pluck_ref) {
                     b->syn_strays++;                     /* SY test 25: a soft click whose level fell (a let-go's
                                                             finger leaving the fret): nothing */
                 } else if (!same || after_peak(b, blk) >= keep * b->pluck_ref) {
-                    syn_send(t, b, note, velocity(b->pick_peak));   /* a pluck went steady: the synth plays it */
+                    syn_send(t, b, note, velocity(b->pick_peak), 0u);   /* a pluck went steady: the synth plays it */
                     b->sub_lock = sub;
                     b->sub_locks += sub;
                 } else {
                     b->syn_strays++;                     /* its own note, no pick's level: a stray pluck */
                 }
-            } else if (b->syn_note >= 0 && !same && !t->drum && !b->sub_lock && b->agree >= MOVE_AGREE &&
+            } else if (b->syn_note >= 0 && !same && !b->sub_lock && b->agree >= MOVE_AGREE &&
                        r->cents <= MOVE_CENTS && r->cents >= -MOVE_CENTS && !harmonic_jump(note, b->syn_note)) {
                 if (now < MOVE_HOLD * b->env) {
                     b->blocked++;                        /* far quieter than the note: a let-go, not a slide */
                 } else {
                     const u32 quick = (s32)blk - b->old_at <= MOVE_QUICK &&   /* SY test 27: a fret change; SY */
                                       now >= QUICK_HOLD * win_peak(b, blk - QUICK_BACK, QUICK_WIN, -0x7FFFFFFF);
-                    syn_send(t, b, note, velocity(level(b, blk)));  /* test 30: the level held. The pitch moved */
+                    syn_send(t, b, note, velocity(level(b, blk)), 1u);  /* test 30: the level held. The pitch moved */
                     b->move_quick = quick;
                 }
             }
@@ -571,8 +615,9 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
         if (b->unvoiced >= RELEASE) {
             r->note = -1;
             if (b->syn_note >= 0) {
-                if (b->unvoiced >= SYN_RELEASE_LONG || recent_peak(b, blk) < SYN_DROP * b->voiced_level)
-                    syn_send(t, b, -1, 0u);              /* the string stopped: let go */
+                if (b->unvoiced >= SYN_RELEASE_LONG ||
+                    win_peak(b, blk, b->voiced_pb, -0x7FFFFFFF) < SYN_DROP * b->voiced_level)   /* playability */
+                    syn_send(t, b, -1, 0u, 0u);              /* the string stopped: let go */
                 else
                     b->syn_holds++;                      /* as loud as before: a thump, a scrape; hold on */
             }
@@ -580,7 +625,7 @@ static void decide(tt_t *t, tt_block_t *b, u32 blk) {
     }
     if (b->syn_note >= 0 && !b->lock_pending && win_peak(b, blk, LEVEL_BLOCKS, -0x7FFFFFFF) < DROP * b->env) {
         b->drops++;
-        syn_send(t, b, -1, 0u);                          /* the level fell fast: a hand stopped the string */
+        syn_send(t, b, -1, 0u, 0u);                          /* the level fell fast: a hand stopped the string */
     }
     if (b->syn_note < 0)
         b->sub_lock = 0;
@@ -596,6 +641,8 @@ u32 tune_fp_step(tt_t *t) {
         b->unvoiced = 99;
         b->syn_note = -1;
         b->old_at = -1000;                               /* SY test 27 */
+        b->voiced_pb = 4;                                /* playability */
+        b->last_note = b->ring_note = -1;
     }
     float z00 = b->z[0][0], z01 = b->z[0][1], z10 = b->z[1][0], z11 = b->z[1][1], pk = 0.0f;
     float h0 = b->zh[0], h1 = b->zh[1], e = 0.0f;
@@ -674,6 +721,7 @@ u32 tune_fp_step(tt_t *t) {
             b->first_pending = b->lock_pending = 1;
             b->agree = 0;
             copy_d(b->d_base, b->d6);                    /* test 6: what rang before it (the last analysis') */
+            b->ring_note = b->last_voiced ? b->last_note : -1;   /* playability: what rang before it */
             for (u32 j = 0; j < TT_BASE; j++)
                 b->base_x[j] = b->ring[(b->w - FRAMES / 4u - 1u - j) & RING_MASK];
             begin(t);

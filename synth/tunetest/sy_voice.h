@@ -79,6 +79,8 @@ typedef struct {
                                                        gl: test 17, a start without a pick, gliding to a new note;
                                                        duck: SY test 30, the blocks left of GLITCH's stutter (a dip) */
     float lawf;                      /* SY test 18: LAW's factor, followed block by block */
+    syv_u8 sw, sw_trig, sw_soft, sw_pad;   /* MIDI out test 10: a chord voice's next note held back a block (its
+                                              start's attack and soft flags), sw_pad unused */
 } syv_voice_t;
 
 typedef struct {

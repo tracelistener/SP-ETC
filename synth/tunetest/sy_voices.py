@@ -36,8 +36,22 @@ SAW, PULSE, TRI, SINE, SUPERSAW, SG, FM = 1, 2, 3, 4, 5, 6, 7
 LP12, BP12, HP12, LP24, LP18, SGF = 1, 2, 3, 4, 5, 6
 # P2 (CTRL 1 on the screen): what it moves, from -1 (knob 0) to +1 (knob 127), 0 as designed
 P_RESO, P_ENV, P_ATTACK, P_DETUNE, P_GLIDE, P_DUTY, P_DRIVE, P_RATE, P_MIX, P_FM, P_ENVSEL = range(1, 12)
-P2_NAMES = {P_RESO: 'RESO', P_ENV: 'ENV', P_ATTACK: 'ATTACK', P_DETUNE: 'DETUNE', P_GLIDE: 'GLIDE', P_DUTY: 'DUTY',
-            P_DRIVE: 'DRIVE', P_RATE: 'RATE', P_MIX: 'MIX', P_FM: 'FM', P_ENVSEL: 'ENV'}
+# MIDI out test 7 (the user: "can't the SG tones be reduced to one patch"): the Sound Generator as one patch, CTRL 1
+# picks its wave (32 zones), TONE its DUTY, the FILTER page's ENV its ENV preset
+P_WAVE = 12
+WAVE_NAMES = ['Sine', 'Sine1', 'Sine2', 'Cos', 'Cos1', 'Cos2', 'Saw', 'Saw+', 'Saw2', 'Tri', 'Tri2', 'Pulse',
+              'Pulse+', 'Noise1', 'Noise2', 'FM1:1', 'FM1:2', 'FM1:7', 'CZSaw', 'CZSqr', 'CZRes', 'Sync', 'Fold',
+              'Drive', 'LPSaw', 'LPSqr', 'Organ', 'Vowel', 'Table', 'Logic', 'Metal', 'Grit']
+# each wave's gain in SG SYNTH, so every wave plays at Pulse's loudness (measured on the twin: sg_wave_gains.py)
+WAVE_GAINS = [1.446, 1.447, 1.463, 1.447, 1.447, 1.468, 1.537, 3.064, 1.61, 1.775, 1.775, 1.0, 1.987, 2.105, 2.105,
+              1.573, 1.208, 1.423, 1.44, 1.276, 1.956, 1.214, 1.058, 2.022, 0.85, 1.016, 0.874, 1.75, 2.012, 0.74,
+              1.208, 0.987]   # 11-11, ENV OFF on the model lead phrase, K-weighted (BS.1770), Pulse = 1
+# SY test 34: each tone's own setting in tests 11-33 (settings files version 4 and 5): a file from them moves a
+# changed tone's old ENV / RESO to the FILTER page and sets its CTRL 1 to the middle (tune_test.c, sy_load)
+P2_BEFORE_34 = [P_ATTACK, P_ATTACK, P_ENV, P_ENV, P_ENV, P_RATE, P_ENV, P_GLIDE, P_ENV, P_RESO, P_ENV, P_DETUNE, P_FM,
+                P_FM] + [P_ENVSEL] * 6
+P2_NAMES = {P_RESO: 'RESO', P_ENV: 'ENV', P_ATTACK: 'ATTACK', P_DETUNE: 'DETUNE', P_GLIDE: 'GLIDE', P_DUTY: 'WIDTH',
+            P_DRIVE: 'DRIVE', P_RATE: 'WOBBLE', P_MIX: 'MIX', P_FM: 'FM', P_ENVSEL: 'ENV', P_WAVE: 'WAVE'}
 PRESET_NAMES = ['OFF', 'Pluck', 'Perc', 'Keys', 'Pad', 'Swell', 'Bass', 'Acid', 'Sweep', 'FPad']
 
 DEFAULTS = dict(
@@ -55,63 +69,146 @@ DEFAULTS = dict(
 # The tones (sy-voice-demos1's 20, as the user heard them; gains levelled by level_voices()).
 VOICES = [
     dict(name='POLY PAD', about='Juno-style pad: saw, pulse with slow PWM and a sub, smooth 24 dB filter, chorus II',
-         o1=SAW, o1_lev=0.8, o2=PULSE, o2_lev=0.6, lfo_pw=0.25, lfo_rate=0.45, sub=0.35, flt=LP24, cut=900,
-         keytrk=0.5, reso=0.15, fenv=1.5, fa=400, fd=1200, fs=0.4, fr=900, aa=350, ad=600, as_=0.9, ar=1000, avel=0.3,
-         chorus=2, p2=P_ATTACK),
+         o1=SAW, o1_lev=0.8, o2=PULSE, o2_lev=0.6, lfo_pw=0.25, lfo_rate=0.45, sub=0.29, flt=LP24, cut=2700,
+         keytrk=0.1, reso=0.01, fenv=1.3, fa=400, fd=21, fs=0.04, fr=900, aa=10, ad=93, as_=0.7, ar=1000, avel=0.3,
+         chorus=2, p2=P_RATE),
     dict(name='STRINGS', about='string machine: two detuned saws, gentle 12 dB filter, delayed vibrato, ensemble',
-         o1=SAW, o2=SAW, o2_cent=9, o2_lev=0.8, flt=LP12, cut=2600, keytrk=0.6, reso=0.05, aa=220, ad=400, as_=1.0,
-         ar=700, lfo_rate=5.2, lfo_delay=350, lfo_pitch=7, chorus=3, avel=0.3, p2=P_ATTACK),
+         o1=SAW, o2=SAW, o2_cent=9, o2_lev=0.8, flt=LP12, cut=4670, keytrk=0, reso=0.01, aa=220, ad=400, as_=1.0,
+         ar=2980, lfo_rate=5.2, lfo_delay=350, lfo_pitch=7, chorus=3, avel=0.3, p2=P_RATE),
     dict(name='POLY BRASS', about='Jupiter / Prophet-style brass: two detuned saws, a 24 dB filter blooming on each note',
-         o1=SAW, o2=SAW, o2_cent=-8, o2_lev=0.9, flt=LP24, cut=450, keytrk=0.6, reso=0.18, fenv=3.0, fa=70, fd=500,
-         fs=0.45, fr=300, aa=40, ad=300, as_=0.85, ar=250, fvel=0.5, chorus=1, p2=P_ENV),
+         o1=SAW, o2=SAW, o2_cent=-8, o2_lev=0.9, flt=LP24, cut=2190, keytrk=0.55, reso=0.17, fenv=3.0, fa=70, fd=580,
+         fs=0.44, fr=300, aa=8, ad=198, as_=0.9, ar=2410, fvel=0.5, chorus=1, p2=P_DRIVE),
     dict(name='ENSEMBLE', about='Polysix-style poly: saw and sub, 24 dB filter with a short pluck, ensemble',
-         o1=SAW, sub=0.4, flt=LP24, cut=1500, keytrk=0.5, reso=0.12, fenv=1.2, fa=3, fd=700, fs=0.35, aa=3, ad=900,
-         as_=0.75, ar=450, chorus=3, p2=P_ENV),
+         o1=SAW, sub=0.24, flt=LP24, cut=2180, keytrk=0.1, reso=0.09, fenv=1.8, fa=3, fd=607, fs=0.013, aa=1, ad=3790,
+         as_=0.76, ar=2810, chorus=3, p2=P_DRIVE),
     dict(name='POLY KEYS', about='Poly-800-style keys: narrow pulse and a saw an octave up, plucky filter, chorus I',
-         o1=PULSE, o1_pw=0.25, o2=SAW, o2_semi=12, o2_lev=0.5, flt=LP24, cut=1400, keytrk=0.6, reso=0.1, fenv=2.0,
-         fa=2, fd=450, fs=0.2, fr=300, aa=2, ad=1100, as_=0.35, ar=350, chorus=1, p2=P_ENV),
+         o1=PULSE, o1_pw=0.175, o2=SAW, o2_semi=12, o2_lev=0.5, flt=LP24, cut=3240, keytrk=0.37, reso=0.073, fenv=2.25,
+         fa=2, fd=453, fs=0.146, fr=300, aa=2, ad=14300, as_=0.236, ar=572, chorus=1, p2=P_DUTY),
     dict(name='VECTOR PAD', about='Wavestation-style pad: the SG FM1:2 and Table waves crossfading over a sine',
          o1=SINE, o1_lev=0.3, o2=SG, o2_wave=16, o2_duty=0.4, o2_lev=0.9, o3=SG, o3_wave=28, o3_duty=0.7, o3_lev=0.9,
          lfo_vec=1.0, lfo_rate=0.15, flt=LP12, cut=5000, keytrk=0.3, aa=700, ad=800, as_=1.0, ar=1600, chorus=3,
          half=1, voices=3, p2=P_RATE),
     dict(name='SYNC LEAD', about='Mono/Poly / MS-20-style lead: a hard-synced saw swept down on each pick, glide',
-         o1=SAW, o1_lev=0.0, o2=SAW, o2_lev=1.0, o2_sync=1, o2_semi=7, o2_penv=14, flt=LP12, cut=6000, keytrk=0.3,
-         reso=0.2, fa=1, fd=350, fs=0.0, aa=2, ad=300, as_=1.0, ar=150, mono=1, glide=35, retrig=1, lfo_rate=5.5,
-         lfo_delay=500, lfo_pitch=10, p2=P_ENV),
+         o1=SAW, o1_lev=0.0, o2=SAW, o2_lev=1.0, o2_sync=1, o2_semi=7, o2_penv=16.9, flt=LP12, cut=4470, keytrk=0.43,
+         reso=0.75, fa=1, fd=3730, fs=0.53, aa=2, ad=153, as_=1.0, ar=70, mono=1, glide=35, retrig=1, lfo_rate=5.5,
+         lfo_delay=500, lfo_pitch=10, fenv=4.5, p2=P_DRIVE),
     dict(name='LADDER LEAD', about='Minimoog-style lead: three saws (one an octave down), driven ladder, glide, vibrato',
          o1=SAW, o2=SAW, o2_cent=6, o2_lev=0.9, o3=SAW, o3_semi=-12, o3_lev=0.6, flt=LP24, cut=800, keytrk=0.8,
          reso=0.38, fenv=2.4, fa=4, fd=450, fs=0.5, fr=200, aa=3, ad=200, as_=0.95, ar=220, mono=1, glide=60, retrig=1,
-         lfo_rate=5.3, lfo_delay=450, lfo_pitch=14, drive=1.8, p2=P_GLIDE),
+         lfo_rate=5.3, lfo_delay=450, lfo_pitch=14, drive=1.8, p2=P_DRIVE),
     dict(name='FAT BASS', about='Moog-style bass: saw and a pulse an octave down, driven ladder, quick filter decay',
          o1=SAW, o2=PULSE, o2_semi=-12, o2_lev=0.7, flt=LP24, cut=300, keytrk=0.4, reso=0.22, fenv=3.2, fa=1, fd=280,
-         fs=0.15, fr=120, aa=1, ad=500, as_=0.8, ar=110, mono=1, drive=2.2, p2=P_ENV),
+         fs=0.15, fr=120, aa=1, ad=500, as_=0.8, ar=110, mono=1, drive=2.2, p2=P_DRIVE),
+    # MIDI out test 2: retrig 1 (every pick attacks; slides and hammer-ons still slide). As a legato tone (retrig 0) a
+    # pick over its ringing note slid in with no attack (a repeat: nothing) while test 33's 303 envelope had fallen to
+    # 12%: "missing notes" on the unit.
     dict(name='ACID BASS', about='303-style bass: saw through a squelchy resonant 18 dB filter, accent, slides',
-         o1=SAW, flt=LP18, cut=260, keytrk=0.5, reso=0.88, fenv=4.0, fvel=0.6, fa=0.5, fd=230, fs=0.0, fr=80, aa=1,
-         ad=1500, as_=0.85, ar=45, mono=1, glide=70, retrig=0, drive=2.5, p2=P_RESO),
+         o1=SAW, flt=LP18, cut=223, keytrk=0, reso=0.88, fenv=4.36, fvel=0.6, fa=0.5, fd=224, fs=0.0, fr=80, aa=1,
+         ad=437, as_=0.12, ar=37.5, mono=1, glide=70, retrig=1, drive=1.41, p2=P_DRIVE),
     dict(name='PUNCH BASS', about='SH-101-style bass: pulse and sub, a short filter snap', o1=PULSE, o1_pw=0.4,
          sub=0.6, flt=LP24, cut=500, keytrk=0.5, reso=0.15, fenv=2.4, fa=1, fd=190, fs=0.15, aa=1, ad=350, as_=0.65,
-         ar=90, mono=1, p2=P_ENV),
+         ar=90, mono=1, p2=P_DUTY),
     dict(name='SUPERSAW', about='JP-8000 / Virus-style supersaw: seven detuned saws, wide chorus', o1=SUPERSAW,
          uni_spread=0.55, uni_mix=0.75, flt=LP12, cut=7000, keytrk=0.2, reso=0.05, aa=12, ad=900, as_=0.9, ar=500,
          chorus=4, voices=3, p2=P_DETUNE),
     dict(name='FM PIANO', about='DX7-style electric piano: FM with a bright tine on the attack, piano-like decay',
-         o1=FM, fm_ratio=1.0, fm_index=1.6, fm_floor=0.25, fm_decay=700, fm2_ratio=14.0, fm2_index=0.35,
-         fm2_decay=40, flt=0, aa=1, ad=2600, as_=0.0, ar=350, avel=0.8, chorus=1, p2=P_FM),
+         o1=FM, fm_ratio=1.0, fm_index=4.86, fm_floor=0.38, fm_decay=661, fm2_ratio=14.0, fm2_index=0.73,
+         fm2_decay=40, flt=0, aa=1, ad=11800, as_=0.0, ar=768, avel=0.8, chorus=1, p2=P_FM),
     dict(name='FM BELL', about='FM bell an octave up: inharmonic ratio, long ring', o1=FM, fm_ratio=3.5,
-         fm_index=2.6, fm_floor=0.05, fm_decay=1100, flt=0, aa=1, ad=3500, as_=0.0, ar=1800, chorus=4, oct=1, p2=P_FM),
+         fm_index=2.03, fm_floor=0.22, fm_decay=1100, fm2_index=1.92, fm2_decay=5.33, flt=0, aa=1, ad=1980, as_=0.0,
+         ar=2810, chorus=4, oct=1, p2=P_FM),
     dict(name='SG ACID', about='the Sound Generator exactly: Saw with ENV Acid', o1=SG, o1_wave=6, flt=SGF,
          sg_preset=7, p2=P_ENVSEL),
     dict(name='SG VOWEL', about='the Sound Generator exactly: Vowel (DUTY 40) with ENV FPad', o1=SG, o1_wave=27,
          o1_duty=0.4, flt=SGF, sg_preset=9, voices=3, p2=P_ENVSEL),
-    dict(name='SG ORGAN', about='the Sound Generator exactly: Organ (DUTY 75) with ENV OFF', o1=SG, o1_wave=26,
-         o1_duty=0.75, flt=SGF, sg_preset=0, voices=4, p2=P_ENVSEL),
-    dict(name='SG CZ KEYS', about='the Sound Generator exactly: CZSaw (DUTY 60) with ENV Keys', o1=SG, o1_wave=18,
-         o1_duty=0.6, flt=SGF, sg_preset=3, p2=P_ENVSEL),
+    dict(name='SG ORGAN', about='the Sound Generator exactly: Organ (DUTY 90) with ENV OFF', o1=SG, o1_wave=26,
+         o1_duty=0.9, flt=SGF, sg_preset=0, voices=4, p2=P_ENVSEL),
+    dict(name='SG CZ KEYS', about='the Sound Generator exactly: CZSaw (DUTY 90) with ENV Keys', o1=SG, o1_wave=18,
+         o1_duty=0.9, flt=SGF, sg_preset=3, p2=P_ENVSEL),
     dict(name='SG PLUCK', about='the Sound Generator exactly: Pulse (DUTY 30) with ENV Pluck', o1=SG,
          o1_wave=11, o1_duty=0.3, flt=SGF, sg_preset=1, p2=P_ENVSEL),
     dict(name='SG FM BELL', about='the Sound Generator exactly: FM1:7 (DUTY 60) with ENV Perc', o1=SG, o1_wave=17,
          o1_duty=0.6, flt=SGF, sg_preset=2, p2=P_ENVSEL),
 ]
+# MIDI out test 4 (the user: "fill pad 16 with a tone ... shift + pad page of tones could fill 1-16"): twelve more
+# tones, 32 in all. Pads 1-15 and SHIFT + pads 1-5 keep theirs; pad 16 and SHIFT + pads 6-16 play tones 21-32
+# (SLOT_TONE). NEW_VOICES: their designs (analysis/midi-out/test4-tones).
+# The designs (analysis/midi-out/test4-tones/new_voices.py: levelled at the 20's median momentary loudness,
+# -27.92 LUFS-M; mono and dry; leads and basses mono 1 / retrig 1; only the pads swell; checked on the model
+# guitar through the twin, every knob at its ends finite):
+NEW_VOICES = [
+    # RATE: the pulse-width wobble's speed (WOBBLE: its depth too)
+    dict(name='SQUARE LEAD', about='Prophet / Oberheim-style lead: two near-square pulses a few cents apart, a slow '
+                                   'pulse-width wobble, 24 dB filter, glide',
+         o1=PULSE, o1_pw=0.44, o2=PULSE, o2_pw=0.44, o2_cent=7, o2_lev=0.8, lfo_pw=0.1, lfo_rate=0.8, flt=LP24,
+         cut=2000, keytrk=0.6, reso=0.18, fenv=1.2, fa=1, fd=400, fs=0.5, fr=200, aa=2, ad=500, as_=0.85, ar=160,
+         mono=1, retrig=1, glide=60, chorus=0, p2=P_RATE),
+    # an octave down (OCTAVE moves it from there); the 808's pitch drop is a 20 ms FM thump here (no pitch envelope on
+    # oscillator 1); DRIVE from a pure sine to a distorted 808; the 24 dB filter only for TONE (on the drive's grit)
+    dict(name='SUB BASS', about='808-style sub: a sine an octave down with a short thump, long decay, a touch of drive',
+         o1=FM, fm_ratio=1.0, fm_index=1.5, fm_floor=0.0, fm_decay=20, oct=-1, flt=LP24, cut=1000, keytrk=0.0,
+         reso=0.0, drive=1.4, aa=1, ad=2000, as_=0.55, ar=160, avel=0.5, mono=1, retrig=1, glide=70, chorus=0,
+         p2=P_DRIVE),
+    # the saws at 0.7 so DRIVE 1.5 grits it without flattening the beat (2.0 at full level: 1.9 dB of beat left)
+    dict(name='REESE BASS', about='Reese bass: two saws 13 cents apart beating slowly, driven into a dark 24 dB filter',
+         o1=SAW, o1_lev=0.7, o2=SAW, o2_cent=13, o2_lev=0.7, flt=LP24, cut=600, keytrk=0.2, reso=0.15, fenv=0.8,
+         fa=2, fd=300, fs=0.3, fr=150, drive=1.5, aa=2, ad=900, as_=0.9, ar=120, mono=1, retrig=1, glide=45,
+         chorus=0, p2=P_DRIVE),
+    # FM: the index (TONE moves it too, as on the other FM tones)
+    dict(name='FM BASS', about='DX7-style FM bass: a bright, knocking attack falling to a warm hollow tone',
+         o1=FM, fm_ratio=1.0, fm_index=5.0, fm_floor=0.3, fm_decay=120, fm2_ratio=7.0, fm2_index=1.5, fm2_decay=10,
+         flt=0, aa=1, ad=600, as_=0.55, ar=90, avel=0.7, mono=1, retrig=1, glide=30, chorus=0, p2=P_FM),
+    # an octave up; RATE: the vibrato's speed (WOBBLE: its depth too); the filter only for TONE (the triangle's edge)
+    dict(name='WHISTLE', about='G-funk whistle lead: a sine an octave up with delayed vibrato and a long glide',
+         o1=SINE, o2=TRI, o2_lev=0.12, oct=1, flt=LP12, cut=3500, keytrk=0.3, reso=0.0, aa=5, ad=800, as_=0.92,
+         ar=200, lfo_pitch=28, lfo_rate=5.6, lfo_delay=280, avel=0.5, mono=1, retrig=1, glide=60, chorus=0,
+         p2=P_RATE),
+    # WIDTH: the pulse from thin and nasal to hollow
+    dict(name='CLAV', about='Clavinet-style pluck: a narrow pulse through a band-pass that snaps shut, quick mute',
+         o1=PULSE, o1_pw=0.25, flt=BP12, cut=1300, keytrk=0.7, reso=0.2, fenv=0.7, fa=0.5, fd=120, fs=0.2, fr=60,
+         fvel=0.4, aa=0.5, ad=1100, as_=0.4, ar=50, avel=0.75, chorus=0, p2=P_DUTY),
+    # RATE: the vibraphone motor's tremolo (WOBBLE: none at the bottom, a marimba); TONE: the mallet's hardness (FM)
+    dict(name='MALLET', about='FM marimba / vibes: a woody strike on a sine, a vibraphone tremolo as it rings',
+         o1=FM, fm_ratio=1.0, fm_index=1.0, fm_floor=0.1, fm_decay=150, fm2_ratio=4.0, fm2_index=2.5, fm2_decay=22,
+         flt=0, aa=0.5, ad=1300, as_=0.0, ar=350, avel=0.75, lfo_amp=0.3, lfo_rate=4.5, lfo_delay=200, chorus=0,
+         p2=P_RATE),
+    # designed clean (drive 1: any drive aliased at the top), so DRIVE's left half does nothing (as POLY BRASS)
+    dict(name='OB PAD', about='Oberheim-style pad: two saws 16 cents apart, a resonant 12 dB filter swelling open',
+         o1=SAW, o2=SAW, o2_cent=16, o2_lev=0.9, sub=0.15, flt=LP12, cut=900, keytrk=0.35, reso=0.5, fenv=1.6,
+         fa=900, fd=2500, fs=0.45, fr=1500, aa=650, ad=1500, as_=0.9, ar=1800, avel=0.35, chorus=0, p2=P_DRIVE),
+    dict(name='BRASS STAB', about='Jupiter-style brass stab: two detuned saws, a fast 24 dB filter blat, short',
+         o1=SAW, o1_lev=0.8, o2=SAW, o2_cent=-11, o2_lev=0.75, flt=LP24, cut=900, keytrk=0.5, reso=0.22, fenv=2.5,
+         fa=12, fd=230, fs=0.12, fr=120, fvel=0.6, drive=1.3, aa=3, ad=380, as_=0.25, ar=150, avel=0.7, chorus=0,
+         p2=P_DRIVE),
+    # the dive: oscillator 2 hard-synced to a silent oscillator 1, swept from 2 octaves over the note down to 3.6
+    # semitones (held, a nasal sync edge) by the pick's filter envelope, and the rest of the way on release (o2_penv only
+    # works on a synced oscillator 2); the 12 dB filter (the ladder's input clip aliased); FILTER's ENV scales the dive
+    dict(name='HOOVER', about='rave hoover: a synced saw diving onto the note over a detuned saw and a sub, long glide',
+         o1=SAW, o1_lev=0.0, o2=SAW, o2_sync=1, o2_lev=0.65, o2_penv=24.0, o3=SAW, o3_cent=25, o3_lev=0.4, sub=0.22,
+         flt=LP12, cut=2400, keytrk=0.3, reso=0.15, fenv=1.2, fa=1, fd=500, fs=0.15, fr=350, drive=1.15, aa=2,
+         ad=600, as_=0.9, ar=250, avel=0.5, mono=1, retrig=1, glide=60, chorus=0, p2=P_DRIVE),
+    # no filter to hear (a 12 dB one wide open at 20 kHz, only so TONE still darkens it: with none TONE would move an
+    # unused FM index); WIDTH: the duty from thin to square (the NES's 12.5 / 25 / 50 %)
+    dict(name='CHIP LEAD', about='8-bit chip lead: a bare 25% pulse, organ-like gate, delayed vibrato, quick slides',
+         o1=PULSE, o1_pw=0.25, flt=LP12, cut=20000, keytrk=0.0, reso=0.3, aa=0.5, ad=1, as_=1.0, ar=25,
+         lfo_pitch=18, lfo_rate=6.5, lfo_delay=350, avel=0.3, mono=1, retrig=1, glide=25, chorus=0, p2=P_DUTY),
+    # RATE: the sweep's speed (WOBBLE: its depth too); each strum also opens the filter over 1.5 s (the pick's filter
+    # envelope, every voice's) and lets it close over 3.5 s; the LFO is each voice's own (they stayed together in the
+    # twin's pad phrases: six voices sounding, 0.001 cycle apart)
+    dict(name='SWEEP PAD', about='sweep pad: two saws and a sub through a resonant 24 dB filter that slowly opens and '
+                                 'closes (LFO)',
+         o1=SAW, o1_lev=0.6, o2=SAW, o2_cent=-9, o2_lev=0.5, sub=0.12, flt=LP24, cut=750, keytrk=0.3, reso=0.4,
+         fenv=1.6, fa=1500, fd=3500, fs=0.25, fr=2000, lfo_cut=1.4, lfo_rate=0.16, aa=350, ad=2000, as_=0.9, ar=1800,
+         avel=0.35, chorus=0, p2=P_RATE),
+]
+
+# levelled by level_new.py: each at the 20's median momentary loudness (-27.92 LUFS-M, test 34's way)
+NEW_GAINS = [0.0415, 0.0840, 0.0766, 0.0887, 0.0620, 0.2238, 0.1071, 0.0545, 0.1423, 0.0862, 0.0476, 0.0993]
+VOICES = VOICES + NEW_VOICES
+# The screen's sound slots, pads 1-16 then SHIFT + pads 1-16, and the tone each plays
+SLOT_TONE = list(range(15)) + [20] + list(range(15, 20)) + list(range(21, 32))
+assert sorted(SLOT_TONE) == list(range(len(VOICES))), 'every tone in one slot'
+TONE_SPLIT = (16, 13)                # MIDI out test 4: the table in three slots: 16, 13, the rest
 NTONES = len(VOICES)
 
 
@@ -179,11 +276,27 @@ def c_header(gains=None):
     gains = gains or VOICE_GAINS
     h = '/* Generated by sy_voices.py (SY synth test 11): band centres, the SG ENV presets, the tones. */\n'
     h += '#define SYV_PRESETS 10\n#define SYV_TONES %d\n#define SYV_VREF %sf\n' % (len(VOICES), repr(float(np.float32(VREF))))
+    h += '#define SYV_P_WAVE %d\n' % P_WAVE        # MIDI out test 7: SG SYNTH, each wave's gain
+    h += 'static const float SYV_WAVE_GAIN[32] = {' + ', '.join(_cf(g) for g in WAVE_GAINS) + '};\n'
     h += 'static const float SYV_CENTRE[49] = {' + ', '.join(_cf(c) for c in centres()) + '};\n'
     h += 'static const float SYV_PRESET[10][14] = {\n' + ',\n'.join(
         '{' + ', '.join(_cf(x) for x in row) + '}' for row in PRESETS) + '};\n'
-    h += 'static const syv_patch_t SYV_TONE[%d] = {\n' % len(VOICES)
-    h += ',\n'.join(c_patch(patch(t, g)) for t, g in zip(VOICES, gains)) + '\n};\n'
+    # MIDI out test 4: the table out of the module (it filled it: 20 x 228 bytes), in three slots of its own
+    # (.syvtone0..2, the builder's SYV_TONES0..2); sy_fp.c and the host build ask for it (SYV_WANT_TONES)
+    pats = [c_patch(patch(t, g)) for t, g in zip(VOICES, gains)]
+    n0 = min(len(pats), TONE_SPLIT[0])
+    n1 = min(len(pats) - n0, TONE_SPLIT[1])
+    n2 = len(pats) - n0 - n1
+    assert n1 > 0 and n2 > 0, 'three tables, none empty'
+    h += '#if defined(SYV_WANT_TONES)\n#ifdef SYV_HOST\n#define SYV_TONE_IN(n)\n#else\n'
+    h += '#define SYV_TONE_IN(n) __attribute__((section(".syvtone" #n)))\n#endif\n'
+    for k, (lo, n) in enumerate(((0, n0), (n0, n1), (n0 + n1, n2))):
+        h += 'static const syv_patch_t SYV_TONE%d[%d] SYV_TONE_IN(%d) = {\n' % (k, n, k)
+        h += ',\n'.join(pats[lo:lo + n]) + '\n};\n'
+    h += ('static inline const syv_patch_t *syv_tone_at(unsigned t) {\n'
+          '    return t < %du ? &SYV_TONE0[t] : t < %du ? &SYV_TONE1[t - %du] : &SYV_TONE2[t - %du];\n}\n'
+          % (n0, n0 + n1, n0, n0 + n1))
+    h += '#endif\n'
     return h
 
 
@@ -191,8 +304,20 @@ def c_names():
     """For the screen: the tones' names (16 bytes each), their CTRL 1 setting's name and kind, each one's designed
     DYNAMICS (0..100), the ENV presets' names."""
     h = '/* Generated by sy_voices.py (SY synth test 11): the names on the screen. */\n'
-    h += '#define SYV_NTONES %d\n#define SY_OFF_PAD 15u\n#define SY_OCT_ZERO 3u\n#define SY_OCTAVES 5u\n' % len(VOICES)
+    h += '#define SYV_NTONES %d\n#define SY_OCT_ZERO 3u\n#define SY_OCTAVES 5u\n' % len(VOICES)
+    h += '#define SYV_FILE_NAME "%s"\n' % FILE_NAME   # MIDI out test 4: the settings file (audition builds)
+    h += '#define SYV_SLOTS %d\n' % len(SLOT_TONE)    # MIDI out test 4: pads 1-16, SHIFT + pads 1-16
+    h += 'static const unsigned char SYV_SLOT_TONE[%d] = {' % len(SLOT_TONE)
+    h += ', '.join(str(t) for t in SLOT_TONE) + '};\n'
+    h += 'static const unsigned char SYV_TONE_SLOT[%d] = {' % len(VOICES)
+    h += ', '.join(str(SLOT_TONE.index(t)) for t in range(len(VOICES))) + '};\n'
     h += '#define SYV_P_ENVSEL %d\n' % P_ENVSEL
+    h += '#define SYV_P_WAVE %d\n' % P_WAVE         # MIDI out test 7: SG SYNTH's waves by name, each tone's DUTY
+    h += 'static const char SYV_WAVE_NAME[32][7] = {' + ', '.join('"%s"' % n for n in WAVE_NAMES) + '};\n'
+    h += 'static const unsigned char SYV_WAVE_OF[%d] = {' % len(VOICES)
+    h += ', '.join(str(dict(DEFAULTS, **t)['o1_wave']) for t in VOICES) + '};\n'
+    h += 'static const unsigned char SYV_DUTY0[%d] = {' % len(VOICES)
+    h += ', '.join(str(int(round(100 * dict(DEFAULTS, **t)['o1_duty']))) for t in VOICES) + '};\n'
     h += ('#define SYV_PK_RESO %d\n#define SYV_PK_ENV %d\n#define SYV_PK_ATTACK %d\n#define SYV_PK_GLIDE %d\n'
           % (P_RESO, P_ENV, P_ATTACK, P_GLIDE))     # SY test 32: own settings the SHAPE and FILTER pages share
     h += 'static const char SYV_NAME[%d][16] = {' % len(VOICES)
@@ -201,6 +326,9 @@ def c_names():
     h += ', '.join('"%s"' % P2_NAMES[t.get('p2', P_RESO)] for t in VOICES) + '};\n'
     h += 'static const unsigned char SYV_P2KIND[%d] = {' % len(VOICES)
     h += ', '.join(str(t.get('p2', P_RESO)) for t in VOICES) + '};\n'
+    h += 'static const unsigned char SYV_P2KIND_V5[%d] = {' % len(VOICES)   # SY test 34: the own settings before
+    h += ', '.join(str(k) for k in P2_BEFORE_34 + [t.get('p2', P_RESO) for t in VOICES[len(P2_BEFORE_34):]])
+    h += '};\n'
     h += 'static const unsigned char SYV_DYN_DESIGN[%d] = {' % len(VOICES)
     h += ', '.join(str(int(round(100 * dict(DEFAULTS, **t)['avel']))) for t in VOICES) + '};\n'
     h += 'static const unsigned char SYV_PRESET_OF[%d] = {' % len(VOICES)
@@ -250,6 +378,7 @@ def build_host(out_dir, zig, gains=None):
     (out / 'syv_tables.h').write_text(c_header(gains), encoding='ascii', newline='\n')
     shim = out / 'syv_host.c'
     shim.write_text(f'''#define SYV_HOST 1
+#define SYV_WANT_TONES 1
 #include <xmmintrin.h>
 #include "{(HERE / 'sy_voice.c').as_posix()}"
 __declspec(dllexport) float syv_block_host(syv_state_t *s, const syv_patch_t *p, const syv_knobs_t *k,
@@ -265,7 +394,7 @@ __declspec(dllexport) float syv_block_host(syv_state_t *s, const syv_patch_t *p,
 __declspec(dllexport) void syv_reset_host(syv_state_t *s) {{ syv_reset(s); }}
 __declspec(dllexport) unsigned syv_state_bytes(void) {{ return sizeof(syv_state_t); }}
 __declspec(dllexport) unsigned syv_patch_bytes(void) {{ return sizeof(syv_patch_t); }}
-__declspec(dllexport) const syv_patch_t *syv_tone(unsigned i) {{ return &SYV_TONE[i]; }}
+__declspec(dllexport) const syv_patch_t *syv_tone(unsigned i) {{ return syv_tone_at(i); }}
 __declspec(dllexport) unsigned syv_cost(const syv_state_t *s) {{ return s->cost; }}
 ''', encoding='ascii', newline='\n')
     waves = SYNTH / 'ram' / 'waves_v8_ram'
@@ -350,4 +479,30 @@ VREF = 0.0908                        # a full pick's band level (the demo phrase
 # level_voices (session scratchpad sy10/level11.py): each tone's RMS on its demo phrase at the old SAW LEAD's on the
 # lead phrase (-17.7 dB of the clip), its peak before the soft clip at most 0.9 (FM PIANO, SG PLUCK, SG FM BELL);
 # levelled again on test 11's final engine (4 voices, the block passes)
-VOICE_GAINS = [0.1799, 0.1072, 0.1259, 0.1349, 0.1778, 0.1216, 0.1778, 0.1318, 0.1799, 0.1905, 0.195, 0.2042, 0.2362, 0.1622, 0.1585, 0.166, 0.0507, 0.1622, 0.2695, 0.2222]
+# SY test 34: every tone 6 dB down (resampled to a pad the synth was at full scale: a hard strum at the soft clip),
+# SG ORGAN and SG CZ KEYS (new DUTY / ENV) at the others' median loudness (momentary, K-weighted, E2..E4): a hard
+# six-string strum now peaks near -7..-11 dBFS on the DRY stem (SG PLUCK's attack -4.5), one note -12..-25
+VOICE_GAINS = [0.1231, 0.0526, 0.0597, 0.0688, 0.0869, 0.0609, 0.0848, 0.0661, 0.0902, 0.1896, 0.0977, 0.1023, 0.0789, 0.086, 0.0794, 0.0832, 0.0222, 0.0839, 0.1351, 0.1114]
+VOICE_GAINS = VOICE_GAINS + NEW_GAINS   # MIDI out test 4: the 12 new tones
+
+# MIDI out test 4's audition builds (the user: "split into a test app1 with leads/bass and test app1 with chords"):
+# SY_TONESET names a Python file whose VOICES (32 dicts), VOICE_GAINS and SLOT_TONE replace these, and FILE_NAME the
+# settings file's, so a build can carry another set of 32 tones without touching this table. Unset: test 4's.
+# MIDI out test 7: the six Sound Generator sounds (SG ACID .. SG FM BELL) as one: WAVE on CTRL 1, DUTY on TONE, the
+# ENV preset on the FILTER page's ENV; as designed, SG PLUCK (Pulse, DUTY 30, ENV Pluck)
+SG_SYNTH = dict(name='SG SYNTH', about='the Sound Generator as one patch: WAVE on CTRL 1, DUTY on TONE, the ENV '
+                'preset on the FILTER page (as designed Pulse, DUTY 30, ENV Pluck)', o1=SG, o1_wave=11, o1_duty=0.3,
+                flt=SGF, sg_preset=1, p2=P_WAVE)
+
+# MIDI out test 14: test 4's 32 above stay as the pool the audition builds were drawn from (POOL_*, read by
+# analysis/midi-out/candidates/make_tonesets.py and make_final.py). The build plays the user's final 32, sy_final.py
+# (written by make_final.py, with its own settings file), or the set SY_TONESET names.
+POOL_VOICES, POOL_GAINS, POOL_SLOT_TONE = VOICES, VOICE_GAINS, SLOT_TONE
+FILE_NAME = 'B:/_sy_tones.bin'
+_set = __import__('os').environ.get('SY_TONESET') or str(HERE / 'sy_final.py')
+_ns = {'__file__': _set, '__name__': 'toneset'}
+exec(compile(Path(_set).read_text(encoding='utf-8'), _set, 'exec'), _ns)
+VOICES, VOICE_GAINS, SLOT_TONE = _ns['VOICES'], _ns['VOICE_GAINS'], _ns['SLOT_TONE']
+FILE_NAME = _ns.get('FILE_NAME', FILE_NAME)
+assert len(VOICES) == len(VOICE_GAINS) == 32 and sorted(SLOT_TONE) == list(range(32)), 'a toneset of 32'
+NTONES = len(VOICES)

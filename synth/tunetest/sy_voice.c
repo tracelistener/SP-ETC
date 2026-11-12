@@ -195,8 +195,9 @@ SYV_DATA static float syv_exp2(float x) {
     return p * q.v;
 }
 
-/* log2(x), x > 0: the exponent, and log2 of the mantissa m in [1, 2) through t = (m - 1) / (m + 1) (error ~2e-5) */
-SYV_DATA static float syv_log2(float x) {
+/* log2(x), x > 0: the exponent, and log2 of the mantissa m in [1, 2) through t = (m - 1) / (m + 1) (error ~2e-5).
+ * MIDI out test 7: in the more slot (SG SYNTH's lines left the constants' slot 208 bytes short) */
+SYV_MORE static float syv_log2(float x) {
     union {
         float v;
         u32 u;
@@ -458,7 +459,7 @@ SYV_NOTES static void shape(syv_state_t *s, const syv_patch_t *t, syv_patch_t *p
         if (p->flt == 6u) s->pre[3] = r;
     }
     if (k->gli) p->glide = k->gli == 0xFFFFu ? 0.0f : pole_ms(2.3f / 48.0f, k->gli);
-    if (k->env && t->p2kind != SYV_P_ENV) {
+    if (k->env && t->p2kind != SYV_P_ENV && t->p2kind != SYV_P_WAVE) {   /* (SG SYNTH: its ENV preset, knobs) */
         const float c = (float)k->env * (1.0f / 64.0f);
         if (p->fenv > 0.0f || p->penv > 0.0f) {
             p->fenv = p->fenv * (1.0f + c);
@@ -481,16 +482,26 @@ SYV_DATA static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs
     if (t->p2kind == SYV_P_ENVSEL && k->p2) {           /* the ENV preset itself: ten zones over the knob */
         s32 z = ((64 + (s32)k->p2) * 10) >> 7;
         preset = (u32)(z < 0 ? 0 : z > 9 ? 9 : z);
+    } else if (t->p2kind == SYV_P_WAVE && k->env) {     /* MIDI out test 7, SG SYNTH: the ENV preset on the FILTER */
+        s32 z = ((64 + (s32)k->env) * 10) >> 7;         /*   page's ENV, ten zones */
+        preset = (u32)(z < 0 ? 0 : z > 9 ? 9 : z);
     }
     if (preset >= SYV_PRESETS) preset = 0;
     p->preset = (u8)preset;
     for (u32 i = 0; i < 14u; i++)
         s->pre[i] = SYV_PRESET[preset][i];
+    if (t->p2kind == SYV_P_WAVE) {                      /* MIDI out test 7, SG SYNTH: the wave on CTRL 1 (32 zones), */
+        if (k->p2) {                                    /*   at Pulse's loudness */
+            s32 z = ((64 + (s32)k->p2) * 32) >> 7;
+            p->wave[0] = (u8)(z < 0 ? 0 : z > 31 ? 31 : z);
+        }
+        p->gain = p->gain * SYV_WAVE_GAIN[p->wave[0] & 31u];
+    }
     if (k->tone) {
         if (p->flt >= 1u && p->flt <= 5u) {
             p->cut = p->cut * syv_exp2(2.0f * ct);
         } else if (p->flt == 6u) {
-            if (s->pre[13] > 0.0f) p->p2base = 2.0f * ct;
+            if (s->pre[13] > 0.0f && t->p2kind != SYV_P_WAVE) p->p2base = 2.0f * ct;   /* (SG SYNTH: TONE is DUTY) */
             else p->duty[0] = clampf(p->duty[0] + 0.5f * ct, 0.0f, 1.0f);
         } else {
             float g = syv_exp2(ct);
@@ -507,12 +518,33 @@ SYV_DATA static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs
             p->penv = p->penv * (1.0f + c2);
             break;
         case SYV_P_DETUNE: p->spread = p->spread * syv_exp2(1.5f * c2); break;
-        case SYV_P_DUTY:                               /* SY test 32: ATTACK and GLIDE are the SHAPE page's (shape) */
+        /* MIDI out test 4 (the user: "RATE, WIDTH or DRIVE very subtle"): each now sweeps something you hear, the middle
+         * as designed. WIDTH: the pulse from thin (5%) at the left to square (50%, hollow) at the right (tests 11-34:
+         * +-45%, which passed square and came back); DRIVE: clean (1) at the left to 16 x at the right (tests 11-34: x0.35
+         * .. x2.8, never under 1, so the left half did nothing on most tones); RATE is WOBBLE: the LFO's depth with its
+         * speed, still (no depth, x0.35 the speed) at the left to 6 x the depth at 2.8 x the speed at the right (tests
+         * 11-34: the speed alone, of a 7-cent vibrato or a gentle pulse sweep). */
+        case SYV_P_DUTY: {                             /* SY test 32: ATTACK and GLIDE are the SHAPE page's (shape) */
             p->duty[0] = clampf(p->duty[0] + 0.5f * c2, 0.0f, 1.0f);
-            p->pw[0] = clampf(p->pw[0] + 0.45f * c2, 0.05f, 0.95f);
+            const float pw = clampf(p->pw[0], 0.05f, 0.5f);
+            p->pw[0] = c2 < 0.0f ? pw + (pw - 0.05f) * c2 : pw + (0.5f - pw) * c2;
             break;
-        case SYV_P_DRIVE: p->drive = maxf(1.0f, p->drive * syv_exp2(1.5f * c2)); break;
-        case SYV_P_RATE: p->lfo_inc = p->lfo_inc * syv_exp2(2.0f * c2); break;
+        }
+        case SYV_P_DRIVE: {
+            const float d = maxf(1.0f, p->drive);
+            p->drive = c2 < 0.0f ? 1.0f + (d - 1.0f) * (1.0f + c2) : minf(16.0f, d * syv_exp2(4.0f * c2));
+            break;
+        }
+        case SYV_P_RATE: {
+            const float depth = c2 < 0.0f ? 1.0f + c2 : 1.0f + 5.0f * c2;
+            p->lfo_inc = p->lfo_inc * syv_exp2(1.5f * c2);
+            p->lfo_pitch = p->lfo_pitch * depth;
+            p->lfo_pw = p->lfo_pw * depth;
+            p->lfo_cut = p->lfo_cut * depth;
+            p->lfo_amp = minf(1.0f, p->lfo_amp * depth);
+            p->lfo_vec = minf(1.0f, p->lfo_vec * depth);
+            break;
+        }
         case SYV_P_MIX: p->mix = clampf(p->mix + 0.5f * c2, 0.0f, 1.0f); break;
         case SYV_P_FM:
             p->fm_index = p->fm_index * (1.0f + c2);
@@ -539,7 +571,10 @@ SYV_DATA static void knobs(syv_state_t *s, const syv_patch_t *t, const syv_knobs
         p->mono = 0;
         p->flags = (u8)((p->flags & 0xF0u) | (k->voices < SYV_NV ? k->voices : SYV_NV));
     }
-}
+    if (t->p2kind == SYV_P_WAVE && p->wave[0] >= 24u && p->wave[0] <= 27u &&   /* MIDI out test 7: SG SYNTH's heavy */
+        ((p->flags & 0x0Fu) == 0u || (p->flags & 0x0Fu) > 3u))                 /*   waves (LPSaw, LPSqr, Organ, */
+        p->flags = (u8)((p->flags & 0xF0u) | 3u);                               /*   Vowel) at 3 voices at most, as */
+}                                                                               /*   SG VOWEL had */
 
 /* ---- notes ---- */
 
@@ -741,6 +776,14 @@ static inline u32 over_struck(const u8 *struck, const float *e, s32 k) {
            (k >= 24 && struck[k - 24] && e[k - 24] >= f);
 }
 
+/* Playability (the audition builds: "if i fret a bar anywhere and play notes after another some are missing"): a band
+ * with a struck peak: the analysis saw its energy double lately (struck) and it is at least its neighbours': a
+ * partial of a string just picked. Over ringing strings a tracker's reading whose band has one is the picked note
+ * 5 times in 6 on the model guitar, one without 1 time in 6. */
+static inline u32 y_peak(const u8 *struck, const float *e, s32 k) {
+    return struck[k] && (k == 0 || e[k] >= e[k - 1]) && (k == SYV_BANDS - 1 || e[k] >= e[k + 1]);
+}
+
 /* SY test 19: a mono note the SG tracker (YIN) found (its pluck's first voiced analysis): on band k from this block,
  * with an attack. Its band may not sound yet (a low string's sounds 21-31 ms after the pluck on the user's take, YIN
  * reads it at 17-19 ms): it waits for it (ypend) at the band's centre and the loudest band's level. */
@@ -809,6 +852,7 @@ SYV_MORE static void bands_mono(syv_state_t *s, const syv_patch_t *p, const floa
     if (!yrun || kn->ysince > Y_WIN) s->yowe = 0;
     u8 on[SYV_BANDS], onm[SYV_BANDS], onf[SYV_BANDS];
     float lm = 0.0f;
+    u32 ringctx = 0;                                   /* playability: another string rang through the pluck */
     /* SY test 19: with the tracker's notes a note follows its partial (a bend) only from the tracker's note up (a
      * string bends up from its fret, and back): below it is a let-go's lower fret (the tracker sees the level fall
      * and keeps its note) or a slide down (the tracker's move brings it) */
@@ -818,6 +862,7 @@ SYV_MORE static void bands_mono(syv_state_t *s, const syv_patch_t *p, const floa
         onm[k] = on[k] && tg[k] >= mv;                 /* SY test 19: the bands a note may move on to */
         onf[k] = onm[k] && (s32)k >= yfloor;           /*   and follow its partial to */
         if (tg[k] > lm) lm = tg[k];
+        if (on[k] && (s32)k != n->band && (u32)s->run[k] > (u32)kn->ysince + 1u) ringctx = 1;
     }
     /* SY test 24 (the user: SENS "not much difference", wanted more): the tracker's notes start only when the playing
      * is at least SENS x its held peak (a pick softer than that, a ghost or a scrape, starts none; over a note it
@@ -857,7 +902,11 @@ SYV_MORE static void bands_mono(syv_state_t *s, const syv_patch_t *p, const floa
                  * ends it), the note goes on through its band's gap (a repeated A2 split into G#2 and A#2: the note
                  * ended after Y_RIDE while every reading was A2, and the next pick read the ringing A2 as new) */
                 const u32 yheld = yrun && kn->ysyn == (u32)(n->band + 41);
-                if ((n->young && !yrun) || n->ypend || (n->off > OFF_MAX && !ride && !yride && !yheld)) {
+                /* Playability: a tracker's note still waiting for its band (ypend) goes on too while the tracker
+                 * holds that very note: its band can stay silent for good (FUND mutes a string an octave or a
+                 * twelfth over one that rings: E3 picked over a ringing E2 attacked, then ended 53 ms after its
+                 * last clean reading; 31 of 408 picks over held strings on the model guitar) */
+                if ((n->young && !yrun) || (n->ypend && !yheld) || (n->off > OFF_MAX && !ride && !yride && !yheld)) {
                     n->gate = 0;
                     n->ypend = 0;
                     n->rel = blk;
@@ -933,24 +982,41 @@ SYV_MORE static void bands_mono(syv_state_t *s, const syv_patch_t *p, const floa
                         s->yowe = 0;
                         s->yact = 2;
                     } else if ((yv != s->yold || kn->ysince >= Y_OLD) &&   /* SY test 20: not the string before; */
+                               /* playability: nor any band that rang through the pluck, not struck since (a note
+                                * the tracker let go long ago, its string still ringing: its clean reading in the
+                                * pluck's own block started it again, the picked note slid in 30 ms later) */
+                               !(kn->ysince < Y_OLD && on[k] && (u32)s->run[k] > (u32)kn->ysince + 1u && !struck[k]) &&
                                (kn->ysince >= Y_EARLY || clean || twice)) {   /* SY test 30: nor the pick's noise */
                         y_start(n, k, tg, rc, e, blk, lm);
                         s->yowe = 0;
                         s->yact = 1;
                     }
-                } else if (d != 0 && (twice || (clean && !y_odd(d)))) {
+                } else if (d != 0) {
                     /* SY test 32: a murky reading 5+ semitones under the note, its band silent, is the old and the
-                     * new string read together as a low note (the model's 16th notes started E2 for 5-20 ms): the
-                     * attack comes now as before, on the note sounding; the next clean reading, or one whose band
-                     * sounds, moves it there (yact 3). On the model guitar no attack moved; far-off starts 8 -> 0. */
-                    const u32 mlow = !clean && !on[k] && d <= -5;
-                    if (p->retrig && yloud) {
-                        y_start(n, mlow ? n->band : k, tg, rc, e, blk, lm);
-                    } else if (!mlow) {                /* a legato tone: the pitch moves (glide), no attack */
-                        y_move(n, k, on, tg, rc, e, blk);
+                     * new string read together as a low note. MIDI out test 3: such a reading starts nothing (mlow);
+                     * the pluck still owes its attack, and the next reading read twice (or the tracker's note-on)
+                     * makes it on the note picked.
+                     * Playability: over ringing strings the tracker's readings wander before they settle (the
+                     * strings' common period, low and murky; the subtraction's first tries: C#5, C5, B4, then D3),
+                     * and the attack went to the first one read twice: of 408 picks over held strings on the model
+                     * guitar 41 began with a blip on another note and 39 attacked another note. Now:
+                     * - a murky reading of a band that rang through the pluck and has not been struck since (mring)
+                     *   is a string still ringing, not the one picked: it starts nothing either;
+                     * - a reading whose band has a struck peak (conf) attacks at once, clean or not, a fourth or a
+                     *   fifth off too;
+                     * - a clean reading read once waits for the next while other strings ring (ringctx). */
+                    const u32 conf = y_peak(struck, e, k);
+                    const u32 mring = !clean && on[k] && (u32)s->run[k] > (u32)kn->ysince + 1u && !struck[k];
+                    const u32 mlow = !conf && ((!clean && !on[k] && d <= -5) || mring);
+                    if (!mlow && (conf || twice || (clean && !y_odd(d) && !ringctx))) {
+                        if (p->retrig && yloud) {
+                            y_start(n, k, tg, rc, e, blk, lm);
+                        } else {                       /* a legato tone: the pitch moves (glide), no attack */
+                            y_move(n, k, on, tg, rc, e, blk);
+                        }
+                        s->yowe = 0;
+                        s->yact = 1;
                     }
-                    s->yowe = 0;
-                    s->yact = mlow ? 3u : 1u;
                 }
             } else if (s->yact == 3u && sounding && d != 0 && (clean || on[k])) {
                 y_move(n, k, on, tg, rc, e, blk);      /* SY test 32: the pitch the murky reading hid, no second attack */
@@ -1274,6 +1340,13 @@ SYV_MORE static void t11_poly(syv_state_t *s, const float *tg, const float *rc, 
 #define G_DUCK 5u
 static const signed char G_WRONG[4] = {12, -12, 19, 7};
 static const float DUCK[G_DUCK + 1u] = {1.0f, 0.7f, 0.4f, 0.1f, 0.45f, 1.0f};   /* the dip's level with [i] blocks left */
+/* Playability: a single-note tone picked again while its note still sounds at R_FROM of its level or more (a held
+ * tone: SUSTAIN near full, a slow decay) has no attack to hear: the pick's envelope starts again from where it is
+ * (MARS LEAD: 1 of 102 repeated picks stood out 6 dB in the output; WHISTLE 30, SH-101 LEAD 41). The voice's level
+ * dips for R_DUCK blocks (4 ms: down a block, held, back a block) so the pick is heard, as a key lifted and pressed. */
+#define R_DUCK 3u
+#define R_FROM 0.5f
+static const float RDUCK[R_DUCK + 1u] = {1.0f, 0.25f, 0.25f, 1.0f};   /* its level with [i] blocks left */
 
 SYV_MORE static u32 g_rand(syv_state_t *s) {
     s->rng = s->rng * 1664525u + 1013904223u;
@@ -1540,6 +1613,7 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
     float *buf = s->buf;
     u32 n_on = 0;
     float *gab = s->gab, *gfb = s->gfb;
+    const float ga_in = s->ga;                         /* playability: the pick's amp envelope before this block */
     {                                                  /* SY test 17: the pick's envelopes, every voice's */
         u32 st = s->gastg, fst = s->gfstg;
         float ga = s->ga, gf = s->gf;
@@ -1586,10 +1660,35 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
     }
     for (u32 v = 0; v < SYV_NV; v++) {                 /* SY test 25: all (over the cap: no gate, a quick release) */
         syv_voice_t *x = &s->v[v];
+        /* MIDI out test 10 (the chord test: a chord voice handed another note switched its pitch at once, at full
+         * level, 13.5 times a second on the model guitar's strums: the user's "glitchy artifacts"): a sounding chord
+         * voice given a note half a semitone or more off its own (a start), or its band's pitch jumping a semitone or
+         * more in a block, fades out over this block on its old pitch and starts the new note the next block from
+         * silence (sw). Single-note tones as before. */
+        u32 st_trig = c->trig[v], st_soft = c->soft[v], sw_out = 0, sw_in = 0;
+        if (x->sw) {                                   /* the start held back: now, from silence */
+            st_trig = x->sw_trig;
+            st_soft = x->sw_soft;
+            x->sw = 0;
+            sw_in = 1;
+            if (!st_trig && !st_soft && c->freq[v] > 0.0f) x->f = c->freq[v];   /* a pitch-only switch */
+        } else if (!p->mono && x->active && (x->astg != 4u || x->aenv > 0.05f) && x->lit && c->trig[v] != 2u &&
+                   c->freq[v] > 0.0f && !c->glide[v] &&
+                   ((st_trig || st_soft) ? absf(c->freq[v] - x->f) > 0.03f * x->f
+                                         : absf(c->freq[v] - x->f) > 0.06f * x->f)) {
+            x->sw = 1;                                 /* out first, on its pitch */
+            x->sw_trig = (u8)st_trig;
+            x->sw_soft = (u8)st_soft;
+            st_trig = 0;
+            st_soft = 0;
+            sw_out = 1;
+        }
         if (c->trig[v] == 2u && x->active) {
             x->duck = G_DUCK;                           /* SY test 30: GLITCH's stutter: a dip (tests 26-29: its level
                                                            to zero at once and a new attack, a pop) */
-        } else if (c->trig[v] || c->soft[v] || (s->guard && c->gate[v] > 0.0f && !x->active)) {   /* test 17: soft too */
+        } else if (st_trig || st_soft || (s->guard && c->gate[v] > 0.0f && !x->active)) {   /* test 17: soft too */
+            const u32 was_on = x->active && x->astg != 4u;   /* playability: sounding when this start came */
+            const float m1_was = x->m1, m2_was = x->m2;     /* MIDI out test 10 */
             x->astg = 1;
             x->fstg = 1;
             x->t = 0.0f;
@@ -1606,18 +1705,25 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
                 x->lawf = c->law[v];                    /* test 18 */
                 x->lit = 0;                             /* test 16: not rendered yet */
             }
-            x->soft = c->soft[v];                       /* test 17: no pick: its gate rises gently, its strike spent */
-            if (x->soft) {
+            x->soft = (u8)st_soft;                      /* test 17: no pick: its gate rises gently, its strike spent */
+            if (x->soft && was_on && !p->mono) {        /* MIDI out test 10: a sounding chord voice keeps its FM */
+                x->m1 = m1_was;                         /*   brightness (zeroed at once: a click, FM CHORUS EP 15 */
+                x->m2 = m2_was;                         /*   times in the chord test) */
+            } else if (x->soft) {
                 x->m1 = 0.0f;
                 x->m2 = 0.0f;
             }
             x->gl = 0;
             x->duck = 0;                                /* SY test 30 */
+            if (was_on && c->trig[v] == 1u && s->ymono && p->mono && ga_in >= R_FROM)
+                x->duck = (u8)(0x80u | R_DUCK);         /* playability: a re-pick's dip (0x80: not the stutter's) */
             x->active = 1;
         } else if (s->guard && c->gate[v] > 0.0f && x->astg == 4u) {   /* test 15: GUARD: back after a gap, no attack */
             x->astg = 1;
         }
-        if (s->pick && x->active && !(s->ymono && p->mono)) {   /* test 17: the pick strikes every voice (FM) */
+        if (s->pick && x->active && !s->ymono && p->mono) {   /* test 17: the pick strikes every voice (FM); MIDI
+                                                                 out test 10: chord tones only the voices it starts
+                                                                 (every ringing FM voice re-struck: clicks) */
             x->m1 = 1.0f;
             x->m2 = 1.0f;
         }
@@ -1636,7 +1742,7 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
         n_on++;
         if (c->vel[v] > x->vel) x->vel = c->vel[v];
         /* the block's pitch (glide), LFO, confidence and level */
-        const float ft = c->freq[v] > 0.0f ? c->freq[v] : x->f;
+        const float ft = sw_out ? x->f : c->freq[v] > 0.0f ? c->freq[v] : x->f;   /* test 10: out on the old pitch */
         if (c->glide[v]) x->gl = 1;                    /* test 17: glide only to a new note (mono's legato) */
         float f1 = ft;
         if (x->gl && g64 > 0.0f) {
@@ -1656,6 +1762,13 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
         const float lvl = vs * (1.0f + p->lfo_amp * lfo);
         float k0 = lvl * ((1.0f - p->follow) + p->follow * x->lev) * x->conf * x->lawf;
         float k1 = lvl * ((1.0f - p->follow) + p->follow * lev1) * conf1 * law1;
+        if (x->duck & 0x80u) {                         /* playability: a re-pick's dip */
+            u32 dq = x->duck & 0x7Fu;
+            k0 = k0 * RDUCK[dq];
+            dq--;
+            k1 = k1 * RDUCK[dq];
+            x->duck = (u8)(dq ? (0x80u | dq) : 0u);
+        } else
         if (x->duck) {                                 /* SY test 30: GLITCH's stutter, a dip: the level down and back */
             k0 = k0 * DUCK[x->duck];                   /*   in straight lines, a block each */
             x->duck--;
@@ -1666,6 +1779,8 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
             k1 = k1 * s->f_duck[v];
         }
         s->f_g[v] = s->f_on ? s->f_duck[v] : 1.0f;
+        if (sw_out) k1 = 0.0f;                          /* MIDI out test 10: down over the block, up from silence */
+        if (sw_in) k0 = 0.0f;
         const float cr = x->fast ? crf : (flt == 6u ? pr[3] : p->ar);
         const float pitch = 1.0f + p->lfo_pitch * lfo;
         const float fb = x->f * p->octm * pitch, fe_ = f1 * p->octm * pitch;   /* the block's start and end pitch */
@@ -1894,9 +2009,9 @@ SYV_TEXT static u32 render(syv_state_t *s, const syv_patch_t *p, const ctl_t *c,
     return n_on;
 }
 
-/* ---- the output: a DC blocker, the gain, the soft clip, the fade, the scale ---- */
+/* ---- the output: a DC blocker, the gain, the soft clip, the fade, the scale (MIDI out test 7: in the more slot) ---- */
 
-SYV_DATA static float output(syv_state_t *s, const float *acc, float gain, float mg, float mgt, float fade,
+SYV_MORE static float output(syv_state_t *s, const float *acc, float gain, float mg, float mgt, float fade,
                              float scale, s32 *out) {
     float xm1 = s->dcx, ym1 = s->dcy;
     for (u32 i = 0; i < SYV_FRAMES; i++) {

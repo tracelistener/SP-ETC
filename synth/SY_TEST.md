@@ -1517,6 +1517,589 @@ set; ptrk.py, floors.py, timing.py, blips.py, render.py, demos32m.py) and `chord
   `sy_voice.c` while it worked. `sy32_checks`' "unlike as designed" caught it (no block differed); this build has them.
   All 428 checks pass on `release/sy-synth-test32` (APP1 `1a341f9b…2d90`, 3,229,296 bytes).
 
+## SY synth test 33 (sy-synth-test33): the style tones measured against the originals
+
+The user asked whether the 14 "style" tones are accurate emulations. They had been designed by recipe and by ear and
+never measured. Test 33 is test 32 with nine of them moved towards the instruments they are named after. Values only:
+no code changed, so the module's work per voice is unchanged.
+
+- **References** (installed plugins in pedalboard 0.9.26, mono, effects off; the octave matched to ours):
+  - JUNO-106 factory patches "PD Juno Warm Pad" (POLY PAD), "1984 Dark Pluck" (ENSEMBLE: no Polysix here) and
+    "1984 E Piano" (POLY KEYS: no Poly-800).
+  - JUPITER-8 "1981 Hi Strings", "1981 Hi Brass" and "1981 Cars Sync".
+  - The TB-303 as it loads.
+  - Dexed with the DX7 ROM1A cartridge: "E.PIANO 1" and "TUB BELLS".
+  - Not usable: the Wavestation ("Softwaves" keeps its own effects); a Minimoog (the UA plugin is silent in a script
+    host; the Odyssey and SH-2 stand-ins were set by hand, so they are no target); a JP-8000 (none here).
+  - The Roland patches were read from each plugin's bank (`Patch/1 Preset.bin`: the value of address a at offset 12 + a,
+    as nibble pairs) and set through its controls on a fresh instance, because a saved state written from outside is
+    ignored. These plugins also start with a note held, and their LFO amounts are centred at 128.
+- **Our side:** the voices given exact notes at a steady level (a direct entry into `sy_voice.c`, no bands or
+  tracker), like a plugin fed MIDI. The guitar path adds tracking and LAW, which aren't the tone.
+- **Measured** on E2 A2 E3 A3 E4, each held 1 s: harmonic levels, the third-octave spectrum, the spectral centroid
+  over the note, the level over the first 300 ms, decay / sustain / release, glide and vibrato.
+- **The fit** (Powell) moved only existing values: cutoff, key tracking, resonance, filter envelope, envelope times, the
+  sub, pulse width, the sync sweep, FM depths. Attacks only got faster, and the oscillator mix stayed as designed.
+  Three fits were overridden by judgment:
+  - ACID BASS keeps reso 0.88: the 303 shows a +9-15 dB peak, ours a like one, but the harmonics average traded it away.
+  - POLY PAD keeps its release: the Juno's tail outlasts the window.
+  - FM PIANO decays to nothing: E.PIANO 1 fades over many seconds and never sustains.
+- **Distance before -> after** (lower is closer): POLY PAD 27 -> 16, STRINGS 22 -> 15, POLY BRASS 35 -> 8, ENSEMBLE
+  25 -> 16, POLY KEYS 25 -> 12, SYNC LEAD 20 -> 8, ACID BASS 31 -> 11, FM PIANO 34 -> 9, FM BELL 16 -> 8.
+  The gains are matched to the old loudness, each tone's loudest 100 ms, with peaks under 0.9.
+- **Found:** every tone's release sounds half its designed time, because the voice's fade (`cr = p->ar`) and the pick
+  envelope's release both run at once and multiply. The new `ar` values are fitted on that behaviour; halve them if
+  it changes. SHAPE's RELEASE shows the designed value.
+- **CPU:** FM BELL now runs its second modulator for about 50 ms after each pick, as FM PIANO already does, so its
+  worst block is FM PIANO's. Host timing is unchanged or within 6 % elsewhere.
+- **Report and demos:** `E:\Claude\sy32_demos\emulations\README.md`, with before / after / reference WAVs.
+
+## SY synth test 34 (sy-synth-test34): quieter, no knob twice, the organ and CZ keys
+
+Test 33 on the unit: "tracking works well. no obvious missed notes or extra notes". The user also reported:
+- some tones have the same parameter on two pages;
+- SG CZ KEYS (lower octaves) and SG ORGAN "sounded like plain guitar tone (even had guitar on isolator)";
+- glide only works on slides;
+- "levels are too high because if i sample to pad it is max".
+
+- **Own settings:** ten tones' CTRL 1 was a SHAPE or FILTER setting, shared with that page since test 32 (ATTACK,
+  GLIDE, ENV, RESO). It is now one of their own:
+  - RATE: POLY PAD (its PWM's speed) and STRINGS (vibrato).
+  - WIDTH: POLY KEYS and PUNCH BASS (P_DUTY's pulse width; its name was DUTY).
+  - DRIVE: POLY BRASS, ENSEMBLE, SYNC LEAD, LADDER LEAD, FAT BASS and ACID BASS. On a tone designed at drive 1, the
+    knob's left half does nothing: P_DRIVE floors at 1.
+  - No tone uses the sharing any more; the code stays.
+- **The settings file:** version 6, version 5's layout. A version 4 or 5 file is read as before, then, for a tone
+  whose own setting changed (`SYV_P2KIND_V5`, from `sy_voices.P2_BEFORE_34`), its old ENV or RESO moves to the FILTER
+  page (version 5 kept them in CTRL 1's byte) and CTRL 1 goes to the middle. The file is written back as 6.
+- **SG ORGAN and SG CZ KEYS:** not the level. Their K-weighted loudness was the others', and LAW 1:1 is a neighbour
+  ratio, not the string's decay.
+  - SG ORGAN's DUTY 75 is drawbars 16' 5 1/3' 8' 4' alone: harmonics 1-4 at one level, about a clean guitar's
+    spectrum. DUTY 90 adds the five upper ones at 60%.
+  - SG CZ KEYS' CZSaw at DUTY 60 is its fundamental and little more (H2 -10.6 dB, H3 -16.5, H4 -22; a spectral
+    centre 0.19 octave over the note): plucked by ENV Keys, that is a mellow clean guitar. DUTY 90 (H2 -8.4, H3
+    -12.4, H6 -19.4 dB; 0.62 octave) keeps ENV Keys. ENV Bass's filter was tried first: its held part darker still.
+- **Glide:** kept for slides and hammer-ons. A picked note starts on its own pitch: no pitch lag on picked notes
+  (latency first), and the 303's slide works the same way. The other way (every new note glides, the Minimoog's) was
+  offered as an option, not built.
+- **Levels:** measured on the engine (notes set directly, a full pick, the DRY stem's scale: the soft clip's 1.0 is
+  -3 dBFS):
+  - Before: hard six-string strums peaked at -4..-3 dBFS (the clip) on most chord tones, single notes -7..-19 dBFS. A
+    recording takes the synth as heard, so a resample reached full scale.
+  - Every tone is now 6 dB down, keeping the balance (momentary loudness within about 3 dB).
+  - SG ORGAN and SG CZ KEYS are levelled to the others' median after their changes.
+  - After: strums peak -7..-11 dBFS (SG PLUCK's attack -4.5), single notes -12..-25 dBFS. LEVEL (to 2x) gives the 6 dB
+    back.
+
+## MIDI out test 1 (midi-out-test1): the Sound Generator and kits send their notes
+
+The user (2026-11-10) wanted to play external synths (88EmuPlayer, a Sound Canvas emulator) from the SP. On
+sy-synth-test34 with PAD Note Out ON, sample pads sent notes, but the Sound Generator's pads, the kits' pads and the
+guitar's notes sent nothing. Asked for MIDI out "only when it's in sound gen/kits": not the guitar synth screen.
+
+**Why nothing went out** (static read of stock 5.52):
+- PAD Note Out lives only in the pad-event consumer `0x80050be0` (SMPL TASK). It sends through `0x80047150` (the note
+  map) and `0x800549e0` (chromatic pads, channel 16). Pads reach it through the pad-event queue (`0x800cdbd0`).
+- The Sound Generator page's own pad handler (`0x8015bf90`, its class table at `0x802296a4`) plays its voices
+  directly and never posts there. So stock never sends Sound Generator pads, and the kits use the same path.
+- The guitar's notes go in as MIDI-in notes (`syn_ui` -> `arp_midi_event`).
+
+**What goes out** (`tune_test.c`, the `mo_*` functions): while PAD Note Out is on, on M.CH (the kits' VALUE item,
+`kit_midi_channel`, 16 at power-on):
+- **Sound Generator pads, ARP off:** the note as heard (the SG's pitch + 36: its pitch 33 is TUNE, A4).
+- **Kit pads:** 36 + the pad (the kits' own MIDI-in map).
+- **The guitar's notes on the page (`syn_ui`, ARP off):** the SG's MIDI note - 12 (the SG sounds MIDI an octave
+  low). In the kits, the pad note it strikes (36..51). Each goes out before the SG gets it (the SG may wait about
+  3 ms for a voice).
+- **ARP on:** the arp's notes.
+  - `mo_arp_scan` runs in the audio task, from `meter_sg_end`, after every block's SG render (the arp's tick has
+    run). For each of the arp's four voices:
+    - a new `arp_age` is a new note: the voice's `+0x5c` + 36 (kits: the kits' `kit_pad_of`), at velocity
+      `+0x198` / 100;
+    - `arp_gated` cleared is its note-off.
+  - It only queues (32 notes); the UI tick sends.
+  - Pads and the guitar's notes send nothing of their own while ARP is on (their note-offs still go).
+- **Not sent:** MIDI coming in, the guitar synth screen.
+
+**How:**
+- **The hook:** the builder re-points v9.5's SG note event jump at `0x8353b000` (the arp's jump to `arp_note_event`)
+  to `mo_pad`. That jump is reached only through v9.5's ITCM jump at `0x1fc00`, which the SG page's pad press and
+  release call (`0x1fc01`). `mo_pad` sends the pad's note and goes on to `arp_note_event` with every register and the
+  stack as they came.
+- **The sender:** `mo_raw` writes `[0x90 | code, status, note, velocity]` through the stock link writer
+  `0x800d93f0`, as stock's own note senders do:
+  - the writer takes the link's lock, waiting with no limit, so only the UI task may call it;
+  - code 9 is note on, code 8 note off at velocity 64, as stock's.
+- **Note-on gates** (`0x800549e0`'s): PAD Note Out (`0x1c5`) on, setting `0x5d` of `0x82e01144` not 2,
+  `[0x82e01144 + 0x64]` clear.
+- **No stuck notes:** a note we turned on always gets its note-off. `mo_ui` (every 1 ms UI tick) lets every note go
+  when the page is left, PAD Note Out goes off, M.CH changes, or the queue overflows.
+- **Guards:** the link writer's and `0x800549e0`'s instructions, `0x1fc00`'s jump, and the kit stage's code by SHA-256
+  (`0x83fa2000..0x83fbfcc0`, so `MO_LINKS`, the kits' symbols, hold). The suite checks `MO_LINKS` against
+  `kits-manifest.json`'s `arp_symbols`.
+
+**Latency:** pads and the guitar's notes go out in the same UI-task call that plays them. The arp's notes go out
+0-1 ms after the block that starts them. Then the link: 0.04 ms a message.
+
+**Room:** the module is 43,876 bytes (test 34: 42,616), 1,180 bytes free under `0x83fd4000`. The audio-side scan
+is a pass over 4 voices a block: 78 instructions a block (the meter's measured cost 573..643 -> 651..721), 0.01% of a
+block.
+
+**Emulator checks:** all 458 pass on `release/midi-out-test1` (APP1 `e612647d…40a3`, 3,230,656 bytes;
+`test_report.json`), test 34's and these 14 new ones (`test_tune_test.py --only midi`):
+- SG pads (as heard, release, the same note again, clamping);
+- kits (36..51, SUB PAD nothing);
+- M.CH (channel 10, changed while sounding);
+- PAD Note Out off and on;
+- stock's gates;
+- the page left;
+- ARP: the scan only queues; on, off, steal, ARP off; the kits' pad choice;
+- a full queue;
+- the guitar on the page and in the kits, each note just before the SG's;
+- ARP on: no guitar note out.
+
+**DM-404** (the real 5.52 firmware; `analysis\midi-out\mo_dm404.py`, its log in `analysis\midi-out\dm404-run`;
+PAD Note Out was already on in the snapshot disk):
+- A sample pad on the main screen sent stock's `99 90 30 4a` / `98 80 30 40`.
+- On the SG page:
+  - pads 1 / 5 / 13 sent notes 44 / 40 / 32 on channel 16 at velocities 127 / 23 / 6, each off at its release;
+  - a pad held through EXIT went off as the page changed;
+  - ARP UP (`arp_mode` set through QEMU's GDB stub) with pad 1 held: note 44 on and off every 165 ms, the gate half a
+    step (BPM 90);
+  - EXT SOURCE on (from the main screen), a 440 Hz tone: note 57 at 127 (the SG's A4 at OCT 0 heard as A3). It
+    retriggered every 40-80 ms, which looks like the script's uneven audio streaming: MIDI copies `syn_ui`'s notes one
+    for one (the suite).
+
+## MIDI out test 2 (midi-out-test2): kits on 10, EXT SOURCE + VALUE, EXT SOURCE taps, ACID BASS
+
+The user on test 1 (2026-11-10): "midi works but sends on ch 16 both sound gen/kits"; missing notes on ACID BASS ("did
+any of your changes do that?"); EXT SOURCE + SUB PAD is a bad chord since SUB PAD retriggers pads ("maybe ext+value?");
+EXT SOURCE cannot be toggled on the Sound Generator page or in the kits.
+
+- **ACID BASS was not MIDI out's doing:**
+  - The guitar synth's compiled code was byte-for-byte test 34's: `sy_voice.o` and `tune_fp.o` identical, `sy_fp.o`
+    differing only in `.debug_line` (the build folder's path). Only link addresses moved.
+  - Test 1 was the first build the user played with tests 33-34. ACID BASS is the one legato tone (retrig 0): a
+    tracker pick over its ringing note slid there with no attack, and a repeat did nothing (`y_start` only for
+    `p->retrig || !sounding`).
+  - Test 33 gave it the 303's amp envelope (decay 437 ms to 12%; it was 1,500 ms to 85%), and test 34 took every tone
+    6 dB down. A slid-in note was nearly silent.
+  - Now `retrig = 1`: every pick attacks; slides and hammer-ons (the tracker's moves) still slide with its glide.
+  - On the model guitar (twin, `analysis\midi-out\acid_twin.py`), each pick's peak in the 60 ms after it against the
+    30 ms before, note to note on one string:
+    - retrig 0: x0.84-1.00 after the first pick (a riff with repeats, a chromatic run, 16ths);
+    - retrig 1: x3.4-5.0 (16ths x1.7-2.0).
+- **Every tone's picks** on the model guitar (twin with the tracker; `analysis\midi-out\picks_all.py`). The lines are
+  played note to note on one string, 27 picks: a riff with repeats, a chromatic run, 16ths on one note and a lead. A
+  pick counts when a voice attacks at the note or an octave of it within 80 ms.
+  - The five single-note tones (SYNC LEAD, LADDER LEAD, FAT BASS, ACID BASS, PUNCH BASS) and every chord tone with
+    TRACK's VOICES on MONO: 26 of 27. The one miss is the same pick (the lead's B4) on every tone: the tracker's.
+  - The chord tones as designed, 4-6 voices: 6 attack, 16 come in soft (no pick heard: a gentle rise inside the
+    pick's envelopes), 5 skipped (repeats on one note: the riff's second E2, 4 of the 8 sixteenths).
+  - VECTOR PAD, SUPERSAW and SG VOWEL (3 voices): 4 attack, 12 soft, 11 skipped. Test 22's open "repeats" issue, on
+    the band notes.
+- **The kits send on channel 10** (General MIDI drums), the Sound Generator on M.CH (`MO_CHANNEL`). The channel
+  changing (M.CH, or melodic <-> kits) with a note on lets it go on the old channel first.
+- **EXT SOURCE + VALUE's push** switches the guitar's notes on the page (SY test 31's switch, popup and file bit).
+  SUB PAD goes to stock again.
+- **EXT SOURCE tapped on the Sound Generator page** (stock ignores it there; the guitar synth screen too) switches
+  the input through the stock setter (0x25), as bounce and the screen's chord do, and asks for the keys' lights.
+  - A tap is a press and release with no key, pad, knob or VALUE turn between. `gsyn_ext` sees every UI event first
+    in `sy_event`.
+  - Chords (+ RECORD SETTING, + VALUE) are not taps.
+  - Its press and release go on as before.
+- **Room:** module 44,068 bytes (988 free), `.sytext` 4,200 of 4,992.
+- **Checks:** all 465 pass on `release/midi-out-test2` (APP1 `2e70aeb4…690b`, 3,230,816 bytes; `test_report.json`).
+  `gnotes_checks` covers EXT SOURCE + VALUE (taken, popup, file; the main screen and the guitar synth screen not
+  switched; EXT SOURCE + SUB PAD and VALUE alone go on) and the EXT SOURCE taps (off, on; none after a chord or on the
+  main screen). `midi_out_checks` puts the kits on channel 10 (M.CH 3 too), checks melodic -> kits with a note on, and
+  the kits' ARP and guitar notes on 10.
+- **DM-404** (`analysis\midi-out\mo_dm404b.py`):
+  - EXT SOURCE on the main screen was off. Two taps on the SG page turned it on, then off.
+  - EXT SOURCE + VALUE: GUITAR NOTES OFF (popup), then ON; the input unchanged.
+  - EXT SOURCE + SUB PAD switched nothing.
+  - `kit_mode` 1 (GDB stub): pads 1 and 16 sent notes 36 and 51 on channel 10. Back to melodic: channel 16.
+
+## MIDI out test 3 (midi-out-test3): notes picked over a held chord
+
+The user on test 2 (2026-11-10): "still missing notes on acid bass ... say i hold gcea on 5th fret and pick back and
+forth slowly, some notes miss".
+
+- **On the model guitar** (`analysis\midi-out\test3-model\held_arp.py`; the other scripts beside it): G3 C4 E4 A4 at
+  the 5th fret, picked string by string up and down, each string ringing on until picked again.
+  - At 0.5 s a pick, 3 of 13 picks had no attack on their own note, on every single-note tone (the note rules are
+    shared), not ACID BASS alone.
+  - The tracker's own note-on was right each time (23-27 ms).
+  - Before test 2's retrig, ACID BASS had 1 of 13.
+- **Why** (`held_dbg.py`): over the string still ringing, the first readings were murky.
+  - An E4 read twice under A4 (-5), or the two strings as a low common note (G2 under G3, -12).
+  - Test 32's `e5` placeholder (a murky reading 5+ semitones under the note, its band silent) attacked on the note
+    sounding, the string before, at 8-13 ms.
+  - The picked note came in 7-13 ms later as a move with no attack: the pick sounded as the string before picked
+    again.
+  - The move already jumped (no glide), so the tone's glide was not the cause.
+  - Held, the string before rings on (its band at 0.95-0.97 of its level before the pick). On one string it is stopped
+    (0.72-1.0): the bands cannot tell the two apart.
+- **The change** (`bands_mono` only: every single-note tone and VOICES MONO; the chord tones untouched):
+  - Such a murky low reading starts nothing now: the pluck still owes its attack (`yowe`).
+  - The next reading read twice, or the tracker's note-on, makes the attack on the note picked.
+  - The `yact` 3 move is no longer reached.
+- **Model guitar** (`compare.py`, ACID BASS, 147 picks: 4 held-chord runs and 13 one-string lines), each pick's first
+  attack within 120 ms:
+
+  | | before (test 2) | after (test 3) |
+  | --- | --- | --- |
+  | First attack on the right note | 134 | 143 |
+  | First attack on the wrong note | 12 | 3 |
+  | No attack | 1 | 1 |
+  | Far-off attacks | 0 | 0 |
+  | Median time to the right note | 20.6 ms | 20.0 ms |
+
+  - The held runs at 0.5 s, both ways: all 13. The 6 changed picks attack on their note at 17-24 ms, where an attack
+    on the string before came at 8-13 ms. The right pitch came at 19-21 ms then, without an attack.
+  - One string: a fourth down (2 picks) now right at 19-20 ms (was the old note at 16-17 ms).
+  - One 16th-note semitone step up attacks at 18.7 ms on the note (was 8 ms, 0.8 semitone off). That is the one
+    later start.
+  - The 3 left wrong are first readings a semitone off (or 0.6 sharp), as before.
+- **Room:** `.syvmore` 8,888 of 9,728.
+- **Checks:** all 465 pass on `release/midi-out-test3` (APP1 `c14774cf…a58b`, 3,230,800 bytes; `test_report.json`).
+  Every tone against the twin, which runs the same `sy_voice.c`.
+
+## MIDI out test 4 (midi-out-test4): the walkthrough's fixes and 12 new sounds
+
+The user on test 3 (2026-11-10): "works well", then a walkthrough of the build. Reported or asked for: EXT SOURCE's
+light stayed lit after a tap with the guitar's notes off; "in sound gen/kits we want 3 options, no ext in, regular ext
+in, ext in guitar synth" (and on the guitar synth screen instead of pad 16's OFF); MARK to the looper from the Sound
+Generator: "guitar plays whatever synth guitar state"; kits past fret 15 reached only pads 5-16 ("confusing"; the
+user's map: "kit pads 1-12 followed E-D#"); the kits stuck on channel 10 ("why would they be tied?") and "send both
+at once from guitar"; "RATE, WIDTH or DRIVE very subtle"; "fill pad 16 with a tone ... shift + pad page of tones
+could fill 1-16".
+
+- **EXT SOURCE's three options** (`gsyn_ext`, `gsyn_state`): a tap on the Sound Generator page (the kits, the guitar
+  synth screen) steps NO EXT IN (the input off) -> REGULAR (the input on; the plain page's notes off, the screen's
+  SOUND OFF) -> GUITAR SYNTH (the notes on, or the synth on) with a popup each. The key's light: the key light
+  function `0x800d4910` and its table entry at `0x83008a24` (mode, colour), as stock's main page sets them: out and
+  the resting entry (0, `0x1f1f00`), white, or green (`0xff00`, a colour stock gives this key at `0x8010274e`).
+  `gsyn_light_tick` (syn_ui, every UI tick) keeps it in step on the page and gives it back to stock off it. EXT
+  SOURCE + VALUE (tests 2-3) is gone.
+- **The looper from the Sound Generator** (`gsyn_page`, `gsyn.loop`): the looper's page (`0x27`) reached from the
+  plain page keeps the guitar on the SG / kits (the tracker, the ROUTING hold, MIDI out); the guitar synth stays off
+  there (`sy_can_play`). Leaving it lets the note go (stock stops the SG's voices only as its own page goes). The
+  mixer renders the SG on every page (`0x1c754` the looper, `0x1c766` the SG stub, no page test).
+- **A channel per mode** (`mo_channels`): M.CH is one byte (`kit_midi_channel`); the UI tick keeps the SG's and the
+  kits' and puts the mode's own in at a mode switch (`kit_shortcut_select` has let the voices go and the arp's held
+  keys). SG 16 and kits 10 at power-on; MIDI in follows.
+- **The guitar on both channels** (`mo_x`): the other mode's channel gets the guitar's note too: in the SG's mode the
+  kits' pad on picks only, in the kits the SG's note as heard, moves too; nothing while both share a channel. The
+  tracker word's bit 15 marks a move (`syn_send`'s `move`), and the tracker moves in drum mode too (`!t->drum` gone
+  in `tune_fp.c` and `tune_ref.py`); `syn_ui` strikes pads on picks only, so the kits' hits are as before.
+- **Kits:** pads 1-12 = E..D# in every octave (`syn_kit_note`).
+- **32 sounds:** pad 16 (was OFF) and SHIFT + pads 6-16 play the twelve new tones; pads 1-15 and SHIFT + pads 1-5 as
+  before (`SYV_SLOT_TONE`; VALUE steps in pad order). The tones' table left the module (20 x 228 bytes filled it) for
+  three slots of its own (`.syvtone0..2`: the free tops of sg-subpad's, the 0x83fd9000 row's and note repeat's slots),
+  module 3,488 bytes free. Settings file version 7 (464 bytes, version 6's layout for 32 tones); a version 4-6 file's
+  20 tones are read in. The twelve (designed by a helper on a copy of the engine, `analysis\midi-out\test4-tones`,
+  `REPORT.md`; demos `E:\Claude\sy_new_tones`): SQUARE LEAD, SUB BASS, REESE BASS, FM BASS, WHISTLE, CLAV, MALLET,
+  OB PAD, BRASS STAB, HOOVER, CHIP LEAD, SWEEP PAD, each at the 20's median loudness (-27.92 LUFS-M), mono and dry.
+- **CTRL 1** (`knobs`): WIDTH the pulse thin (5%) to square (50%); DRIVE clean (1) to 16 x; RATE is WOBBLE: the
+  LFO's depth with its speed, none at the left, 6 x the depth at 2.8 x the speed at the right.
+- **DM-404** (`analysis\midi-out\mo_dm404c.py`, runs `dm404-run-test4*`): the taps stepped EXT SOURCE and the notes
+  flag through the three options; on GUITAR SYNTH a 440 Hz tone sent note 57 on channel 16 and the kits' pad 41 on
+  channel 10 together. With the looper enabled (SHIFT + VALUE, "Enable Looper?" OK), MARK on the SG page opened the
+  looper (page 39) with `gsyn.loop` 1, the notes went on there, and the output's 220 Hz (the SG's A3) rose after each
+  pick on the looper as on the SG page (`dm404-run-test4d\output.wav`); MARK again took it back to the SG page with
+  the option kept (`dm404-run-test4e`).
+- **Checks:** all 505 pass on `release/midi-out-test4` (APP1 `584b05c7…c8bd`, 3,235,696 bytes; `test_report.json`):
+  test 3's 465 updated (the file at version 7, the screen's 32 sounds in pad order, EXT SOURCE's three options in
+  place of tests 2-3's switches) and new ones for the channels per mode, the guitar on both channels (picks, a
+  hammer-on in either mode, one shared channel), the other channel's note let go (page, mode switch), the light kept
+  in step, and the looper from the plain page (not from the guitar synth screen).
+
+## MIDI out test 5 (midi-out-test5): HOLD for switches, VALUE for screens
+
+The user on test 4's three EXT SOURCE options (2026-11-11): "ext shouldn't cycle through 3 settings because user may
+want to like switch to mic or something while playing machine". Then, from the manual's shortcut lists, their layout:
+HOLD + EXT SOURCE the guitar synth on/off ("would change ext source light to green to indicate guitar synth is on"),
+VALUE + RECORD SETTING the guitar synth screen, HOLD + RECORD SETTING (Sound Generator) / HOLD + PATTERN EDIT (kits)
+the guitar's notes, HOLD + MFX the hidden FX on/off, HOLD + VALUE the input FX's hidden settings; "pattern edit should
+flash too when shift held since it goes to kits"; "ensure this does not conflict with ext source gate function".
+
+- **EXT SOURCE** (`gsyn_ext`): the input only, as stock. On the Sound Generator page, where stock ignores it, a tap
+  switches the input (popup EXT IN ON / OFF). With EXT SOURCE's gate on (settings `0x58`, stock's EXT SOURCE + GATE;
+  stock's own pages set the input to "the key held", `0x80087fec`) the input is on from the press to the release. No
+  switch with SHIFT (INPUT SETTING), REMAIN (input bus), HOLD or VALUE held at the press.
+- **HOLD + EXT SOURCE** (`gsyn_synth_switch`, any page): the guitar synth on (armed, SOUND on with its sound) or off
+  (SOUND OFF); the press and release taken, so the input and its gate are untouched. The input off no longer disarms
+  the synth (SY test 8's rule), so it comes back with the input.
+- **EXT SOURCE's light** (`gsyn_light_tick`): green on any page while the input and the synth are on, painted again
+  when stock paints over it (the key light's caches: mode byte `0x80bbccfc` + key, level `0x80bbcc34` + 4 x key); on
+  the Sound Generator page out / white (dry) / green (the page's notes, or the synth).
+- **HOLD + RECORD SETTING** (melodic) / **HOLD + PATTERN EDIT** (kits) on the plain page (`gsyn_notes_switch`): the
+  guitar's notes (SY test 31's flag, the file's byte 6 bit 1), popup GUITAR NOTES ON / OFF. With them off the guitar
+  synth plays on that page too (`sy_can_play`; test 4: never there).
+- **VALUE + RECORD SETTING** opens the guitar synth screen (main screen, Sound Generator page, looper), the input put
+  on if off; EXT SOURCE + RECORD SETTING goes on to stock now. `ext_fix` (the chord's EXT SOURCE release) is unused.
+- **SHIFT's hint** (`gsyn_hint_tick`): stock pulses RECORD SETTING and RESAMPLE while SHIFT is held (DM-404: the key
+  light at mode 3, level 0xff; none on the Sound Generator page). Where SHIFT + PATTERN EDIT opens the kits (the main
+  screen, pages 0x22 and 0x13, RESAMPLE), PATTERN EDIT pulses with them, then gets its light table entry again.
+- **FX deep edit test16** (FX_DEEP_EDIT.md on `claude/fx-deep-edit`, by a helper): HOLD + MFX switches the hidden
+  settings, HOLD + VALUE opens or steps the input FX's extra screens, VALUE + EXT SOURCE goes on to stock; 108 of 108.
+  The parent is **combined-test21** (COMBINED.md section 22).
+- **DM-404** (`analysis\midi-out\mo5_dm404.py`, `dm404-mo5`): SHIFT held -> PATTERN EDIT at mode 3 / 0xff, back to
+  (0, 0x1f) on release; HOLD + EXT SOURCE -> GUITAR SYNTH ON, EXT SOURCE green (0xff00), the input unchanged; the input
+  off and on again -> green again (still armed); again -> OFF, white; HOLD + MFX -> HIDDEN FX OFF / ON, MFX's light
+  unchanged; VALUE + EXT SOURCE switched the input; VALUE + RECORD SETTING -> the screen (page 30, mode 1); HOLD +
+  RECORD SETTING (melodic) and HOLD + PATTERN EDIT (kits) -> GUITAR NOTES OFF / ON; HOLD alone on the page: nothing;
+  gate on (EXT SOURCE + GATE) -> on the page the input on only while EXT SOURCE is held.
+- **Checks:** all pass on `release/midi-out-test5` (APP1 `703cd5c3...3c1f`, 3,236,256 bytes; `test_report.json`): the
+  gnotes checks rewritten (tap, gate, HOLD + EXT SOURCE on two pages, HOLD + RECORD SETTING / PATTERN EDIT in both
+  modes, the light on and off the page with stock painting over it, the synth on the page with the notes off,
+  SHIFT's hint), the screen chord on VALUE, SY test 8's arming kept with the input off. The suite's key light stub
+  now keeps the light's caches. A first run failed 5 twin comparisons: `sy_ref.host_dll()` had cached a host build
+  made while an audition toneset was set under the plain key; the key now includes the toneset (or marks none).
+
+## MIDI out test 6 (midi-out-test6): the playability study's fixes
+
+The user on the leads audition build (2026-11-11): "if i fret a bar anywhere and play notes after another some are
+missing", "they do not play well". A separate session (Fable) studied the lead and bass sounds on the model guitar
+(`analysis\midi-out\playability`, report and demos `E:\Claude\sy_playability`); the user then asked for the fixes
+and the "not fixed" list here ("fable takes too long").
+
+- **In the single-note path (`bands_mono`, sy_voice.c; chord sounds untouched):** a murky reading of a band that rang
+  through the pluck and was not struck since starts nothing (mring); a reading whose band has a struck peak attacks at
+  once (y_peak), an unbacked clean one waits for a second reading while other strings ring (ringctx); a tracker note
+  still waiting for its band is kept while the tracker holds it (an octave string over its ringing lower octave
+  attacked, then ended after 80 ms); a long-gone note's ringing band does not start again on its own clean reading.
+- **A 4 ms dip** on a re-pick of a single note still at half its level or more (MARS LEAD, WHISTLE...: a pick on a
+  held note was not heard).
+- **In the tracker (tune_fp.c, tune_ref.py):** the let-go level over a period of the note (E2's 9 blocks; the newest 4
+  read a soft low E as stopped); after a pluck over ringing strings a plain reading of what rang before it (their
+  common period) counts as murky; and part 2's **re-pick by a break**: the synth's note read clean 5 times, then 4-16
+  readings that are not (the pick touching the string), then clean on it again at 0.4 x the level follower: a note-on
+  (a repeat softer than the note before, which the jump and click tests miss).
+- **Settings:** WHISTLE and HOOVER GLIDE 60 ms (were 110 and 120). The leads audition set: single notes for SPOOKY
+  8-BIT, MODULAR BLEEP, SG PLUCK, SG ACID and SG FM BELL; SUPERSAW, FILTER SAWS and BRASS STAB stay chord sounds
+  (the user: "can be chords"); CLAV, MALLET and FM BELL dropped ("drop clav, mallet, fm bell"), their slots BREATH
+  HORNS and FUNKY PLANET (single notes) and HEAVENS GATE; shorter GLIDE (SH-101 LEAD 50, WHISTLE 60, HOOVER 60 ms) and
+  RELEASE (SH-101 LEAD 250, ODYSSEY LEAD 300, MORPH ARPLINE 400, SIMPLE SQR BASS 200, SPOOKY 8-BIT 400 ms).
+- **Model guitar** (FAT BASS, every group, 1,127 picks): as test 5 949 good, with the study's six fixes 1,022
+  (Fable's count), with the re-pick by a break 1,042 (repeats 116 -> 132 of 140, bass lines 78 -> 80 of 92, nothing
+  else moved). Latency unchanged (median 20 ms, p90 29 ms).
+- **Tried and dropped:** an octave check from the bands (a struck peak an octave under the tracker's note, or the
+  note's band unstruck under a struck octave): 1,042 -> 793 (both) and 995 (the first alone); a pick's noise marks
+  bands struck all over, and an octave partial's band is struck before its string's own band.
+- **Still open:** fast picking across a full bar (the subtraction's octave slips), an octave string over its ringing
+  lower octave, soft picks under a sounding note (16 of 23), and 21-29 ms to a note over ringing strings.
+- **Soft picks to another note (`t7`, not in the build):** the same break rule on a different note gives soft picks
+  16 -> 19 of 23 and 1,050 in all, but turns 9 hammer-ons and pull-offs from glides into attacks: the user's call.
+- **Checks:** all 535 pass (`release/midi-out-test6`, APP1 `9f386f4b...8270`, 3,237,744 bytes; the suite
+  ran on the identical scratch build). Audition builds `release/midi-out-test6-leads` (APP1 `f0f58d06...`) and
+  `release/midi-out-test6-chords` (`50ef3a10...`), on combined-test21.
+
+## MIDI out test 7 (midi-out-test7): the looper's REC light
+
+The user (2026-11-11): on the Sound Generator / kits, MARK, REC (AUTO TRIG on), MARK back: "rec is not flashing but
+pressing pad triggers start of loop recording"; the same going on to sample mode; and MARK, MARK from the guitar synth
+screen "goes to either sound gen or kit depending on what was last on before guitar synth".
+
+- **Stock 5.52 does the same** (DM-404, `analysis\midi-out\mark_rec_dm404.py`, stock and test 6 alike): MARK ends looper
+  mode (0x82e0b92c to 0), but the looper goes on waiting (its state 0x82e0b71c + 0x101 = 1; a pad's sound starts it,
+  2) and REC shows the page's own light (the SG page steady, mode 1; the main screen dim, mode 0 / 0x1f). SHIFT +
+  RECORD SETTING from the looper keeps looper mode on and REC flashing. The looper's page: waiting = the key light at
+  mode 5 (LED page 9), recording = mode 2 (LED page 6), level 0xff. (In DM-404 CTRL 2 reads inverted: 0 = AUTO TRIG ON.)
+- **REC light (`loop_light_tick`, every UI tick):** on the Sound Generator page (kits, the guitar synth screen) and the
+  main screen, REC as the looper's page shows it while the looper waits (mode 5) or records (mode 2), painted when the
+  key light's cache differs; after, the page's own light (its light table entry); not on the looper's page (stock's)
+  or others. A pad hit makes stock paint REC once more (steady on the SG page, dim on the main screen); the next UI
+  tick paints the looper's light again.
+- **MARK, MARK from the guitar synth screen:** the screen left for the looper's page (`gsyn.loop_back`) opens again when
+  the looper is left for the Sound Generator page; left for another page, or closed on its page, it stays closed.
+- **Room:** SG SYNTH's lines (in the source since test 6, used by no tone yet) left the voice engine's constants slot
+  208 bytes short: `output` and `syv_log2` moved to the more slot (`SYV_MORE`). Module 43,520 of 45,056 bytes.
+- **DM-404 on test 7:** REC flashes after MARK back (mode 5), blinks once a pad starts the loop (mode 2), flashes on the
+  main screen after EXIT; MARK, MARK from the guitar synth screen shows the screen again.
+- **Builds:** `release/midi-out-test7` (APP1 `78542f82...eec6`, 3,238,256 bytes) and the audition builds
+  `release/midi-out-test7-leads` / `-chords` (the same tone sets as test 6), on combined-test21. Not sent: test 8 came
+  before the user tried it (its suite run stopped at 446 passes, no failure).
+
+## MIDI out test 8 (midi-out-test8): the guitar synth screen's ways in and out
+
+The user (2026-11-11): "if in guitar synth mode i can get into sound gen mode but not kits directly"; "when in sound gen
+and i go to guitar synth mode the display (where it says out:bus) is messed up"; "in sound gen/kits mode it is weird
+to press value + rec setting to go into guitar synth mode because value press something in those modes".
+
+- **Found in DM-404** (`mark_rec_dm404.py sgscreen`): VALUE's press on the Sound Generator page moves the PRM cursor to
+  the value; on the screen the bar then went on at 0x80123c5a, which fills the value's box white when that cursor is on
+  the value ("OUT: D" and a white box). SHIFT + PATTERN EDIT on the screen: the kits' shortcut switched the machine
+  under the screen, which stayed up.
+- **VALUE held back (`sy_value`):** on the Sound Generator page (the kits too), not on the screen, with no SHIFT, HOLD,
+  REMAIN or EXT SOURCE held, VALUE's press is taken and its held bit set as stock's press would (as REMAIN's there):
+  RECORD SETTING while it is held opens the screen and VALUE never reaches stock; any other input first hands stock
+  VALUE's press (KEY_DOWN_FN; VALUE + a knob, a pad or a turn work as before); a plain push reaches stock at its
+  release (press and release, sy_stock_key).
+- **SHIFT + PATTERN EDIT on the screen** closes it and goes on (kit_shortcut switches to the kits at the release), as
+  SHIFT + RECORD SETTING does for the Sound Generator.
+- **The bar:** on the screen sy_bar_text goes on at 0x80123c7a (the value text drawn in its box, no fill), so the SG's
+  cursor state no longer shows through; the builder guards both addresses.
+- **DM-404 on test 8:** VALUE held on the SG page leaves the cursor on PRM; VALUE + RECORD SETTING from the SG page and
+  from the kits: the screen with "OUT: DRY" clean; SHIFT + PATTERN EDIT on the screen: the kits (TR808); test 7's
+  looper fixes as before.
+- **Builds:** `release/midi-out-test8` (APP1 `084fe3ab...e8d6`), audition builds `release/midi-out-test8-leads` /
+  `-chords` (the test 6 tone sets), on combined-test21.
+- **Checks:** all 557 pass on `release/midi-out-test8`; the audition builds' static checks pass (26 each).
+
+## MIDI out test 9 (midi-out-test9): MARK back from the looper keeps looper mode
+
+Test 8 on the unit: REC flashed after MARK back, but "if u press sound to start looper, u can't press rec to stop
+capture like u can as if you entered mode from mark with shift + etc."; then "I WANT the same bahaviour".
+
+- **Why:** stock's MARK ends looper mode (0x82e0b92c to 0) while the looper goes on waiting or recording, so the SG
+  page's REC is its own again. SHIFT + RECORD SETTING (stock's jump), the kits' SHIFT + PATTERN EDIT and VALUE + RECORD
+  SETTING all leave the looper's page by a page request, with looper mode on.
+- **Now:** MARK on the looper's page while the looper waits (state 1) or records (2), opened from the Sound Generator
+  page (`gsyn.loop_from`, set as the looper's page comes up): taken with its release, and the SG page asked for. The
+  machine and the guitar synth screen come back as they were. Idle, or opened from the main screen: stock's MARK.
+- **DM-404 (`mark_rec_dm404.py markrec` on test 9 against `shiftrec` on stock 5.52):** the same step for step. Back on
+  the SG page: state 1, looper mode on, REC flashing (mode 5, stock's own); a pad: recording (2, REC blinking); REC:
+  the take stops (5, playing); MARK: the looper's page; MARK again: looper mode off.
+- **Builds:** `release/midi-out-test9` (APP1 `75a888eb...f609`), audition builds `release/midi-out-test9-leads` /
+  `-chords`, on combined-test21.
+- **Checks:** all 566 pass on `release/midi-out-test9`; the audition builds' static checks pass (26 each).
+
+## MIDI out test 10 (midi-out-test10): cleaner chord sounds
+
+The user, on the prototype below: "Yes, build them" (the switch and FM fixes; not CF_ALLOC, which needs tuning).
+
+- **sy_voice.c, render(), chord (poly) tones only:** a sounding voice given a note half a semitone or more off its own
+  (a start), or its band's pitch jumping a semitone or more in a block, fades out over that block on its old pitch and
+  starts the new note the next block from silence (`sw`, `sw_trig`, `sw_soft` in syv_voice_t); a pick strikes only the
+  FM voices it starts, and a soft start keeps a sounding voice's FM brightness.
+- **Twin, with the repo's tables (`analysis\midi-out\playability\verify_port.py`, against the engine before):** 34
+  chord sounds, the chord test's phrases: hard pitch switches 13.5 -> 0.4 a second, clicks at a voice change 120 ->
+  78 (FM CHORUS EP 15 -> 0, MALLET 14 -> 2, RHODES CHORD 3 -> 0, BRASS STAB 4 -> 0); on the chord's notes, overtones,
+  other notes and chord notes covered unchanged. The 9 lead/bass picks, 24 lead scenarios: 0 difference.
+- **Builds:** `release/midi-out-test10` (APP1 `6acbd2a0...a7a6`), audition builds `release/midi-out-test10-leads` /
+  `-chords`, on combined-test21.
+- **Checks:** all 566 pass. The full run passed 564; two failed on the suite's own constants and pass on the same build
+  after: SY test 19 read note 0's band past 6 voices of 160 bytes (now 164: the `sw` bytes), and the step limit
+  SY_STEP_MAX 120,000 -> 125,000 (the switch fade adds up to 600 a step: SG ORGAN 119,748 -> 120,333, 15% of a block;
+  SLOW is at 90%). SY test 19's note times as before ([19, 28, 21, 20, 19, 15] ms). Audition builds' static checks pass.
+
+## MIDI out test 11 (midi-out-test11): the FILTER page
+
+The user: "some tone had env res screen with no adjustable paramters. but env on different screen". On the FILTER page
+(SY test 32) ENV and RESO showed "--" for the Sound Generator sounds (their ENV is the SG envelope preset, on CTRL 1 of
+the first page) and for the sounds with no filter at all (FM BASS, FM PIANO, SAY AGAIN FM, MALLET).
+
+- **SG sounds:** the FILTER page's ENV shows the ENV preset by name and CTRL 1 there sets it: the same setting as the
+  first page's CTRL 1 (`sy_filt_at`: P_ENVSEL's ENV is knob 1, as a tone whose own setting is ENV), as SG SYNTH has it.
+  RESO stays "--" (the SG presets' filter has none of its own).
+- **No filter:** SHIFT steps main, OTHERS, TRACK, SHAPE, main; a pad picking such a sound while the FILTER page is up
+  shows the first page.
+- **Checks:** all 573 pass, the new one included (SG ACID: Acid -> FPad from the FILTER page, the same on the first
+  page; FM PIANO: pages 1, 2, 3, 0, 1); the audition builds' static checks pass (26 each).
+- **Builds:** `release/midi-out-test11` (APP1 `e9052f9a...9b1f`), audition builds `release/midi-out-test11-leads` /
+  `-chords`, on combined-test21.
+
+## MIDI out test 12 (midi-out-test12): two banks, the current pad lit
+
+The user: "2 banks of 16 is fine" (after "hold shift + 1-4 for different banks of 16. 1-8 pads are leads/bass, 9-16 are
+chord tones. the tone pad that is current is highlighted"; 64 sounds would not fit the spare RAM).
+
+- **Banks:** on the guitar synth screen SHIFT + pad 1 / 2 picks the bank (SHIFT then counts as used); pads 1-16 pick
+  SOUND bank x 16 + pad + 1 (bank 2 = tests 4-11's SHIFT + pads); SHIFT + pads 3-16 nothing; VALUE's steps move the
+  bank with the sound (`gsyn.bank`).
+- **Pad lights (`sy_pad_tick`, every UI tick):** stock lights the pads through the key light 0x800d4910 too (key = pad
+  - 1, level 0xRRGGBB, mode 0 resting / 1 lit; the SG page: 0x004444, pad 9 0xaaaaaa, 13-16 0x440044, DM-404). On
+  the screen: the current sound's pad lit (0x00ffff on 1-8, 0xff00ff on 9-16), the rest dim (0x004444 / 0x440044);
+  SHIFT held: pad 1 / 2 the banks (the current 0xffffff, the other 0x222222), the rest dark; painted only where the
+  caches differ. Stock's colours are kept as the screen opens and painted back as it closes on the SG page.
+- **DM-404 (`mark_rec_dm404.py pads`, `padsmore`):** the lights as above; opened from the main page and from the kits,
+  closed to the kits and to the SG: stock's colours back each time.
+- **Build:** `release/midi-out-test12` (APP1 `73438eba...451a`); its suite run was stopped for test 13.
+
+## MIDI out test 13 (midi-out-test13): a check for clashes and bugs
+
+The user: "can you also thoroughly run through things and make sure no conflicts/bugs".
+
+- **Checked:** every button chord the module adds (HOLD + EXT SOURCE, HOLD + RECORD SETTING / PATTERN EDIT, VALUE +
+  RECORD SETTING, the EXT SOURCE tap, MARK on the looper while it waits, SHIFT + RECORD SETTING / PATTERN EDIT and
+  SHIFT + pads on the screen, VALUE held back on the SG page) against the manual's shortcut tables (SHIFT, REMAIN,
+  VALUE, DEL, COPY, MFX: none of them stock) and the fork's other features (FX deep edit's HOLD + MFX / HOLD + VALUE,
+  note repeat's ROLL chords, the kits' shortcuts and VALUE menus, bounce's VALUE presses); the pad lights against
+  stock's own pad uses; the code since test 5 again.
+- **Fixed:**
+  - ROLL + VALUE press on the SG page (note repeat: the pad follows or ignores ROLL) was held back by test 8's rule and
+    handed to stock past note repeat: VALUE is not held back with ROLL held, and a held-back press now goes to note
+    repeat's handler first, then stock's key press (`sy_value_press`); a plain push's release goes on as itself.
+  - MFX held on the screen: stock paints the pads for its effects (0x1f1f, DM-404); the pad lights now leave them
+    while MFX is held and come back as it is let go.
+  - `.sytext` was full (36 bytes left): the pad lights moved to the module (1,056 bytes left; `.sytext` 336).
+- **DM-404 (`review`):** MFX's pads stock's while held, ours back at once; a VALUE tap on the SG page moves the PRM
+  cursor (at its release); ROLL + VALUE goes straight on.
+- **Left as is (small):** VALUE's own job on the SG page and the kits (their menus, BOUNC) acts at its release; MARK on
+  the looper while it waits is taken at its press (no long-press use found); on the main screen with the looper
+  waiting, REC's flash would cover a sampling standby's own light (not a likely combination).
+- **Build:** `release/midi-out-test13` (APP1 `25602797...c22d`), audition builds `release/midi-out-test13-leads` /
+  `-chords`.
+- **Checks:** all 578 pass (the bank, VALUE, screen, FILTER and looper sections with them); the audition builds'
+  static checks pass (26 each).
+
+## MIDI out test 14 (midi-out-test14): the final 32 sounds
+
+The user's picks from the two audition builds: leads and basses (11-11) and chords (11-12: bank A 1, 2, 3, 4, 10, 11,
+12, 15, 16 and bank B 2, 4, 5, 9, 10, 12, 16), with VIRUS CHORD left out to keep HEAVENS GATE (the user's choice: 17
+for 16 chord pads).
+
+| Pad | Bank 1 | Bank 2 |
+| --- | --- | --- |
+| 1-8 | SYNC LEAD, LADDER LEAD, SH-101 LEAD, MARS LEAD, ODYSSEY LEAD, CHIP LEAD, HOOVER, SPOOKY 8-BIT | BREATH HORNS, SG SYNTH, FAT BASS, ACID BASS, PUNCH BASS, SUB BASS, SH-101 BASS, TAL 101 BASS |
+| 9-16 | POLY PAD, STRINGS, VECTOR PAD, OB PAD, JP WARM PAD, AM STRINGS, AAH CHOIR, HEAVENS GATE | FM PIANO, M1 PIANO, FM CHORUS EP, SG ORGAN, RAVE ORGAN, POLY BRASS, SQ PROPHET, SUPERSAW |
+
+- **The table:** `tunetest/sy_final.py`, written by `analysis/midi-out/candidates/make_final.py` from the audition
+  builds' pool. `sy_voices.py` plays it by default; test 4's 32 stay as `POOL_VOICES` / `POOL_GAINS` (make_tonesets.py
+  reads those), and SY_TONESET still swaps in another set. 31 sounds are exactly as their audition build played them
+  (the dicts and gains compared). SG SYNTH (test 7's patch for SG PLUCK and SG FM BELL) is at SG PLUCK's gain, with
+  single notes and retrigger, as SG PLUCK played in the leads build.
+- **Settings:** in a file of their own, `B:/_sy_sounds.bin`. The old file's settings are by slot and belong to other
+  sounds, so the set starts at its defaults (sound 1, OUT: DRY).
+- **The twin:** `sy_ref.host_dll()` keys its compiled engine on `sy_final.py` too, so a changed set can't reuse an
+  old engine build.
+- **Suite:** the screen walkthrough reads the sounds from the table: pad 16's and bank 2's sounds by `SLOT_TONE`; the
+  page walk that used ENSEMBLE (pad 4) uses the first bank-1 chord sound with DRIVE, a filter and no glide (OB PAD);
+  SY tests 19-20's tracker checks find FAT BASS by name (it was tone 8), `SY_PLAIN` is PUNCH BASS by name (it was
+  tone 10), and the TRACK page's three are POLY PAD, LADDER LEAD and SG SYNTH by name (were tones 0, 7, 18 with SG
+  PLUCK); `SY_PATH` is the table's file; the screen column's DYNAMICS is the sound's own (`avel`; ENSEMBLE's was
+  60); the FILTER page check picks FM PIANO in bank 2 by SHIFT + pad 2 then its pad (SHIFT + pad no longer picks
+  sounds 17-32); the version 4 / 5 file checks work out SY test 34's move from the table (`v45_moved`: a tone whose
+  `P2_BEFORE_34` own setting differs from the table's; on test 4's table it gives the old list, tones 0-4 and 6-10).
+  The final set's own file was never written before version 7, so those paths can't meet an old file on the unit.
+  With tone 10 now VECTOR PAD, the engine check that counts every instruction
+  from the first block crashed Unicorn 2.1.4 on the host (access violation inside `uc_emu_start`, every time); without
+  the counting hook the module = sy_ref.py on all six signals, every block, so it is the emulator, not the module.
+  `SY_STEP_MAX` 125,000 -> 180,000: AAH CHOIR takes about 172k instructions a step (21.5% of a block at one a cycle,
+  49-73% at the 2.3-3.4 cycles an instruction measured; SLOW is at 90%) and RAVE ORGAN about 140k; both played on the
+  unit in the chords audition build.
+- **DM-404 (`mark_rec_dm404.py final`):** the screen opens on SYNC LEAD (DRIVE, OUT: DRY); bank 1 pad 16 HEAVENS
+  GATE (WOBBLE); bank 2 pad 2 SG SYNTH (WAVE Pulse, DUTY 30), pad 16 SUPERSAW (DETUNE); the lit pad follows.
+- **Build:** `release/midi-out-test14` (APP1 `eadf65ac...7126`).
+- **Checks:** all 578 pass. The heaviest sounds a step: AAH CHOIR 172,617 instructions, RAVE ORGAN 140,695, FM
+  CHORUS EP 122,628, SG ORGAN 120,333.
+
+## Chord fixes prototype (twin only, not in a build)
+
+`analysis\midi-out\playability\chordfix_eval.py` on the scratchpad copy `chordfix/sy_voice.c` (three defines), 34 chord
+sounds, the chord test's phrases, as heard:
+- **CF_SWITCH** (a sounding poly voice given another note fades out over a block on its old pitch, then starts the new
+  one from silence): hard pitch switches 13.5 -> 0.4 a second, nothing else moved.
+- **CF_FM** (a pick strikes only the voices it starts; a soft start keeps a sounding voice's FM): FM CHORUS EP's and
+  MALLET's clicks at voice changes 15 / 14 -> 0 / 1 (with CF_SWITCH).
+- **CF_ALLOC** (a fundamental takes its overtone's voice; an overtone takes no sounding voice): on the chord's notes
+  72 -> 82%, overtones 24 -> 12%, chord notes covered 43 -> 49%; but other notes 4 -> 6% (MALLET 20 -> 30, VIRUS CHORD
+  19 -> 29, M1 PIANO 10 -> 16) and more voice changes. Needs tuning (a fundamental as loud or struck) before a build.
+- Single-note sounds untouched: the 9 lead/bass picks with all three against none, 24 scenarios, 0 difference.
+- Demos (before / switch + FM / all three): `E:\Claude\sy_chord_fix`.
+
 ## Still not known
 
 - How each test 2 tone sounds on a real guitar, and which are worth keeping.
@@ -1558,5 +2141,7 @@ set; ptrk.py, floors.py, timing.py, blips.py, render.py, demos32m.py) and `chord
   the tones but brought the clicks back (60-70), or kept the clicks low but dropped as many notes. Open: choosing the
   held chord's best bands as the strum settles (lowest, steadiest, loudest) without delaying any start.
 - Whether the three v9.52 rows' stale last bytes matter anywhere.
+- Test 33 on the unit: tracking works well, no obvious missed or extra notes; the rest is test 34.
+- Test 34: whether the level is right for resampling and live, and whether SG ORGAN and SG CZ KEYS sound like synths now.
 - Whether MUTE BUS on ExtIn also keeps pair 0, which would be a simpler way than the Isolator to hear the synth
   alone.

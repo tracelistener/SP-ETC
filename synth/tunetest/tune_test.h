@@ -70,10 +70,12 @@ typedef struct {
     u32 reset_req, reset_ack;
     volatile u32 rseq;                      /* odd while res is written */
     tt_result res;
-    volatile u32 syn;                       /* the synth note, for the UI (syn_ui): seq << 16 | velocity << 8 |
-                                               (note + 1), 0 none; the audio task writes it whole, and a note-on
-                                               bumps seq */
-    volatile u32 drum;                      /* syn_ui: the kits' drum mode is on (only plucks play notes there) */
+    volatile u32 syn;                       /* the synth note, for the UI (syn_ui): seq << 16 | move << 15 |
+                                               velocity << 8 | (note + 1), 0 none; the audio task writes it whole,
+                                               and a note-on bumps seq; MIDI out test 4: move (bit 15) a slide or
+                                               hammer-on */
+    volatile u32 drum;                      /* syn_ui: the kits' drum mode is on (MIDI out test 4: the readout's;
+                                               the tracker moves there too, syn_ui strikes on picks only) */
     /* SY test 4 (UI task): the effects chip held on ExtIn while a synth listens to pair 0, so ROUTING can stay on
      * Mix; and what the recorder gets meanwhile */
     volatile u32 hold;                      /* 1: every ROUTING DT1 goes out as ExtIn (sy_route_dt1) */
@@ -103,7 +105,8 @@ typedef struct __attribute__((aligned(32))) {
     u32 syn_sends;                          /* tt.syn writes since the start */
     float pluck_ref;                        /* the last pluck's reference: the highest peak of the 21 ms before it */
     u32 syn_strays;                         /* plucks heard while the synth played whose level did not rise */
-    float voiced_level;                     /* the newest 4 blocks' peak at the last voiced analysis */
+    float voiced_level;                     /* the peak over a period (voiced_pb blocks; the newest 4 until the
+                                               playability study) at the last voiced analysis */
     u32 syn_holds;                          /* analyses the synth held its note through, unvoiced but not quieter */
     float pick_peak;                        /* the highest block peak from the last pluck to its steady note */
     u32 pluck_click;                        /* the last pluck clicked (a pick's highs; a thump has none) */
@@ -127,6 +130,13 @@ typedef struct __attribute__((aligned(32))) {
     float hf6[TT_PEAKS];                    /*   the blocks' energy over 6 kHz */
     s32 old_at;                             /* SY test 27: the block the synth's note was last read steady */
     u32 move_quick;                         /*   the last note-on a quick move (a fret change, for the SY voices) */
+    /* Playability (the audition builds: notes missing over held strings and in bass lines) */
+    u32 voiced_pb;                          /* blocks a period of the last clean reading spans (voiced_level's) */
+    s32 last_note;                          /* the last plain analysis: its note, */
+    u32 last_voiced;                        /*   voiced or not */
+    s32 ring_note;                          /* what the last one before the pending pluck read (-1 unvoiced) */
+    u32 pre_run, brk_run, breaks;           /* a re-pick by a break: clean readings of the synth's note, then
+                                               the readings that were not; re-picks found so (BRK_*) */
     u32 stack[STACK_BYTES / 4] __attribute__((aligned(8)));   /* stack top = &stack[STACK_BYTES / 4], 8-byte aligned */
 } tt_block_t;
 _Static_assert((__builtin_offsetof(tt_block_t, stack) & 7u) == 0, "the FPU side's stack must be 8-byte aligned");
@@ -141,7 +151,7 @@ u32 tune_fp_step(tt_t *t);
 /* ---- SY synth tests 1 and 2 (sy_fp.c): 49 semitone bands, oscillators each, to the DRY pair ---- */
 #define SY_BANDS 49u
 #define SY_SUB 16u                          /* 12 kHz samples a block */
-#define SY_NTONES 20u                       /* SY test 11: the tones (sy_voices.py's VOICES) */
+#define SY_NTONES 32u                       /* SY test 11: the tones (sy_voices.py's VOICES); MIDI out test 4: 32 */
 
 /* A band's constants (sy_tables.h, from sy_ref.py): b0, -a1, -a2 of both band-pass stages, the energy follower,
  * the centre period, the periods that count, the periods the band owns (12 kHz samples). */
@@ -228,7 +238,8 @@ typedef struct {
     u8 rem_down, rem_fx;
     volatile u8 out_bus;                    /* SY test 7: the synth's bus: 0 DRY, 1 BUS 1, 2 BUS 2, 3 both (half each) */
     volatile u8 armed;                      /* SY test 8: the synth may play: set while the screen is up, kept after
-                                               EXIT, cleared once EXT SOURCE is off (not while the chord puts it back) */
+                                               EXIT; MIDI out test 5: kept with the input off, HOLD + EXT SOURCE sets
+                                               it (SOUND on) or turns SOUND OFF */
     u32 rem_taps, rem_holds, fx_passes;     /* REMAIN taps handed on, REMAIN + FX freezes; events an FX screen got */
     u32 sg_page;                            /* the Sound Generator page's object (its views), from its update; 0 off it */
     /* test 4, audio task: the synth's newest block as TX added it, for the recorder on ROUTING ExtIn */

@@ -34,6 +34,7 @@
 #include "tune_test.h"
 #include "sy_tables.h"     /* from the builder (sy_ref.py's tables): SY_DEC, SY_BAND, the constants */
 #include "sy_voice.h"
+#define SYV_WANT_TONES 1  /* MIDI out test 4: the tone table (three slots out of the module) and syv_tone_at */
 #include "syv_tables.h"    /* from the builder (sy_voices.py): the tones, SYV_VREF */
 
 #define FMA(a, b, c) __builtin_fmaf((a), (b), (c))
@@ -324,7 +325,7 @@ u32 sy_fp_step(sy_t *s) {
     kn.gli = s->shape[t][2];
     kn.guard = 2u;
     const u32 vo = s->trk[2] <= 6u ? s->trk[2] : 0u;    /* SY test 24: VOICES (CTRL 3): 1 single notes, 2..6 a cap */
-    const u32 mono = vo == 1u ? 1u : vo >= 2u ? 0u : SYV_TONE[t].mono;   /*   (syv_block's knobs() the same) */
+    const u32 mono = vo == 1u ? 1u : vo >= 2u ? 0u : syv_tone_at(t)->mono;   /*   (syv_block's knobs() the same) */
     kn.voices = (u8)vo;
     {
         s32 since = (s32)b->blocks - b->last_pick;      /* SY test 16: blocks since the last pick */
@@ -346,7 +347,7 @@ u32 sy_fp_step(sy_t *s) {
         kn.yseq = (u8)(run ? tt.syn >> 16 : 0u);       /* SY test 20: its note-ons (a re-pick's too) */
     }
     float mgt = (s->stopping || req != b->tone) ? 0.0f : 1.0f;
-    float mg = syv_block(&syv_state, &SYV_TONE[t], &kn, b->amp, b->per, b->e, b->struck, SYV_VREF, b->mg, mgt,
+    float mg = syv_block(&syv_state, syv_tone_at(t), &kn, b->amp, b->per, b->e, b->struck, SYV_VREF, b->mg, mgt,
                          SY_FADE, SY_OUT_SCALE, s->out);
     b->mg = mg;
     if (req != b->tone && mg <= 0.0f && !s->stopping) {     /* faded out: the new tone, from rest */

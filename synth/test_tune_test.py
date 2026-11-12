@@ -96,6 +96,8 @@ TT_TAIL = ('hold hold_at rec_mix rec_ext grace grace_at holds route_sends route_
            'rec_other sens_db').split()                       # SY test 32: SENS's dB (s32: tt_state signs it)
 FEED_PAIR1, FEED_PAIR = 0x82E011A8, 0x82E0E974     # the recorder feed takes pair 1 if the first is set, else this pair
 LED, LED_REFRESH = 0x800D4910, 0x802496F0          # the key light (key, mode, level); |= 2: stock paints the pads
+LIGHT_MODES, LIGHT_LEVELS, LIGHT_TABLE = 0x80BBCCFC, 0x80BBCC34, 0x83008A24   # MIDI out test 5: the key light's caches
+EXT_GATE = 0x58                                                              # settings: EXT SOURCE's gate
 FEED_FN = 0x0001CA80
 HOLD_SETTLE, REC_GRACE = 12_000_000, 18_000_000    # 20 ms, 30 ms
 report = base.report
@@ -282,6 +284,7 @@ class TuneMachine(Machine):
         self.man, self.sym = man, man['symbols']
         self.lay = Layout(self, self.sym)
         self.fx, self.ext, self.routing, self.getters = fx, ext, routing, []
+        self.gate = 0                                  # MIDI out test 5: settings 0x58, EXT SOURCE's gate
         self.put(CUR_TASK, TCB, '<I')
         self.put(TCB + 0x10, 0x1001, '<I')
         for a in (SYS_GET, SET_GET):
@@ -309,7 +312,12 @@ class TuneMachine(Machine):
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
 
     def _led(self, uc, a, s, _):
-        self.leds.append(tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(3)))
+        k, mode, level = (uc.reg_read(getattr(ar, f'UC_ARM_REG_R{n}')) for n in range(3))
+        self.leds.append((k, mode, level))
+        if k < 0x32:                                   # MIDI out test 5: its caches, as 0x800d4910 keeps them (the
+            uc.mem_write(LIGHT_MODES + k, bytes([mode & 0xFF]))   # module reads them back)
+            if level < 0x80000000:
+                uc.mem_write(LIGHT_LEVELS + 4 * k, struct.pack('<I', level))
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
 
     def routing_dt1(self):
@@ -319,7 +327,7 @@ class TuneMachine(Machine):
     def _getter(self, uc, a, s, _):
         r1 = uc.reg_read(ar.UC_ARM_REG_R1)
         self.getters.append((a, uc.reg_read(ar.UC_ARM_REG_R0), r1, uc.reg_read(ar.UC_ARM_REG_R2)))
-        v = self.ext if a == SET_GET else self.routing if r1 == ROUTING else self.fx
+        v = (self.gate if r1 == EXT_GATE else self.ext) if a == SET_GET else self.routing if r1 == ROUTING else self.fx
         uc.reg_write(ar.UC_ARM_REG_R0, v & 0xFFFFFFFF)
         uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
 
@@ -669,23 +677,27 @@ class SynthMachine(TuneMachine):
 
 
 def kit_note(note):
-    """SY test 6: drum mode's pad for a guitar note: the open low E pad 1 (36), a pad a fret to G3 on pad 16 (51), the
-    notes outside an octave nearer at a time."""
+    """Drum mode's pad for a guitar note. SY test 6: the open low E pad 1 (36), a pad a fret to G3 on pad 16 (51), the
+    notes outside an octave nearer at a time. MIDI out test 4 (the user's map): each note name its pad in every octave,
+    E pad 1 (36) .. D# pad 12 (47); pads 13-16 the hands'."""
     v = note - 40
     while v < 0:
         v += 12
-    while v > 15:
+    while v > 11:
         v -= 12
     return 36 + v
 
 
 def syn_model(words, drum=False, oct=0):
-    """syn_ui on the page, in Python: (block, tt.syn) changes -> the MIDI calls it makes."""
+    """syn_ui on the page, in Python: (block, tt.syn) changes -> the MIDI calls it makes. MIDI out test 4: drum mode
+    strikes on picks only (a move, the word's bit 15, leaves the pad sounding)."""
     sounding, done, out = -1, 0, []
     for b, w in words:
-        seq, vel, note = w >> 16, (w >> 8) & 0x7F, (w & 0xFF) - 1
+        seq, vel, note, move = w >> 16, (w >> 8) & 0x7F, (w & 0xFF) - 1, (w >> 15) & 1
         if seq != done:
             done = seq
+            if drum and move and note >= 0:
+                continue
             if sounding >= 0:
                 out.append((b, 2, sounding, 0, 1))
                 sounding = -1
@@ -701,11 +713,14 @@ def syn_model(words, drum=False, oct=0):
 
 
 class Run:
-    """One signal through the module (SynthMachine) and the twin, side by side."""
-    def __init__(self, img, man, x, noise=0.0, drum=False, oct=0):
-        ms = self.ms = SynthMachine(img, man, oct=oct)
+    """One signal through the module (SynthMachine) and the twin, side by side. MIDI out test 1: `machine` another
+    SynthMachine class, `setup` called with it before the signal."""
+    def __init__(self, img, man, x, noise=0.0, drum=False, oct=0, machine=None, setup=None):
+        ms = self.ms = (machine or SynthMachine)(img, man, oct=oct)
         if drum:
             ms.uc.mem_write(man['kit_mode_flag'], b'\x01')               # kit_mode: a kit, drum mode
+        if setup:
+            setup(ms)
         ms.ui(0)
         ms.ui(0)                                                         # the first reads EXT SOURCE, the second starts
         self.started = ms.tt()['req'] == 1
@@ -879,10 +894,10 @@ def synth_checks(img, man, kit_sym):
     r = Run(img, man, one_string((40, 40, 43, 45, 40), 0.25, seed=20), drum=True)
     check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [36, 36, 39, 41, 36],
           f'drum mode, the riff: a hit for every pick, SY test 6\'s pads (E2 pad 1, G2 pad 4, A2 pad 6) ({r.ons()})')
-    pads = [kit_note(n) for n in (40, 43, 52, 55, 56, 64, 76, 88, 38)]
-    check(pads == [36, 39, 48, 51, 40, 48, 48, 48, 46],
-          f'SY test 6, the kits\' note-to-pad map: E2 pad 1, G2 4, E3 13, G3 16, G#3 an octave down (5), E4, E5, E6 13, '
-          f'drop-D D2 an octave up (11) ({pads})')
+    pads = [kit_note(n) for n in (40, 43, 51, 52, 55, 56, 64, 76, 88, 38)]
+    check(pads == [36, 39, 47, 36, 39, 40, 36, 36, 36, 46],
+          f'MIDI out test 4, the kits\' note-to-pad map (the user\'s: pads 1-12 = E..D#, again every octave): E2 pad 1, '
+          f'G2 4, D#3 12, E3 1, G3 4, G#3 5, E4, E5, E6 1, drop-D D2 11 ({pads})')
     # 5. OCT moves the note (0: the octave tests 1 and 2 played, as the Sound Generator sounds MIDI).
     one = noisy(np.concatenate([np.zeros(fs // 5), stopped(ref.guitar(hz[45], 0.8, seed=6)), np.zeros(fs // 2)]), 6)
     got = {}
@@ -1061,17 +1076,26 @@ def synth_checks(img, man, kit_sym):
 # SY synth tests 1 to 5: the 49-band engine (sy_fp.c), its glue (tune_test.c: sy_ui, sy_rx, sy_tx, the file, test 5's
 # screen through sy_event and the SG page's widgets) and its twin (sy_ref.py).
 SY_OFF, SY_RUN, SY_SLOW = range(3)
-SY_PLAIN = 10                      # SY test 11: PUNCH BASS, mono with a short release (the engine's own checks run on it)
-SY_NT = 20                         # SY test 11: the tones (sy_voices.py's VOICES)
+import sy_voices as _sy_voices  # noqa: E402
+SY_PLAIN = [t['name'] for t in _sy_voices.VOICES].index('PUNCH BASS')   # SY test 11: PUNCH BASS, mono with a short
+#                                    release (the engine's own checks run on it); MIDI out test 14: by name (it was tone
+#                                    10; the final set's tone 10, VECTOR PAD, under a code hook from the first block
+#                                    crashes Unicorn 2.1.4 on the host, while the module = sy_ref.py without the hook)
+SY_NT = 32                         # SY test 11: the tones (sy_voices.py's VOICES); MIDI out test 4: 32
 SY_YIN_MAX = 140000                # SY test 24: a mono tone with the tracker, its analysis every 2 blocks in one (61k):
 #                                    FAT BASS 130k (test 23: 88k; the heaviest poly tones 113k, on the unit since test 17)
-SY_STEP_MAX = 120000               # SY test 17: instructions a step may take (6 voices: measured 44-105k, 13% of a block;
-#                                    test 11: 100000 for 44-91k with 4; tests 1-10: 60000 / 100000)
+SY_STEP_MAX = 180000               # MIDI out test 14: the user's picks include AAH CHOIR (~172k, 21.5% of a block at one a
+#                                    cycle; 49-73% at the 2.3-3.4 cycles an instruction measured, under SLOW's 90%) and
+#                                    RAVE ORGAN (~140k), both played on the unit in the chords audition build.
+#                                    SY test 17: instructions a step may take (6 voices: measured 44-105k, 13% of a block;
+#                                    test 11: 100000 for 44-91k with 4; tests 1-10: 60000 / 100000; MIDI out test 10:
+#                                    120000 -> 125000, the chord voices' switch fade adds up to 600 a step, SG ORGAN
+#                                    119,748 -> 120,333, 15% of a block at one a cycle; SLOW is at 90%)
 SY_HEAD = 'req starts stops reset_req tone_req muted picks taken bpm100 tempo_checked'.split()
 SY_FILE = 'loads saves save_errors bad_files'.split()
 SY_RUNF = 'state rx steps tx fresh stopping sounding last_mix'.split()
-SY_KNOB_AT = 4 * len(SY_HEAD)                  # test 3: s8 knob[20][3], dirty, loaded, two pad bytes; oct, susk, dynk
-SY_FILE_AT = SY_KNOB_AT + 124                  # SY test 11: 20 tones (60 + 4 + 3 x 20)
+SY_KNOB_AT = 4 * len(SY_HEAD)                  # test 3: s8 knob[NT][3], dirty, loaded, two pad bytes; oct, susk, dynk
+SY_FILE_AT = SY_KNOB_AT + 6 * SY_NT + 4        # SY test 11: 20 tones (124); MIDI out test 4: 32 (196)
 SY_RUN_AT = SY_FILE_AT + 4 * len(SY_FILE)
 SY_OUT_AT = SY_RUN_AT + 4 * len(SY_RUNF)
 SY_TAIL = ('w_n w_sum w_max w_tot seq p_blocks p_avg p_max p_tot_max tot_max_ever over slow_cycles hot reset_ack '
@@ -1082,11 +1106,13 @@ SY_REM = 'rem_taps rem_holds fx_passes sg_page rec_fresh'.split()          # two
 KEY_EXT, KEY_EXIT, KEY_VALUE = 0x12, 0x22, 0x31
 KEY_SUB_PAD, KEY_REC_SET, KEY_REC, KEY_SHIFT = 0x13, 0x16, 0x1B, 0x2A
 KEY_REMAIN, KEY_FX1, KEY_MFX = 0x24, 0x2B, 0x30                          # SY test 6
+KEY_HOLD, KEY_PTN_EDIT = 0x11, 0x15                                       # MIDI out test 5
+KEY_MARK = 0x19                                                        # MIDI out test 9
 KEY_DOWN_FN, KEY_UP_FN, FX_FROZEN = 0x8003ABD0, 0x8003ADA0, 0x80592320
 EV_KEY, EV_KEY_UP, EV_ENC, EV_KNOB, EV_PAD, EV_PAD_UP = 5, 6, 7, 9, 0x10, 0x11
 PAGE_REQ, SET_SET = 0x800DA598, 0x800DD0C0
 F_COLOR, F_RECT, F_FONT, F_TEXT, INVALIDATE = 0x800D8018, 0x800CE580, 0x800D80D8, 0x800D4FA0, 0x800D0018
-BAR_END, BAR_DRAWN = 0x800BBCC2, 0x80123C5A
+BAR_END, BAR_DRAWN = 0x800BBCC2, 0x80123C7A          # MIDI out test 8: past the value's box
 WIDGET, FOOTER, FB, FOOTER_VT = SCRATCH + 0x800, SCRATCH + 0x900, 0x12345670, 0x80227000
 BAR_BUF, BAR_SCREEN, BAR_DRAW_ARGS = SCRATCH + 0xC00, SCRATCH + 0xD00, (0x111, 0x222, 0x333, 0x444)
 BAR_Y0, BAR_Y1 = 41, 51                                                  # SY test 6: the item box's rows (any)
@@ -1105,8 +1131,8 @@ class SyLayout:
         self.shape = self.trk + 4                      # SY test 32: shape[20][3] (u16 ms), then filt[20][2] (s8)
         self.filt = self.shape + 6 * SY_NT
         check(self.state == SY_RUN_AT and self.out == SY_OUT_AT and self.knob == SY_KNOB_AT and
-              self.dirty == SY_KNOB_AT + 60 and self.oct == SY_KNOB_AT + 64 and self.susk == self.oct + 20 and
-              self.dynk == self.susk + 20 and self.loads == SY_FILE_AT and
+              self.dirty == SY_KNOB_AT + 3 * SY_NT and self.oct == SY_KNOB_AT + 3 * SY_NT + 4 and
+              self.susk == self.oct + SY_NT and self.dynk == self.susk + SY_NT and self.loads == SY_FILE_AT and
               self.w_n == self.out + 256 and self.pub == self.w_n + 20 and self.tot_max_ever == self.pub + 16 and
               self.mode == self.tot_max_ever + 24 and self.rem_down == self.mode + 64 and self.rec == self.mode + 88 and
               self.trk == self.rec + 128 and self.sy_bytes == self.trk + 4 + 8 * SY_NT and   # SY test 32: shape, filt
@@ -1163,12 +1189,13 @@ class SyMachine(SynthMachine):
     def sy(self):
         s = self.sym['sy']
         st = dict(zip(SY_HEAD, struct.unpack(f'<{len(SY_HEAD)}I', self.bytes(s, 4 * len(SY_HEAD)))))
-        kb = self.bytes(s + SY_KNOB_AT, 124)
-        st['knob'] = [list(struct.unpack('<3b', kb[3 * t:3 * t + 3])) for t in range(SY_NT)]
-        st['dirty'], st['loaded'] = kb[60], kb[61]
-        st['oct'] = list(struct.unpack('<20b', kb[64:84]))
-        st['susk'] = list(kb[84:104])
-        st['dynk'] = list(kb[104:124])
+        n = SY_NT                                                   # MIDI out test 4: 32 tones
+        kb = self.bytes(s + SY_KNOB_AT, 6 * n + 4)
+        st['knob'] = [list(struct.unpack('<3b', kb[3 * t:3 * t + 3])) for t in range(n)]
+        st['dirty'], st['loaded'] = kb[3 * n], kb[3 * n + 1]
+        st['oct'] = list(struct.unpack(f'<{n}b', kb[3 * n + 4:4 * n + 4]))
+        st['susk'] = list(kb[4 * n + 4:5 * n + 4])
+        st['dynk'] = list(kb[5 * n + 4:6 * n + 4])
         st.update(zip(SY_FILE, struct.unpack(f'<{len(SY_FILE)}I', self.bytes(s + SY_FILE_AT, 4 * len(SY_FILE)))))
         st.update(zip(SY_RUNF, struct.unpack(f'<{len(SY_RUNF)}I', self.bytes(s + SY_RUN_AT, 4 * len(SY_RUNF)))))
         st['out'] = list(struct.unpack('<64i', self.bytes(s + self.sl.out, 256)))
@@ -1197,10 +1224,11 @@ class SyMachine(SynthMachine):
         self.put(base.KEYS + (key >> 3), (b | bit) if on else (b & ~bit), '<B')
 
     def open_screen(self):
-        """EXT SOURCE + RECORD SETTING, the SG page there, a UI tick: the screen up."""
-        self.hold(KEY_EXT, True)
+        """VALUE + RECORD SETTING (MIDI out test 5; EXT SOURCE + RECORD SETTING before), the SG page there, a UI tick:
+        the screen up."""
+        self.hold(KEY_VALUE, True)
         self.ev(EV_KEY, KEY_REC_SET)
-        self.hold(KEY_EXT, False)
+        self.hold(KEY_VALUE, False)
         self.ev(EV_KEY_UP, KEY_REC_SET)
         self.page(SG_PAGE)
         self.call(self.sym['sy_ui'])
@@ -1387,11 +1415,12 @@ def sy_checks(parent_img, img, man, kit_sym):
     m.uc.mem_write(sym['sy_block'], b'\xA5' * lay.block_bytes)         # leftovers of an earlier run
     m.call(sym['sy_ui'])
     check(m.sy()['req'] == 0, 'before the UI has read EXT SOURCE and ROUTING: the engine not started')
-    disarmed = m.sy()['armed']                         # SY test 8: EXT SOURCE not read yet (off): disarmed
+    kept = m.sy()['armed']                             # MIDI out test 5: EXT SOURCE not read yet (off): still armed
+                                                       # (SY test 8 disarmed it; HOLD + EXT SOURCE switches it now)
     m.put(sym['sy'] + lay.armed, 1, '<B')              # the screen opened since (the arming: sy_screen_checks)
     m.start()
     st = m.sy()
-    check(disarmed == 0 and st['req'] == 1 and st['starts'] == 1 and
+    check(kept == 1 and st['req'] == 1 and st['starts'] == 1 and
           not any(m.bytes(sym['sy_block'], lay.block_bytes)) and m.routing_dt1() == [1],
           'main screen, EXT SOURCE on, ROUTING ExtIn: the chip held (ROUTING DT1 ExtIn), the engine cleared and handed '
           'over')
@@ -1730,7 +1759,10 @@ def sy_tone_checks(img, man):
     #     notes): the module's output = sy_ref.py's with the same settings, value for value, and not with the settings
     #     at 0 (the settings reach the notes).
     tmism, tdiff, tworst = [], {}, 0
-    for tone, glitch, vo in ((0, 40, 3), (7, 80, 0), (18, 100, 1)):
+    tnames = [t['name'] for t in sy_voices.VOICES]                     # MIDI out test 14: by name (were tones 0, 7, 18;
+    trio = ((tnames.index('POLY PAD'), 40, 3), (tnames.index('LADDER LEAD'), 80, 0),   # SG SYNTH for SG PLUCK)
+            (tnames.index('SG SYNTH'), 100, 1))
+    for tone, glitch, vo in trio:
         mt = SyMachine(img, man)
         mt.put(sym['sy'] + mt.sl.tone_req, tone, '<I')
         mt.uc.mem_write(sym['sy'] + mt.sl.trk, bytes([glitch, 0, vo, 0]))   # SY test 32: SENS is the tracker's
@@ -1756,7 +1788,7 @@ def sy_tone_checks(img, man):
     check(not tmism and all(v > 0 for v in tdiff.values()) and tworst <= SY_STEP_MAX,
           f'SY test 15: with the TRACK page set (SY test 24: GLITCH 40 / 80 / 100, SENS 20, VOICES 3 / AUTO / MONO) '
           f'the module\'s '
-          f'output = sy_ref.py\'s with the same settings, value for value (POLY PAD, LADDER LEAD, SG PLUCK x '
+          f'output = sy_ref.py\'s with the same settings, value for value (POLY PAD, LADDER LEAD, SG SYNTH x '
           f'{len(blocks)} blocks; first differences '
           f'{tmism[:3]}), unlike the settings at 0 in blocks {tdiff}; the most instructions a step takes {tworst}')
     # 1c. SY test 19: a mono tone's notes from the SG tracker. FAT BASS on the six open strings, each picked as the last
@@ -1774,9 +1806,10 @@ def sy_tone_checks(img, man):
         yx[at:at + len(sg)] += sg[:len(yx) - at]
     yblocks = ref.to_blocks(np.clip(ref.hiss(yx, 1), -1, 1))
     my = SyMachine(img, man)
-    my.put(sym['sy'] + my.sl.tone_req, 8, '<I')
+    fat = [t['name'] for t in _sy_voices.VOICES].index('FAT BASS')   # MIDI out test 14: by name (was tone 8)
+    my.put(sym['sy'] + my.sl.tone_req, fat, '<I')
     my.start()
-    eng = sy_ref.Engine(8)
+    eng = sy_ref.Engine(fat)
     ymism, ytop, ybands, yrun = [], 0, [], []
     for b, values in enumerate(yblocks):
         my.feed(values)
@@ -1796,8 +1829,9 @@ def sy_tone_checks(img, man):
         if got != want:
             ymism.append(b)
         yrun.append(eng.ykn[1] >= 0x80)
-        nb_, ng_ = struct.unpack_from('<bB', eng.host().state, 6 * 160 + 84)   # n[0]'s band and gate (6 voices
-        ybands.append(40 + nb_ if ng_ and nb_ >= 0 else -1)                    #   of 160 bytes before the notes)
+        nb_, ng_ = struct.unpack_from('<bB', eng.host().state, 6 * 164 + 84)   # n[0]'s band and gate (6 voices
+        ybands.append(40 + nb_ if ng_ and nb_ >= 0 else -1)                    #   of 164 bytes before the notes;
+        #                                                                          MIDI out test 10: 160 + its sw bytes)
     ylate, yother = [], []
     for i, n in enumerate(ynotes):
         i0 = int((0.2 + 0.5 * i) * 48000) // 64
@@ -1855,9 +1889,10 @@ def sy_tone_checks(img, man):
         rx[at:at + len(sg)] += sg
     rblocks = ref.to_blocks(np.clip(ref.hiss(rx, 0), -1, 1))
     mr = SyMachine(img, man)
-    mr.put(sym['sy'] + mr.sl.tone_req, 8, '<I')
+    fat = [t['name'] for t in _sy_voices.VOICES].index('FAT BASS')   # MIDI out test 14: by name (was tone 8)
+    mr.put(sym['sy'] + mr.sl.tone_req, fat, '<I')
     mr.start()
-    eng = sy_ref.Engine(8)
+    eng = sy_ref.Engine(fat)
     ctl = 6 * 4 * 6 + 4 * 6                                            # syv_ctl_t, the state's last member
     rmism, rtrig, rpitch = [], [], []
     for b, values in enumerate(rblocks):
@@ -1936,6 +1971,10 @@ def sy_tone_checks(img, man):
     sy_screen_checks(img, man)
     sy_route_checks(img, man)
     gnotes_checks(img, man)                                          # SY test 31
+    looper_light_checks(img, man)                                    # MIDI out test 7
+    value_hold_checks(img, man)                                      # MIDI out test 8
+    filter_page_checks(img, man)                                     # MIDI out test 11
+    bank_checks(img, man)                                            # MIDI out test 12
     sy32_checks(img, man)                                            # SY test 32
 
 
@@ -1947,58 +1986,270 @@ def gn(m):
     return struct.unpack('<2I', m.bytes(m.sym['gsyn'] + 28, 8))
 
 
+def gn_ext(m):
+    """MIDI out test 2: gsyn's EXT SOURCE tap state and the taps that switched the input (after test 31's two words)."""
+    return struct.unpack('<2I', m.bytes(m.sym['gsyn'] + 36, 8))
+
+
+def gn5(m):
+    """MIDI out test 5: gsyn's gate press, synth switches, notes switches and hint (after test 4's loop_offs)."""
+    return struct.unpack('<4I', m.bytes(m.sym['gsyn'] + 64, 16))
+
+
 def gnotes_checks(img, man):
-    """SY test 31: EXT SOURCE + SUB PAD on the Sound Generator page switches the guitar's notes there off and on."""
+    """SY test 31: the guitar's notes on the Sound Generator page switched off and on. MIDI out test 5 (the user: EXT
+    SOURCE not to cycle options, "user may want to like switch to mic or something while playing machine"; HOLD for
+    switches, VALUE for screens): EXT SOURCE there switches the input only (a tap; with its gate on, on while held);
+    HOLD + EXT SOURCE switches the guitar synth on any page, HOLD + RECORD SETTING (the kits: HOLD + PATTERN EDIT) the
+    page's notes; EXT SOURCE's light out / white / green, green on any page while the synth is on; PATTERN EDIT pulses
+    with stock's SHIFT hint."""
     sym = man['symbols']
-    # 1. EXT SOURCE held + SUB PAD on the plain page: its pad hit and key press taken (no preview, nothing to note
-    #    repeat), the notes off, a popup, the input left as it is (stock ignores EXT SOURCE there: no setter call, no
-    #    ext_fix); its releases taken; EXT SOURCE's release goes on and writes the file (byte 6 bit 1, muted bit 0
-    #    kept). Again: on, its popup.
+    entry = LIGHT_TABLE + 8 * KEY_EXT                                 # stock's key light table: mode, colour
+
+    def tap(m):
+        """One EXT SOURCE tap: (press, release) results, setter calls, LED calls, the table entry, the popup."""
+        m.popups()
+        m.sets.clear()
+        m.leds.clear()
+        r = [m.ev(EV_KEY, KEY_EXT), m.ev(EV_KEY_UP, KEY_EXT)]
+        return (r, [x for x in m.sets if x[0] == 0x25], list(m.leds), (m.get(entry, '<b'), m.get(entry + 4, '<I')),
+                m.posted())
+
+    def chord(m, mod, key):
+        """mod held, key pressed and let go: (press, release) results, setter calls, LED calls, the popup."""
+        m.popups()
+        m.sets.clear()
+        m.leds.clear()
+        m.hold(mod, True)
+        r = [m.ev(EV_KEY, key)]
+        m.hold(mod, False)
+        r.append(m.ev(EV_KEY_UP, key))
+        return r, [x for x in m.sets if x[0] == 0x25], list(m.leds), m.posted()
+
+    # 1. The plain page (the kits' too: the same page), gate off: a tap switches the input, off (the light out, the
+    #    table's resting entry) and on (green: the notes on), a popup each; the notes flag untouched; press and release
+    #    go on to stock (which ignores EXT SOURCE there).
     g = ScreenMachine(img, man, page=SG_PAGE)
     g.start()
-    g.popups()
-    g.hold(KEY_EXT, True)
-    first = [g.ev(EV_PAD, KEY_SUB_PAD, 90), g.ev(EV_KEY, KEY_SUB_PAD)]
-    off1, text1 = gn(g), g.posted()
-    st1 = g.sy()
-    ups = [g.ev(EV_KEY_UP, KEY_SUB_PAD), g.ev(EV_PAD_UP, KEY_SUB_PAD)]
+    steps = [tap(g) + (gn(g)[0], g.ext) for _ in range(2)]
+    ok1 = all(x[0] == [(0, True), (0, True)] for x in steps) and \
+        [tuple(x[1]) for x in steps] == [((0x25, 0, 0),), ((0x25, 1, 0),)] and \
+        [x[2] for x in steps] == [[(KEY_EXT, 1, 0)], [(KEY_EXT, 1, 0xFF00)]] and \
+        [x[3] for x in steps] == [(0, 0x1F1F00), (1, 0xFF00)] and \
+        [x[4] for x in steps] == ['EXT IN\nOFF', 'EXT IN\nON'] and [x[5] for x in steps] == [0, 0] and \
+        [x[6] for x in steps] == [0, 1] and gn_ext(g) == (0, 2)
+    g.hold(KEY_EXT, True)                                             # EXT SOURCE + VALUE, + SUB PAD: no switch
+    chord0 = [g.ev(EV_KEY, KEY_EXT), g.ev(EV_KEY, KEY_VALUE), g.ev(EV_KEY_UP, KEY_VALUE),
+              g.ev(EV_PAD, KEY_SUB_PAD, 90), g.ev(EV_PAD_UP, KEY_SUB_PAD)]
     g.hold(KEY_EXT, False)
-    ext_up = g.ev(EV_KEY_UP, KEY_EXT)
-    wrote = g.files.writes[-1][1] if g.files.writes else b''
-    g.popups()
-    g.hold(KEY_EXT, True)
-    second = [g.ev(EV_PAD, KEY_SUB_PAD, 90), g.ev(EV_KEY, KEY_SUB_PAD)]
-    off2, text2 = gn(g), g.posted()
-    g.ev(EV_KEY_UP, KEY_SUB_PAD)
-    g.ev(EV_PAD_UP, KEY_SUB_PAD)
-    g.hold(KEY_EXT, False)
-    g.ev(EV_KEY_UP, KEY_EXT)
-    wrote2 = g.files.writes[-1][1] if g.files.writes else b''
-    plain = [g.ev(EV_KEY, KEY_SUB_PAD), g.ev(EV_KEY_UP, KEY_SUB_PAD)]       # SUB PAD alone: on to stock
-    check(first == [(1, False), (1, False)] and off1 == (1, 1) and text1 == GN_OFF_TEXT and st1['ext_fix'] == 0 and
-          not g.sets and ups == [(1, False), (1, False)] and ext_up == (0, True) and len(wrote) == 296 and
-          wrote[6] == 2 and second == [(1, False), (1, False)] and off2 == (0, 2) and text2 == GN_ON_TEXT and
-          len(wrote2) == 296 and wrote2[6] == 0 and plain == [(0, True), (0, True)],
-          f'SY test 31: EXT SOURCE + SUB PAD on the Sound Generator page: SUB PAD\'s pad hit and press taken, the '
-          f'guitar\'s notes off ({off1}), popup {text1!r}, the input left alone (no setter call, ext_fix '
-          f'{st1["ext_fix"]}), the releases '
-          f'taken; EXT SOURCE\'s release goes on and writes the file (byte 6 = {wrote[6] if wrote else None}); again: '
-          f'on ({off2}), {text2!r}, byte 6 = {wrote2[6] if wrote2 else None}; SUB PAD alone goes on')
-    # 2. Where it is not: the main screen (EXT SOURCE + SUB PAD goes on, nothing switched), the guitar synth screen (its
-    #    own SUB PAD, taken silently as before, nothing switched).
-    mn = ScreenMachine(img, man)
-    mn.start()
-    mn.hold(KEY_EXT, True)
-    on_main = [mn.ev(EV_PAD, KEY_SUB_PAD, 90), mn.ev(EV_KEY, KEY_SUB_PAD)]
+    chord0.append(g.ev(EV_KEY_UP, KEY_EXT))
+    check(ok1 and chord0 == [(0, True)] * 6 and gn(g)[0] == 0 and gn_ext(g) == (0, 2) and g.ext == 1,
+          f'MIDI out test 5: EXT SOURCE tapped on the Sound Generator page switches the input: off (setter '
+          f'{steps[0][1]}, light {steps[0][2]} {steps[0][3]}), on (setter {steps[1][1]}, green {steps[1][3]}: the notes '
+          f'on), popups {[x[4] for x in steps]}; the notes untouched; press and release go on; EXT SOURCE + VALUE and + '
+          f'SUB PAD switch nothing')
+    # 2. The guitar synth screen: the tap switches the input only, SOUND kept (green with SOUND on); VALUE's push is
+    #    still the screen's (the synth's bus).
     sc = ScreenMachine(img, man, page=SG_PAGE)
     sc.start()
     sc.open_screen()
-    sc.hold(KEY_EXT, True)
-    on_screen = [sc.ev(EV_PAD, KEY_SUB_PAD, 90), sc.ev(EV_KEY, KEY_SUB_PAD)]
-    check(on_main == [(0, True), (0, True)] and gn(mn) == (0, 0) and on_screen == [(1, False), (1, False)] and
-          gn(sc) == (0, 0) and sc.sy()['mode'] == 1,
-          f'SY test 31: EXT SOURCE + SUB PAD on the main screen goes on ({on_main}); on the guitar synth screen SUB PAD '
-          f'stays the screen\'s ({on_screen}); neither switches the notes')
+    tone0 = sc.sy()['tone_req']
+    st_sc = [tap(sc) + (sc.sy()['muted'], sc.ext, sc.sy()['mode']) for _ in range(2)]
+    bus0 = sc.sy()['out_bus']
+    on_screen = sc.ev(EV_KEY, KEY_VALUE)
+    check([tuple(x[1]) for x in st_sc] == [((0x25, 0, 0),), ((0x25, 1, 0),)] and [x[5] for x in st_sc] == [0, 0] and
+          [x[6] for x in st_sc] == [0, 1] and all(x[7] == 1 for x in st_sc) and
+          [x[3] for x in st_sc] == [(0, 0x1F1F00), (1, 0xFF00)] and sc.sy()['tone_req'] == tone0 and
+          gn(sc)[0] == 0 and on_screen == (1, False) and sc.sy()['out_bus'] == (bus0 + 1) & 3,
+          f'MIDI out test 5: on the guitar synth screen the tap switches the input only (SOUND kept: muted '
+          f'{[x[5] for x in st_sc]}, tone {sc.sy()["tone_req"]}); VALUE\'s push still the screen\'s (the synth\'s bus)')
+    # 3. No switch after a chord (a key, a pad, a knob, SHIFT between), nor with SHIFT, REMAIN or VALUE held at the
+    #    press (stock's INPUT SETTING, input bus, FX deep edit's), nor on the main screen (stock's own there).
+    t = ScreenMachine(img, man, page=SG_PAGE)
+    t.start()
+    chords = []
+    for other in ((EV_KEY, KEY_VALUE), (EV_PAD, 3), (EV_KNOB, 2), (EV_KEY, KEY_SHIFT)):
+        t.ev(EV_KEY, KEY_EXT)
+        t.hold(KEY_EXT, True)
+        t.ev(other[0], other[1], 64 if other[0] == EV_KNOB else 90)
+        t.hold(KEY_EXT, False)
+        chords.append(t.ev(EV_KEY_UP, KEY_EXT))
+        if other == (EV_KEY, KEY_VALUE):
+            t.ev(EV_KEY_UP, KEY_VALUE)
+    for mod in (KEY_SHIFT, KEY_REMAIN, KEY_VALUE):
+        t.hold(mod, True)
+        chords.append(t.ev(EV_KEY, KEY_EXT))
+        t.hold(mod, False)
+        chords.append(t.ev(EV_KEY_UP, KEY_EXT))
+    sets3 = [x for x in t.sets if x[0] == 0x25]
+    mn2 = ScreenMachine(img, man)
+    mn2.start()
+    on_main2 = [mn2.ev(EV_KEY, KEY_EXT), mn2.ev(EV_KEY_UP, KEY_EXT)]
+    check(chords == [(0, True)] * 10 and not sets3 and gn(t)[0] == 0 and gn_ext(t) == (0, 0) and
+          on_main2 == [(0, True), (0, True)] and not [x for x in mn2.sets if x[0] == 0x25] and gn_ext(mn2) == (0, 0),
+          'MIDI out test 5: no input switch after a chord (EXT SOURCE + VALUE, a pad, a knob, SHIFT), nor with SHIFT, '
+          'REMAIN or VALUE held at the press, nor on the main screen (stock\'s own there)')
+    # 3b. EXT SOURCE's gate on (settings 0x58, stock's EXT SOURCE + GATE): on the page the input is on from the press
+    #     to the release (put on at the press if off, off at the release), no popup, no tap counted; on the main screen
+    #     stock's own.
+    gt = ScreenMachine(img, man, page=SG_PAGE, ext=0)
+    gt.gate = 1
+    gt.start()
+    gt.popups()
+    gt.sets.clear()
+    gpress = gt.ev(EV_KEY, KEY_EXT)
+    g_held = ([x for x in gt.sets if x[0] == 0x25], gt.ext, gn5(gt)[0])
+    grel = gt.ev(EV_KEY_UP, KEY_EXT)
+    g_after = ([x for x in gt.sets if x[0] == 0x25], gt.ext, gn5(gt)[0], gt.posted(), gn_ext(gt))
+    gt.ext = 1                                                        # already on at the press: off at the release
+    gt.sets.clear()
+    gt.ev(EV_KEY, KEY_EXT)
+    on_held = [x for x in gt.sets if x[0] == 0x25]
+    gt.ev(EV_KEY_UP, KEY_EXT)
+    on_rel = [x for x in gt.sets if x[0] == 0x25]
+    gm = ScreenMachine(img, man, ext=0)
+    gm.gate = 1
+    gm.start()
+    gm_r = [gm.ev(EV_KEY, KEY_EXT), gm.ev(EV_KEY_UP, KEY_EXT)]
+    check(gpress == (0, True) and grel == (0, True) and g_held == ([(0x25, 1, 0)], 1, 1) and
+          g_after == ([(0x25, 1, 0), (0x25, 0, 0)], 0, 0, None, (0, 0)) and on_held == [] and
+          on_rel == [(0x25, 0, 0)] and gm_r == [(0, True), (0, True)] and not [x for x in gm.sets if x[0] == 0x25],
+          f'MIDI out test 5: with EXT SOURCE\'s gate on the page\'s input is on while the key is held ({g_held[0]}, then '
+          f'{g_after[0]} at the release), no popup and no tap; already on: off at the release; the main screen stock\'s')
+    # 4. HOLD + EXT SOURCE, on any page: the guitar synth on (armed, SOUND on) and off (SOUND OFF), the press and the
+    #    release taken, the input untouched (gate on too), a popup each; EXT SOURCE green on the main screen while the
+    #    synth is on (input on), white again when off.
+    h = ScreenMachine(img, man, armed=False)
+    h.start()
+    h1 = chord(h, KEY_HOLD, KEY_EXT) + (h.sy()['armed'], h.sy()['muted'])
+    h2 = chord(h, KEY_HOLD, KEY_EXT) + (h.sy()['armed'], h.sy()['muted'])
+    h.gate = 1
+    h3 = chord(h, KEY_HOLD, KEY_EXT) + (h.sy()['armed'], h.sy()['muted'])
+    hs = ScreenMachine(img, man, page=SG_PAGE, armed=False)
+    hs.start()
+    hs.put(sym['gsyn'] + 28, 1, '<I')                                 # the page's notes off: the light shows the synth
+    hs1 = chord(hs, KEY_HOLD, KEY_EXT) + (hs.sy()['armed'], hs.sy()['muted'])
+    check(h1[0] == [(1, False), (1, False)] and h1[1] == [] and h1[2] == [(KEY_EXT, 1, 0xFF00)] and
+          h1[3] == 'GUITAR SYNTH\nON' and h1[4:] == (1, 0) and
+          h2[0] == [(1, False), (1, False)] and h2[1] == [] and h2[2] == [(KEY_EXT, 1, 0xFFFFFF)] and
+          h2[3] == 'GUITAR SYNTH\nOFF' and h2[4:] == (1, 1) and
+          h3[0] == [(1, False), (1, False)] and h3[1] == [] and h3[3] == 'GUITAR SYNTH\nON' and h3[4:] == (1, 0) and
+          hs1[0] == [(1, False), (1, False)] and hs1[1] == [] and hs1[2] == [(KEY_EXT, 1, 0xFF00)] and
+          hs1[4:] == (1, 0) and gn5(h)[1] == 3 and gn5(hs)[1] == 1,
+          f'MIDI out test 5: HOLD + EXT SOURCE switches the guitar synth on ({h1[2]}, {h1[3]!r}) and off ({h2[2]}, '
+          f'{h2[3]!r}) on the main screen, the press and release taken, the input untouched (gate on too); on the '
+          f'Sound Generator page too ({hs1[2]})')
+    # 5. HOLD + RECORD SETTING on the plain page (melodic): the notes off and on, taken, a popup each, the light white
+    #    (the synth off) then green; HOLD + PATTERN EDIT goes on there. In the kits HOLD + PATTERN EDIT switches them
+    #    and HOLD + RECORD SETTING goes on. On the guitar synth screen neither is the notes' switch.
+    n = ScreenMachine(img, man, page=SG_PAGE, armed=False)
+    n.start()
+    n1 = chord(n, KEY_HOLD, KEY_REC_SET) + (gn(n)[0],)
+    n2 = chord(n, KEY_HOLD, KEY_REC_SET) + (gn(n)[0],)
+    n3 = chord(n, KEY_HOLD, KEY_PTN_EDIT) + (gn(n)[0],)
+    k = ScreenMachine(img, man, page=SG_PAGE, armed=False)
+    k.start()
+    k.uc.mem_write(man['kit_mode_flag'], b'\x01')                    # a kit: drum mode
+    k1 = chord(k, KEY_HOLD, KEY_PTN_EDIT) + (gn(k)[0],)
+    k2 = chord(k, KEY_HOLD, KEY_REC_SET) + (gn(k)[0],)
+    ss = ScreenMachine(img, man, page=SG_PAGE)
+    ss.start()
+    ss.open_screen()
+    ss1 = chord(ss, KEY_HOLD, KEY_REC_SET) + (gn(ss)[0],)
+    check(n1[0] == [(1, False), (1, False)] and n1[3] == 'GUITAR NOTES\nOFF' and n1[4] == 1 and
+          n1[2] == [(KEY_EXT, 1, 0xFFFFFF)] and n2[0] == [(1, False), (1, False)] and n2[3] == 'GUITAR NOTES\nON' and
+          n2[4] == 0 and n2[2] == [(KEY_EXT, 1, 0xFF00)] and n3[0] == [(0, True), (0, True)] and n3[4] == 0 and
+          k1[0] == [(1, False), (1, False)] and k1[3] == 'GUITAR NOTES\nOFF' and k1[4] == 1 and
+          k2[0] == [(0, True), (0, True)] and k2[4] == 1 and ss1[4] == 0 and ss1[3] != 'GUITAR NOTES\nOFF' and
+          gn5(n)[2] == 2 and gn5(k)[2] == 1 and not n1[1] and not k1[1],
+          f'MIDI out test 5: HOLD + RECORD SETTING switches the guitar\'s notes on the Sound Generator page (popups '
+          f'{n1[3]!r} {n2[3]!r}, light {n1[2]} {n2[2]}), HOLD + PATTERN EDIT goes on there; in the kits HOLD + PATTERN '
+          f'EDIT switches them, HOLD + RECORD SETTING goes on; on the guitar synth screen no notes switch')
+    # 6. The light kept in step by the UI tick: on the page white (input on, notes off, synth off), nothing when nothing
+    #    changed, green once the notes are on; off the page with the synth off stock's white once; with it on, green
+    #    there, painted again after stock paints over it (the caches say so), then nothing.
+    lt = ScreenMachine(img, man, page=SG_PAGE, armed=False)
+    lt.start()
+    lt.put(sym['gsyn'] + 28, 1, '<I')                                 # the notes off
+    lt.call(sym['syn_ui'])
+    lt.leds.clear()
+    lt.call(sym['syn_ui'])
+    quiet = list(lt.leds)
+    lt.put(sym['gsyn'] + 28, 0, '<I')                                 # the notes on (as the file could): green
+    lt.call(sym['syn_ui'])
+    green = list(lt.leds)
+    lt.leds.clear()
+    lt.page(1)
+    lt.call(sym['syn_ui'])
+    away = list(lt.leds)
+    lt.put(sym['sy'] + lt.sl.armed, 1, '<B')                          # the synth on: green on the main screen
+    lt.leds.clear()
+    lt.call(sym['syn_ui'])
+    away_on = list(lt.leds)
+    lt.leds.clear()
+    lt.call(sym['syn_ui'])
+    steady = list(lt.leds)
+    lt.uc.mem_write(LIGHT_LEVELS + 4 * KEY_EXT, struct.pack('<I', 0xFFFFFF))   # stock paints it white
+    lt.call(sym['syn_ui'])
+    again = list(lt.leds)
+    check(quiet == [] and green[-1:] == [(KEY_EXT, 1, 0xFF00)] and away == [(KEY_EXT, 1, 0xFFFFFF)] and
+          away_on == [(KEY_EXT, 1, 0xFF00)] and steady == [] and again == [(KEY_EXT, 1, 0xFF00)],
+          f'MIDI out test 5: the light kept in step by the UI tick (green once the notes are on: {green}); off the page '
+          f'stock\'s white once ({away}), green while the synth is on ({away_on}), painted again after stock paints '
+          f'over it ({again}), nothing when nothing changed')
+    # 7. The guitar synth plays on the Sound Generator page with the page's notes off (test 4: never there).
+    pl = ScreenMachine(img, man, page=SG_PAGE)
+    pl.start()
+    pl.call(sym['tune_ui'])
+    pl.call(sym['sy_ui'])
+    req_notes = pl.sy()['req']
+    pl.put(sym['gsyn'] + 28, 1, '<I')
+    pl.call(sym['syn_ui'])
+    pl.call(sym['tune_ui'])
+    pl.ui(0)
+    pl.call(sym['sy_ui'])
+    pl.ui(0)
+    pl.call(sym['sy_ui'])
+    req_off = pl.sy()['req']
+    check(req_notes == 0 and req_off == 1,
+          f'MIDI out test 5: on the Sound Generator page the guitar synth stays off while the page\'s notes play '
+          f'(req {req_notes}) and plays with them off (req {req_off})')
+    # 8. SHIFT's hint: while stock shows it (RECORD SETTING's cache at mode 3) PATTERN EDIT pulses with it on the main
+    #    screen; after, its light table entry again; not on the Sound Generator page, not without stock's hint.
+    sh = ScreenMachine(img, man, armed=False)                          # (the synth off: EXT SOURCE's light quiet)
+    sh.start()
+    sh.uc.mem_write(LIGHT_TABLE + 8 * KEY_PTN_EDIT, struct.pack('<iI', 0, 0x1F))
+    sh.uc.mem_write(LIGHT_MODES + KEY_REC_SET, b'\x03')
+    sh.hold(KEY_SHIFT, True)
+    sh.leds.clear()
+    sh.call(sym['syn_ui'])
+    lit1 = list(sh.leds)
+    sh.leds.clear()
+    sh.call(sym['syn_ui'])
+    lit2 = list(sh.leds)
+    hint_on = gn5(sh)[3]
+    sh.hold(KEY_SHIFT, False)
+    sh.uc.mem_write(LIGHT_MODES + KEY_REC_SET, b'\x00')
+    sh.leds.clear()
+    sh.call(sym['syn_ui'])
+    back = list(sh.leds)
+    hs2 = ScreenMachine(img, man, page=SG_PAGE)
+    hs2.start()
+    hs2.uc.mem_write(LIGHT_MODES + KEY_REC_SET, b'\x03')
+    hs2.hold(KEY_SHIFT, True)
+    hs2.leds.clear()
+    hs2.call(sym['syn_ui'])
+    sg_none = [x for x in hs2.leds if x[0] == KEY_PTN_EDIT]
+    nh = ScreenMachine(img, man)
+    nh.start()
+    nh.hold(KEY_SHIFT, True)
+    nh.leds.clear()
+    nh.call(sym['syn_ui'])
+    no_hint = [x for x in nh.leds if x[0] == KEY_PTN_EDIT]
+    check(lit1 == [(KEY_PTN_EDIT, 3, 0xFF)] and lit2 == [] and hint_on == 1 and back == [(KEY_PTN_EDIT, 0, 0x1F)] and
+          gn5(sh)[3] == 0 and sg_none == [] and no_hint == [],
+          f'MIDI out test 5: PATTERN EDIT pulses with stock\'s SHIFT hint on the main screen ({lit1}), once; its table '
+          f'entry again after ({back}); not on the Sound Generator page nor without stock\'s hint')
     # 3. Off on the page: a note sounding is let go, the tracker is not asked for, no ROUTING hold for the page (the
     #    synth disarmed); on again: the hold and the tracker come back.
     p = ScreenMachine(img, man, page=SG_PAGE, armed=False, routing=0)   # the user's ROUTING: Mix
@@ -2032,6 +2283,27 @@ def gnotes_checks(img, man):
           f30.sy()['muted'] == 1,
           'SY test 31: the file\'s byte 6 bit 1 reads back as the notes off (bit 0 SOUND OFF as before); test 30\'s file '
           'as on')
+
+
+def v45_moved(knob1, filt_file):
+    """MIDI out test 14: what a version 4 / 5 file's 20 tones become, by tune_test.c's SY test 34 rule over the table: a
+    tone whose own setting before test 34 (sy_voices.P2_BEFORE_34) is not the table's now takes CTRL 1's old value to
+    the FILTER page (ENV or RESO, over the file's) and CTRL 1 to the middle (0). -> (CTRL 1s, FILTERs, moved tones)"""
+    old = _sy_voices.P2_BEFORE_34
+    new = [t.get('p2', _sy_voices.P_RESO) for t in _sy_voices.VOICES[:len(old)]]
+    knobs, filts, moved = [], [], []
+    for t in range(len(old)):
+        k, f = knob1, list(filt_file[t])
+        if old[t] != new[t]:
+            if old[t] == _sy_voices.P_ENV:
+                f[0] = knob1
+            elif old[t] == _sy_voices.P_RESO:
+                f[1] = knob1
+            k = 0
+            moved.append(t)
+        knobs.append(k)
+        filts.append(f)
+    return knobs, filts, moved
 
 
 def sy32_checks(img, man):
@@ -2071,19 +2343,43 @@ def sy32_checks(img, man):
           f'SY test 32: SENS moves the tracker\'s floors: tt.sens_db from the TRACK page (100: +12, 50: 0, 0: -12); a '
           f'quiet model phrase (peaks near -51 dBFS): the module = tune_ref.py at the same floors, note for note, '
           f'notes played +12 / 0 / -12: {[v[1] for v in res.values()]}')
-    # 2. A version 4 file (tests 11-31): SENS back to 50 (its old gate), ATTACK and GLIDE own settings (POLY PAD,
-    #    LADDER LEAD) as designed (the SHAPE page has them now), ENV kept (ENSEMBLE); written back as version 5.
+    # 2. A version 4 file (tests 11-31): SENS back to 50 (its old gate); SY test 34: a tone whose own setting changed
+    #    has CTRL 1 in the middle, its old ENV (ENSEMBLE) or RESO (ACID BASS) on the FILTER page, its old ATTACK /
+    #    GLIDE (POLY PAD, LADDER LEAD) gone (as designed); an unchanged one (VECTOR PAD's RATE) kept; written as 6.
     f4 = ScreenMachine(img, man, store={SY_PATH: sy_file_bytes(0, 0, [[0, 20, 0]] * 20, version=4, trk=(10, 37, 0x41))})
     f4.start()
     f4.ev(EV_KEY, KEY_EXIT)
     s4 = f4.sy()
     f4.ev(EV_KEY_UP, KEY_EXIT)
     w4 = f4.files.writes[-1][1] if f4.files.writes else b''
-    check(s4['loads'] == 1 and s4['trk'][:3] == [10, 0, 1] and s4['knob'][0][1] == 0 and s4['knob'][7][1] == 0 and
-          s4['knob'][3][1] == 20 and s4['dirty'] == 1 and len(w4) == 296 and w4[4] == 5,
-          f'SY test 32: a version 4 file: GLITCH and VOICES kept, SENS back to 50 ({s4["trk"][:3]}), POLY PAD\'s and '
-          f'LADDER LEAD\'s own ATTACK / GLIDE as designed, ENSEMBLE\'s ENV kept; written back as version 5 '
-          f'({len(w4)} bytes)')
+    # MIDI out test 14: the move by the table (tune_test.c: a tone whose own setting before SY test 34, P2_BEFORE_34,
+    # differs from the table's now). The final set's own file was never written by a build before version 7, so this
+    # only keeps the rule honest; with tests 4-13's table it was ENSEMBLE's ENV / ACID BASS's RESO, VECTOR PAD kept.
+    k4, f4w, moved4 = v45_moved(20, [(0, 0)] * 20)
+    check(s4['loads'] == 1 and s4['trk'][:3] == [10, 0, 1] and [s4['knob'][t][1] for t in range(20)] == k4 and
+          [s4['filt'][t] for t in range(20)] == f4w and s4['shape'][0] == [0, 0, 0] and
+          s4['dirty'] == 1 and len(w4) == 464 and w4[4] == 7,
+          f'SY test 32: a version 4 file: GLITCH and VOICES kept, SENS back to 50 ({s4["trk"][:3]}); SY test 34: a '
+          f'tone whose own setting changed has CTRL 1 in the middle and its old ENV / RESO on the FILTER page '
+          f'(tones {moved4}), the rest kept; written back as version 7 ({len(w4)} bytes)')
+    # SY test 34: a version 5 file (tests 32-33): the same move from its shared ENV / RESO (CTRL 1's byte), its SHAPE
+    # and FILTER pages read (POLY PAD's ATTACK kept on SHAPE, SUPERSAW's FILTER kept), written as version 6.
+    f5 = ScreenMachine(img, man, store={SY_PATH: sy_file_bytes(
+        0, 0, [[0, 20, 0]] * 20, version=5, shape=[(50, 0, 0)] + [(0, 0, 0)] * 19,
+        filt=[(0, 0)] * 11 + [(7, -9)] + [(0, 0)] * 8)})
+    f5.start()
+    f5.ev(EV_KEY, KEY_EXIT)
+    s5 = f5.sy()
+    f5.ev(EV_KEY_UP, KEY_EXIT)
+    w5 = f5.files.writes[-1][1] if f5.files.writes else b''
+    moved = [t for t in range(20) if s5['knob'][t][1] == 0]
+    k5, f5w, moved5 = v45_moved(20, [(0, 0)] * 11 + [(7, -9)] + [(0, 0)] * 8)
+    check(s5['loads'] == 1 and moved == moved5 and [s5['knob'][t][1] for t in range(20)] == k5 and
+          [s5['filt'][t] for t in range(20)] == f5w and s5['shape'][0] == [50, 0, 0] and
+          s5['dirty'] == 1 and len(w5) == 464 and w5[4] == 7,
+          f'SY test 34: a version 5 file: the tones whose own setting changed have CTRL 1 in the middle ({moved}), '
+          f'their old ENV / RESO on the FILTER page over the file\'s, the SHAPE and FILTER pages read, the rest kept '
+          f'(MIDI out test 14: by the table); written back as version 7 ({len(w5)} bytes)')
     # 3. The SHAPE and FILTER pages reach the engine: POLY PAD with ATTACK 50 ms, RELEASE 2 s, ENV +20, RESO +30 (and
     #    SYNC LEAD's GLIDE OFF): the module = sy_ref.py with the same, value for value, and unlike as designed.
     xc, _ = ref.arpeggio(ref.CHORDS['C'], gap=0.04)
@@ -2117,7 +2413,7 @@ def sy32_checks(img, man):
 
 FILE_OPEN, FILE_READ, FILE_WRITE, FILE_CLOSE = 0x800DEC60, 0x800DEC48, 0x800DD9B8, 0x800DEBD8
 VIEW_AT, TOP_OBJECT, FX_VIEW_VTABLE = 0x800A01C0, 0x80CFD350, 0x802269C0
-SY_PATH = 'B:/_sy_tones.bin'
+SY_PATH = _sy_voices.FILE_NAME     # MIDI out test 14: the final set's own file (B:/_sy_sounds.bin); was B:/_sy_tones.bin
 
 
 class Files:
@@ -2162,25 +2458,28 @@ class Files:
         self._ret(uc, 0)
 
 
-def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=5, bus=0, trk=(0, 0, 0x40), shape=None,
+def sy_file_bytes(tone, muted, knobs, octs=None, suss=None, dyns=None, version=7, bus=0, trk=(0, 0, 0x40), shape=None,
                   filt=None):
-    """B:/_sy_tones.bin as sy_save writes it (SY test 32, version 5): "SYTN", 5, tone, muted, 20, 60 knob positions,
+    """B:/_sy_tones.bin as sy_save writes it (SY test 34, version 6: version 5's layout, SY test 32's; version=5 the
+    same with 5): "SYTN", 6, tone, muted, 20, 60 knob positions,
     20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, SY test 15's WAIT, SENS and GUARD (trk; zeros before; SY test 24:
     GLITCH, SENS and VOICES marked 0x40, AUTO as 0x40; SY test 32: SENS 0 = 50, else 1..101), the SHAPE page (20 x
     ATTACK, RELEASE, GLIDE, u16 ms) and the FILTER page (20 x ENV, RESO, knob - 64), FNV-1a of the first 292.
     version=4: tests 11-31's (136 bytes, the sum of the first 132); version=3: tests 6-10's (15 tones: 104 bytes, the
-    bus at 98, the sum of the first 100); version=2: test 5's (88 bytes)."""
-    n = 20 if version >= 4 else 15
-    octs = octs or [0] * n
-    suss = suss or [0] * n
-    dyns = dyns or [0] * n
-    body = (b'SYTN' + bytes([version, tone, muted, n]) + bytes(64 + d for row in knobs[:n] for d in row) +
-            bytes(o & 0xFF for o in octs[:n]) + bytes(suss[:n]))
+    bus at 98, the sum of the first 100); version=2: test 5's (88 bytes). MIDI out test 4: version 7 (sy_save's now),
+    version 6's layout for 32 tones (464 bytes, the sum of the first 460)."""
+    n = 32 if version >= 7 else 20 if version >= 4 else 15
+    knobs = (list(knobs) + [[0, 0, 0]] * n)[:n]                  # MIDI out test 4: short lists padded to n
+    octs = (list(octs or []) + [0] * n)[:n]
+    suss = (list(suss or []) + [0] * n)[:n]
+    dyns = (list(dyns or []) + [0] * n)[:n]
+    body = (b'SYTN' + bytes([version, tone, muted, n]) + bytes(64 + d for row in knobs for d in row) +
+            bytes(o & 0xFF for o in octs) + bytes(suss))
     if version >= 4:
         body += bytes(dyns[:n]) + bytes([bus, *trk])
-        if version == 5:
-            body += b''.join(struct.pack('<3H', *row) for row in (shape or [(0, 0, 0)] * 20))
-            body += bytes(f & 0xFF for row in (filt or [(0, 0)] * 20) for f in row)
+        if version >= 5:
+            body += b''.join(struct.pack('<3H', *row) for row in (list(shape or []) + [(0, 0, 0)] * n)[:n])
+            body += bytes(f & 0xFF for row in (list(filt or []) + [(0, 0)] * n)[:n] for f in row)
     elif version == 3:
         body += bytes(dyns[:n]) + bytes([bus, 0])
     else:
@@ -2238,9 +2537,9 @@ def sy_knob_checks(img, man):
     st3 = m.sy()
     want = sy_file_bytes(3, 0, st3['knob'], st3['oct'], st3['susk'], st3['dynk'])
     check(up1 == (0, True) and held_back == (1, 1) and up2 == (0, True) and len(files.writes) == 2 and
-          files.writes[-1] == (SY_PATH, want) and st3['dirty'] == 0 and st3['saves'] == 2 and len(want) == 296,
+          files.writes[-1] == (SY_PATH, want) and st3['dirty'] == 0 and st3['saves'] == 2 and len(want) == 464,
           f'a key release with an FX screen up: no file yet; at the next release with none, {SY_PATH} written once '
-          f'({len(want)} bytes: "SYTN", version 5, tone 4, 60 knobs, 20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, SHAPE, FILTER, '
+          f'({len(want)} bytes: "SYTN", version 7, tone 4, 96 knobs, 32 OCTAVE, 32 SUSTAIN, 32 DYNAMICS, the bus, SHAPE, FILTER, '
           f'FNV-1a); both releases go on to note repeat')
     # 3. A fresh start with that file: read at the first key event; the engine as the twin with the same settings.
     mf, f2 = machine({SY_PATH: want})
@@ -2320,6 +2619,13 @@ def sy_knob_checks(img, man):
                                  file=SY_PATH, file_bytes=len(want))
 
 
+def ms_text(ms):
+    """SY test 32's put_ms (tune_test.c): a SHAPE value as the screen writes it: "8ms", "350ms", "1.2s", "8s"."""
+    if ms < 1000:
+        return f'{ms}ms'
+    return f'{ms // 1000}' + (f'.{(ms % 1000) // 100}' if ms % 1000 else '') + 's'
+
+
 def fx_view(m):
     """SY test 6: an FX screen on TOP's view list (VIEW_AT stubbed); the list's flag turns it off ([0] = False)."""
     m.put(TOP_OBJECT, SCRATCH + 0x400, '<I')
@@ -2334,23 +2640,322 @@ def fx_view(m):
     return shown
 
 
+def looper_light_checks(img, man):
+    """MIDI out test 7 (the user: on the Sound Generator / kits, MARK, REC with AUTO TRIG on, MARK back: "rec is not
+    flashing but pressing pad triggers start of loop recording"; and on to sample mode; stock 5.52 does so in DM-404):
+    on the Sound Generator page and the main screen REC shows the looper's light while it waits (mode 5) or records
+    (mode 2), once each, and the page's own (its light table entry) after; nothing on the looper's page (stock's) or
+    another page. MARK, MARK from the guitar synth screen brings the screen back; the looper left for another page, or
+    the screen closed on its page, does not."""
+    sym = man['symbols']
+    LOOPER, STATE, gs = 0x27, 0x82E0B81D, sym['gsyn']
+    m = ScreenMachine(img, man, page=SG_PAGE, armed=False)
+    m.start()
+    m.uc.mem_write(LIGHT_TABLE + 8 * KEY_REC, struct.pack('<iI', 1, 0xFF))   # the SG page's own: steady
+    seq = []
+    for page, st in ((SG_PAGE, 0), (SG_PAGE, 1), (SG_PAGE, 1), (SG_PAGE, 2), (SG_PAGE, 5), (1, 1), (LOOPER, 1),
+                     (0x22, 1), (1, 0)):
+        m.page(page)
+        m.uc.mem_write(STATE, bytes([st]))
+        m.leds.clear()
+        m.call(sym['syn_ui'])
+        seq.append([x for x in m.leds if x[0] == KEY_REC])
+    want = [[], [(KEY_REC, 5, 0xFF)], [], [(KEY_REC, 2, 0xFF)], [(KEY_REC, 1, 0xFF)], [(KEY_REC, 5, 0xFF)], [], [], []]
+    paints = m.get(gs + 84, '<I')
+    check(seq == want and paints == 3,
+          f'MIDI out test 7: the looper waiting (state 1) or recording (2) off its page: REC flashes / blinks as its page '
+          f'shows it (mode 5 / 2) on the Sound Generator page and the main screen, once; after, the page\'s own light '
+          f'again; not on the looper\'s page or another ({seq}, painted {paints})')
+    q = ScreenMachine(img, man, page=SG_PAGE)
+    q.start()
+
+    def screen_up(x):
+        x.hold(KEY_VALUE, True)
+        x.ev(EV_KEY, KEY_REC_SET)
+        x.hold(KEY_VALUE, False)
+        x.ev(EV_KEY_UP, KEY_REC_SET)
+        return x.sy()['mode']
+
+    def at(x, page, n=1):
+        x.page(page)
+        for _ in range(n):
+            x.call(sym['sy_ui'])
+        return (x.sy()['mode'], x.get(gs + 88, '<I'), x.get(gs + 92, '<I'))
+    up = screen_up(q)
+    looper = at(q, LOOPER, 2)
+    back = at(q, SG_PAGE)
+    at(q, LOOPER)
+    at(q, 1)
+    other = at(q, SG_PAGE)
+    r = ScreenMachine(img, man, page=SG_PAGE)
+    r.start()
+    screen_up(r)
+    r.hold(KEY_SHIFT, True)
+    r.ev(EV_KEY, KEY_REC_SET)
+    r.hold(KEY_SHIFT, False)
+    closed = at(r, SG_PAGE, 2)
+    check(up == 1 and looper == (0, 1, 0) and back == (1, 0, 1) and other == (0, 0, 1) and closed[:2] == (0, 0),
+          f'MIDI out test 7: MARK from the guitar synth screen closes it on the looper\'s page ({looper}), MARK back to '
+          f'the Sound Generator page opens it again ({back}); the looper left for the main screen, then the page: '
+          f'closed ({other}); closed on its page (SHIFT + RECORD SETTING): stays closed ({closed})')
+
+
+def value_hold_checks(img, man):
+    """MIDI out test 8 (the user: "in sound gen/kits mode it is weird to press value + rec setting to go into guitar synth
+    mode because value press something in those modes"; "if in guitar synth mode i can get into sound gen mode but not
+    kits directly"): on the Sound Generator page VALUE's press is held back, its held bit set: a plain push reaches stock
+    at its release (press and release); with RECORD SETTING the screen opens and VALUE never reaches stock (its release
+    taken, its bit cleared); anything else first hands stock VALUE's press (a knob turned while it is held: the press,
+    then the knob; its release goes on). SHIFT + VALUE, the main screen and the screen itself as before. SHIFT +
+    PATTERN EDIT on the screen closes it and goes on (the kits' shortcut)."""
+    sym = man['symbols']
+    gs = sym['gsyn']
+
+    def vbit(x):
+        return (x.get(base.KEYS + (KEY_VALUE >> 3), '<B') >> (KEY_VALUE & 7)) & 1
+
+    def counts(x):
+        return struct.unpack('<5i', x.bytes(gs + 96, 20))
+    a = ScreenMachine(img, man, page=SG_PAGE)
+    a.start()
+    p1 = a.ev(EV_KEY, KEY_VALUE, 3)
+    held = vbit(a)
+    a.passed.clear()
+    r1 = a.ev(EV_KEY_UP, KEY_VALUE)
+    tap = (p1, held, r1, list(a.stock_keys), vbit(a), a.sy()['mode'], list(a.passed))
+    b = ScreenMachine(img, man, page=SG_PAGE)
+    b.start()
+    b.ev(EV_KEY, KEY_VALUE)
+    c1 = b.ev(EV_KEY, KEY_REC_SET)
+    mode = b.sy()['mode']
+    c2 = b.ev(EV_KEY_UP, KEY_REC_SET)
+    c3 = b.ev(EV_KEY_UP, KEY_VALUE)
+    chord = (c1, mode, c2, c3, list(b.stock_keys), vbit(b), counts(b)[2])
+    c = ScreenMachine(img, man, page=SG_PAGE)
+    c.start()
+    c.ev(EV_KEY, KEY_VALUE)
+    k1 = c.ev(EV_KNOB, 1, 64)
+    k2 = c.ev(EV_KEY_UP, KEY_VALUE)
+    handed = (k1, k2, list(c.stock_keys), counts(c)[3], counts(c)[0])
+    d = ScreenMachine(img, man, page=SG_PAGE)
+    d.start()
+    d.hold(KEY_SHIFT, True)
+    sv = d.ev(EV_KEY, KEY_VALUE)
+    d.hold(KEY_SHIFT, False)
+    e = ScreenMachine(img, man)                                           # the main screen
+    e.start()
+    mv = e.ev(EV_KEY, KEY_VALUE)
+    f = ScreenMachine(img, man, page=SG_PAGE)                             # MIDI out test 13: ROLL + VALUE press is
+    f.start()                                                             #   note repeat's (the pad follows ROLL)
+    f.hold(0x21, True)
+    rv = f.ev(EV_KEY, KEY_VALUE)
+    f.hold(0x21, False)
+    check(tap == ((1, False), 1, (0, True), [(EV_KEY, KEY_VALUE, 3)], 0, 0, [(EV_KEY, KEY_VALUE, 3),
+                                                                             (EV_KEY_UP, KEY_VALUE, 0)]) and
+          chord[:4] == ((1, False), 1, (1, False), (1, False)) and chord[4:] == ([], 0, 1) and
+          handed == ((0, True), (0, True), [(EV_KEY, KEY_VALUE, 0)], 1, 0) and sv == (0, True) and mv == (0, True) and
+          rv == (0, True),
+          f'MIDI out test 8: on the Sound Generator page VALUE\'s press is held back (its bit set): a plain push reaches '
+          f'note repeat and then stock at its release, the release going on after it ({tap}); with RECORD SETTING the '
+          f'screen opens, VALUE never reaches stock ({chord}); a knob turned while held hands the press on first, its '
+          f'release goes on ({handed}); SHIFT + VALUE, the main screen and (MIDI out test 13) ROLL + VALUE as before '
+          f'({sv}, {mv}, {rv})')
+    q = ScreenMachine(img, man, page=SG_PAGE)
+    q.start()
+    q.open_screen()
+    up = q.sy()['mode']
+    q.hold(KEY_SHIFT, True)
+    kp = q.ev(EV_KEY, KEY_PTN_EDIT)
+    q.hold(KEY_SHIFT, False)
+    check(up == 1 and kp == (0, True) and q.sy()['mode'] == 0,
+          f'MIDI out test 8: SHIFT + PATTERN EDIT on the guitar synth screen closes it and goes on to the kits\' shortcut '
+          f'({kp}, mode {q.sy()["mode"]})')
+    # MIDI out test 9: MARK on the looper's page while it waits or records, opened from the SG page: taken (and its
+    # release), the SG page asked for (looper mode stays on, as stock's SHIFT + RECORD SETTING jump leaves it); idle, or
+    # opened from the main screen: MARK goes on to stock.
+    LOOPER, STATE = 0x27, 0x82E0B81D
+    res = []
+    for origin, st in ((SG_PAGE, 1), (SG_PAGE, 2), (SG_PAGE, 0), (1, 1)):
+        k = ScreenMachine(img, man, page=origin)
+        k.start()
+        k.call(sym['syn_ui'])
+        k.page(LOOPER)
+        k.call(sym['syn_ui'])
+        k.uc.mem_write(STATE, bytes([st]))
+        k.requests.clear()
+        d = k.ev(EV_KEY, KEY_MARK)
+        u = k.ev(EV_KEY_UP, KEY_MARK)
+        res.append((origin, st, d, u, list(k.requests), k.get(gs + 116, '<I'), k.get(gs + 120, '<I')))
+    want = [(SG_PAGE, 1, (1, False), (1, False), [SG_PAGE], SG_PAGE, 1), (SG_PAGE, 2, (1, False), (1, False), [SG_PAGE],
+            SG_PAGE, 1), (SG_PAGE, 0, (0, True), (0, True), [], SG_PAGE, 0), (1, 1, (0, True), (0, True), [], 1, 0)]
+    check(res == want,
+          f'MIDI out test 9: MARK on the looper\'s page while it waits or records (opened from the SG page) goes back to '
+          f'the SG page in looper mode (taken, the page asked for); idle, or opened from the main screen, stock\'s '
+          f'({res})')
+
+
+def filter_page_checks(img, man):
+    """MIDI out test 11 (the user: "some tone had env res screen with no adjustable paramters. but env on different
+    screen"): a Sound Generator sound's FILTER page shows its ENV preset by name and CTRL 1 there sets it (the same
+    setting as the main page's CTRL 1), RESO "--"; a sound with no filter: SHIFT steps main, OTHERS, TRACK, SHAPE, main
+    (no FILTER page), and a pad picking one while the FILTER page is up shows the main page."""
+    import sy_voices as P
+    sym = man['symbols']
+    flt = [dict(P.DEFAULTS, **v).get('flt', 0) for v in P.VOICES]
+    sg = next(t for t, v in enumerate(P.VOICES) if v.get('p2') == P.P_ENVSEL)
+    nf = next(t for t, v in enumerate(P.VOICES) if flt[t] == 0)
+    wf = next(t for t, v in enumerate(P.VOICES) if flt[t] not in (0, 6))
+
+    def taps(x, n):
+        out = []
+        for _ in range(n):
+            x.ev(EV_KEY, KEY_SHIFT)
+            x.ev(EV_KEY_UP, KEY_SHIFT)
+            out.append(x.sy()['shift_page'])
+        return out
+
+    def texts(x, n=2):
+        return [[d[3] for d in x.draw_column(c, 0x7B + c) if d[0] == 'text'] for c in range(n)]
+    m = ScreenMachine(img, man, page=SG_PAGE)
+    m.start()
+    m.open_screen()
+    m.put(sym['sy'] + m.sl.tone_req, sg, '<I')
+    pages_sg = taps(m, 4)
+    before = texts(m)
+    m.ev(EV_KNOB, 1, 127)
+    after = texts(m)
+    knob = m.sy()['knob'][sg][1]
+    taps(m, 1)
+    main = texts(m, 1)
+    pre = dict(P.DEFAULTS, **P.VOICES[sg]).get('sg_preset', 0)
+    n = ScreenMachine(img, man, page=SG_PAGE)
+    n.start()
+    n.open_screen()
+    n.put(sym['sy'] + n.sl.tone_req, nf, '<I')
+    pages_nf = taps(n, 5)
+    f = ScreenMachine(img, man, page=SG_PAGE)
+    f.start()
+    f.open_screen()
+    f.put(sym['sy'] + f.sl.tone_req, wf, '<I')
+    pages_wf = taps(f, 4)
+    slot = list(P.SLOT_TONE).index(nf)
+    if slot >= 16:                                                     # MIDI out test 14: bank 2 first (SHIFT + pad 2
+        f.hold(KEY_SHIFT, True)                                        # since test 12; SHIFT + pad no longer picks
+        f.ev(EV_PAD, 1, 90)                                            # sounds 17-32)
+        f.ev(EV_PAD_UP, 1)
+        f.hold(KEY_SHIFT, False)
+    f.ev(EV_PAD, slot % 16, 90)
+    f.ev(EV_PAD_UP, slot % 16)
+    picked = (f.sy()['tone_req'], f.sy()['shift_page'])
+    check(pages_sg == [1, 2, 3, 4] and before == [['ENV', P.PRESET_NAMES[pre]], ['RESO', '--']] and
+          after == [['ENV', 'FPad'], ['RESO', '--']] and knob == 63 and main == [['ENV', 'FPad']] and
+          pages_nf == [1, 2, 3, 0, 1] and pages_wf == [1, 2, 3, 4] and picked == (nf, 0),
+          f'MIDI out test 11: {P.VOICES[sg]["name"]}\'s FILTER page shows its ENV preset ({before} -> {after}), CTRL 1 '
+          f'there sets the main page\'s CTRL 1 ({main}); {P.VOICES[nf]["name"]} (no filter): SHIFT steps {pages_nf}, no '
+          f'FILTER page; picked on the FILTER page of {P.VOICES[wf]["name"]}: the main page ({picked})')
+
+
+def bank_checks(img, man):
+    """MIDI out test 12 (the user: two banks of 16, "1-8 pads are leads/bass, 9-16 are chord tones. the tone pad that is
+    current is highlighted"): on the guitar synth screen pads 1-16 pick the sound in the bank, SHIFT + pad 1 / 2 the bank
+    (the sound as it is; SHIFT + pad 5 nothing); VALUE moves the bank with the sound. The pads: the current sound's pad
+    lit bright (cyan 1-8, magenta 9-16), the rest dim; SHIFT held pads 1-2 the banks (the current white); stock's colours
+    (as the screen opened) painted back as it closes on the SG page."""
+    import sy_voices as P
+    sym = man['symbols']
+    gs = sym['gsyn']
+    m = ScreenMachine(img, man, page=SG_PAGE)
+    m.start()
+    for k in range(16):                                                # stock's SG colours, as on the unit
+        m.uc.mem_write(LIGHT_MODES + k, b'\x00')
+        m.uc.mem_write(LIGHT_LEVELS + 4 * k, struct.pack('<I', 0xAAAAAA if k == 8 else 0x4444))
+    m.open_screen()
+
+    def pad(k, shift=False):
+        if shift:
+            m.hold(KEY_SHIFT, True)
+        m.ev(EV_PAD, k, 90)
+        m.ev(EV_PAD_UP, k)
+        if shift:
+            m.hold(KEY_SHIFT, False)
+
+    def lit():
+        """a UI tick, then the pads' key light caches: (mode, colour) each"""
+        m.call(sym['sy_ui'])
+        return [(m.get(LIGHT_MODES + k, '<B'), m.get(LIGHT_LEVELS + 4 * k, '<I')) for k in range(16)]
+
+    def state():
+        return (m.sy()['tone_req'], m.get(gs + 124, '<I'))
+    pad(3)
+    first = lit()
+    s4 = state()
+    pad(1, shift=True)
+    s_bank = state()
+    m.hold(KEY_SHIFT, True)
+    shift_view = lit()
+    m.hold(KEY_SHIFT, False)
+    unlit = lit()
+    pad(9)
+    s_b2 = state()
+    lit_b2 = lit()
+    pad(4, shift=True)
+    s_none = state()
+    for _ in range(10):                                                # VALUE back 10: SOUND 26 -> 16, bank 1
+        m.ev(EV_ENC, 0, -1)
+    s_val = state()
+    m.hold(KEY_MFX, True)                                              # MIDI out test 13: MFX held: its pads (an
+    m.uc.mem_write(LIGHT_LEVELS + 4 * 2, struct.pack('<I', 0x123456))  #   effect's colour, as stock paints them)
+    mfx = lit()[2]                                                     #   stay
+    m.hold(KEY_MFX, False)
+    mfx_after = lit()[2]
+    m.hold(KEY_SHIFT, True)
+    m.ev(EV_KEY, KEY_REC_SET)                                          # SHIFT + RECORD SETTING: the screen closes
+    m.hold(KEY_SHIFT, False)
+    back = lit()
+    slot = list(P.SLOT_TONE)
+    dim = [(0, 0x4444) if k < 8 else (0, 0x440044) for k in range(16)]
+    want_first = [(1, 0x00FFFF) if k == 3 else dim[k] for k in range(16)]
+    want_shift = [(1, 0xFFFFFF) if k == 1 else (0, 0x222222) if k == 0 else (0, 0) for k in range(16)]
+    want_b2 = [(1, 0xFF00FF) if k == 9 else dim[k] for k in range(16)]
+    stock = [(0, 0xAAAAAA) if k == 8 else (0, 0x4444) for k in range(16)]
+    check(s4 == (slot[3], 0) and first == want_first and s_bank == (slot[3], 1) and shift_view == want_shift and
+          unlit == dim and s_b2 == (slot[16 + 9], 1) and lit_b2 == want_b2 and s_none == (slot[16 + 9], 1) and
+          s_val == (slot[15], 0) and back == stock and mfx == (0, 0x123456) and mfx_after == (0, 0x4444),
+          f'MIDI out test 12: pad 4 picks SOUND 4 ({s4}), its pad lit, the rest dim ({first[2:5]}, {first[8]}); SHIFT + '
+          f'pad 2 the bank 2, the sound kept ({s_bank}), SHIFT held pads 1-2 the banks ({shift_view[:3]}); bank 2 without '
+          f'the sound: none lit; pad 10 SOUND 26 ({s_b2}), magenta ({lit_b2[9]}); SHIFT + pad 5 nothing ({s_none}); '
+          f'VALUE back to 16, bank 1 ({s_val}); closed: stock\'s colours back ({back[7:9]})')
+
+
 def sy_screen_checks(img, man):
     """SY test 5: the guitar synth screen: the chord, its events, its draws, the bar, leaving."""
     import sy_ref
+    import sy_voices                                                   # MIDI out test 14: the sounds from the table
+    names = [t['name'] for t in sy_voices.VOICES]
+    slot_tone = list(sy_voices.SLOT_TONE)
     sym = man['symbols']
     scr = man['screen']
     col_draw, foot_draw, sg_poll = (int(scr[n]['target'], 16) & ~1 for n in ('KIT_COL_DRAW', 'KIT_FOOT_DRAW',
                                                                               'KS_SG_POLL'))
-    # 1. EXT SOURCE held + RECORD SETTING on the main screen (EXT SOURCE on): taken, note repeat never sees it, the SG
-    #    page asked for; its release taken; the SG page there at the next UI tick: the screen up.
+    # 1. VALUE held + RECORD SETTING on the main screen (MIDI out test 5; EXT SOURCE + RECORD SETTING before, which goes
+    #    on now): taken, note repeat never sees it, the SG page asked for; its release taken; the SG page there at the
+    #    next UI tick: the screen up.
+    m0 = ScreenMachine(img, man)
+    m0.start()
+    m0.hold(KEY_EXT, True)
+    old_chord = [m0.ev(EV_KEY, KEY_REC_SET)]
+    m0.hold(KEY_EXT, False)
+    old_chord.append(m0.ev(EV_KEY_UP, KEY_REC_SET))
+    check(old_chord == [(0, True), (0, True)] and not m0.requests and m0.sy()['mode'] == 0,
+          'MIDI out test 5: EXT SOURCE held + RECORD SETTING goes on (EXT SOURCE is the input only)')
     m = ScreenMachine(img, man)
     m.start()
     plain = m.ev(EV_KEY, KEY_REC_SET)
     m.ev(EV_KEY_UP, KEY_REC_SET)
-    m.hold(KEY_EXT, True)
+    m.hold(KEY_VALUE, True)
     chord = m.ev(EV_KEY, KEY_REC_SET)
     st = m.sy()
-    m.hold(KEY_EXT, False)
+    m.hold(KEY_VALUE, False)
     chord_up = m.ev(EV_KEY_UP, KEY_REC_SET)
     shown_before = m.call(sym['sy_shown'])
     m.call(sym['sy_ui'])
@@ -2361,7 +2966,7 @@ def sy_screen_checks(img, man):
     check(plain == (0, True) and chord == (1, False) and chord_up == (1, False) and m.requests == [SG_PAGE] and
           st['mode'] == 2 and st['enters'] == 1 and not m.sets and shown_before == 0 and st_wait['mode'] == 2 and
           st2['mode'] == 1 and m.call(sym['sy_shown']) == 1 and st2['taken'] == 0,
-          'RECORD SETTING alone goes on; EXT SOURCE held + RECORD SETTING on the main screen: taken (note repeat never '
+          'RECORD SETTING alone goes on; VALUE held + RECORD SETTING on the main screen: taken (note repeat never '
           'sees it, nor its release), the Sound Generator page asked for; the screen up once the page is there')
     # 2. Pads on the screen: a pad hit (and its key press) picks the sound, silently: neither reaches note repeat or
     #    stock (no sample, no Sound Generator note), nor their releases; pad 16: OFF; SUB PAD taken.
@@ -2371,17 +2976,34 @@ def sy_screen_checks(img, man):
     rp += [m.ev(EV_PAD_UP, 3), m.ev(EV_KEY_UP, 3)]
     st4 = m.sy()
     m.ev(EV_PAD, 15, 90)
-    off = m.sy()
+    p16 = m.sy()                                                       # MIDI out test 4: pad 16 a sound (was OFF)
     m.ev(EV_PAD_UP, 15)
+    m.hold(KEY_SHIFT, True)                                            # MIDI out test 12: SHIFT + pad 2 the bank 2
+    m.ev(EV_PAD, 1, 90)                                                #   (the sound kept), then pads 1, 5, 6, 16:
+    m.ev(EV_PAD_UP, 1)                                                 #   the sounds tests 4-11 had on SHIFT + those
+    m.hold(KEY_SHIFT, False)                                           #   pads
+    bank_kept = m.sy()['tone_req'] == p16['tone_req']
+    shifted = []
+    for pad in (0, 4, 5, 15):
+        m.ev(EV_PAD, pad, 90)
+        m.ev(EV_PAD_UP, pad)
+        shifted.append(m.sy()['tone_req'])
     sub = [m.ev(EV_PAD, KEY_SUB_PAD, 90), m.ev(EV_KEY, KEY_SUB_PAD), m.ev(EV_PAD_UP, KEY_SUB_PAD),
            m.ev(EV_KEY_UP, KEY_SUB_PAD)]
     check(all(r == (1, False) for r in rp + sub) and st3['tone_req'] == 3 and st3['muted'] == 0 and
           st3['pads_taken'] == 8 and st3['taken'] == 8 and st4['pads_taken'] == 0 and st4['taken'] == 0 and
-          off['muted'] == 1 and m.sy()['pads_taken'] == 0 and not m.passed,
-          'on the screen a pad picks a sound (pad 4: ENSEMBLE), pad 16 OFF; the pad hit and its key press, SUB PAD and '
-          'every release taken: nothing reaches note repeat or stock (no sample plays)')
+          p16['muted'] == 0 and p16['tone_req'] == slot_tone[15] and bank_kept and
+          shifted == [slot_tone[16 + p] for p in (0, 4, 5, 15)] and m.sy()['pads_taken'] == 0 and not m.passed,
+          f'on the screen a pad picks a sound (pad 4: {names[slot_tone[3]]}); MIDI out test 4: pad 16 a sound '
+          f'({names[p16["tone_req"]]}, was OFF); MIDI out test 12: SHIFT + pad 2 bank 2 (the sound kept: {bank_kept}), '
+          f'then pads 1, 5, 6 and 16 bank 2\'s ({[names[t] for t in shifted]}); the pad hit and its key press, SUB PAD '
+          f'and every release taken: nothing reaches note repeat or stock (no sample plays)')
     # 3. SY test 6: CTRL 1 is the tone's own setting (VALUE and the pads pick the sound); VALUE steps SOUND; VALUE's
     #    push and REC taken; CTRL 4 and another encoder go on.
+    m.hold(KEY_SHIFT, True)                                            # MIDI out test 12: back to bank 1
+    m.ev(EV_PAD, 0, 100)
+    m.ev(EV_PAD_UP, 0)
+    m.hold(KEY_SHIFT, False)
     m.ev(EV_PAD, 0, 100)
     m.ev(EV_PAD_UP, 0)                                                 # SOUND 1 (POLY PAD)
     k1 = m.ev(EV_KNOB, 1, 100)
@@ -2390,23 +3012,24 @@ def sy_screen_checks(img, man):
     for d in (1, 1, -3, 5):                                            # one a turn event: 1 -> 2 -> 3 -> 2 -> 3
         steps.append(m.ev(EV_ENC, 0, d))
     st5 = m.sy()
-    for _ in range(20):
+    for _ in range(40):                                                # MIDI out test 4: 32 sounds in pad order
         m.ev(EV_ENC, 0, 1)
     top = m.sy()['tone_req']
-    for _ in range(20):
+    for _ in range(40):
         m.ev(EV_ENC, 0, -1)
     bottom = m.sy()['muted']
     keys = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE), m.ev(EV_KEY, KEY_REC), m.ev(EV_KEY_UP, KEY_REC)]
     other = m.ev(EV_KNOB, 4, 30)
     other2 = m.ev(EV_ENC, 1, 1)
-    check(k1 == (1, False) and st_k1['knob'][0][1] == 0 and st_k1['shape'][0][0] == 500 and   # SY test 32: POLY
-          st_k1['tone_req'] == 0 and st_k1['muted'] == 0 and                                    # PAD's ATTACK: SHAPE's
+    check(k1 == (1, False) and st_k1['knob'][0][1] == 36 and st_k1['shape'][0][0] == 0 and   # SY test 34: POLY
+          st_k1['tone_req'] == 0 and st_k1['muted'] == 0 and                                    # PAD's RATE, its own
           all(s == (1, False) for s in steps) and st5['tone_req'] == 2 and st5['muted'] == 0 and
           top == SY_NT - 1 and bottom == 1 and all(k == (1, False) for k in keys) and other == (0, True) and
           other2 == (0, True),
-          'CTRL 1 sets the sound\'s own setting (POLY PAD\'s ATTACK), the sound stays; VALUE steps SOUND one a turn, '
-          'OFF..20 and no further; VALUE\'s push and REC taken (no edit mode, no export); CTRL 4 and another encoder '
-          'go on')
+          f'CTRL 1 sets the sound\'s own setting ({names[slot_tone[0]]}\'s '
+          f'{sy_voices.P2_NAMES[sy_voices.VOICES[slot_tone[0]].get("p2", sy_voices.P_RESO)]}), the sound stays; VALUE steps SOUND one a turn, '
+          'OFF..32 (MIDI out test 4: in pad order, the last SHIFT + pad 16\'s) and no further; VALUE\'s push and REC '
+          'taken (no edit mode, no export); CTRL 4 and another encoder go on')
     # 4. SHIFT: a tap turns the page; held, a turn edits the other page and the release keeps it; SHIFT goes on.
     m.ev(EV_PAD, 4, 100)
     m.ev(EV_PAD_UP, 4)                                                 # SOUND 5 (PAD)
@@ -2428,8 +3051,13 @@ def sy_screen_checks(img, man):
     for _ in range(4):                                                 # SY test 15: OTHERS -> TRACK -> the first page
         m.ev(EV_KEY, KEY_SHIFT)                                        # (SY test 32: -> SHAPE -> FILTER -> first)
         m.ev(EV_KEY_UP, KEY_SHIFT)
-    m.ev(EV_PAD, 3, 100)
-    m.ev(EV_PAD_UP, 3)                                                 # SOUND 4 (ENSEMBLE)
+    def drive_pad(t):                                                  # MIDI out test 14: a sound as ENSEMBLE was
+        d = dict(sy_voices.DEFAULTS, **sy_voices.VOICES[t])            # (pad 4 in tests 4-13): DRIVE its own setting,
+        return (sy_voices.P2_NAMES[d.get('p2', sy_voices.P_RESO)] == 'DRIVE' and 1 <= d['flt'] <= 5 and
+                not d.get('glide') and not d.get('mono'))              # a filter, no glide, chords
+    pad5 = next(k for k in range(16) if drive_pad(slot_tone[k]))
+    m.ev(EV_PAD, pad5, 100)
+    m.ev(EV_PAD_UP, pad5)                                              # (test 14: OB PAD)
     m.ev(EV_KNOB, 2, 64 + 12)
     m.ev(EV_KNOB, 3, 96)
     cols = []
@@ -2457,8 +3085,11 @@ def sy_screen_checks(img, man):
     m.ev(EV_KNOB, 3, 100)
     m.ev(EV_KEY, KEY_SHIFT)
     m.ev(EV_KEY_UP, KEY_SHIFT)
-    page_s = m.sy()['shift_page']                                      # SY test 32: SHAPE (ENSEMBLE: 3 ms, 450 ms,
-    sh_before = [[d[3] for d in m.draw_column(c, 0x7B + c) if d[0] == 'text'] for c in range(3)]   # no glide)
+    page_s = m.sy()['shift_page']                                      # SY test 32: SHAPE (ENSEMBLE as its tone
+    sh_before = [[d[3] for d in m.draw_column(c, 0x7B + c) if d[0] == 'text'] for c in range(3)]   # designs it,
+    import sy_voices                                                   # no glide; SY test 33: from the table, its
+    ens = dict(sy_voices.DEFAULTS, **sy_voices.VOICES[tone4])          # times changed)
+    want_s = [['ATTACK', ms_text(int(round(ens['aa'])))], ['RELEASE', ms_text(int(round(ens['ar'])))], ['GLIDE', 'OFF']]
     m.ev(EV_KNOB, 1, 127)                                              # ATTACK: the top step, 2 s
     m.ev(EV_KNOB, 2, 64)                                               # RELEASE: step 14 of 28, 400 ms
     m.ev(EV_KNOB, 3, 0)                                                # GLIDE: OFF
@@ -2467,8 +3098,8 @@ def sy_screen_checks(img, man):
     sh_after = [[d[3] for d in m.draw_column(c, 0x7B + c) if d[0] == 'text'] for c in range(3)]
     m.ev(EV_KEY, KEY_SHIFT)
     m.ev(EV_KEY_UP, KEY_SHIFT)
-    page_f = m.sy()['shift_page']                                      # SY test 32: FILTER (ENSEMBLE's own setting
-    m.ev(EV_KNOB, 1, 96)                                               # is ENV: shared with the first page's CTRL 1)
+    page_f = m.sy()['shift_page']                                      # SY test 32: FILTER (SY test 34: ENSEMBLE's
+    m.ev(EV_KNOB, 1, 96)                                               # own setting is DRIVE: ENV its own, +25)
     m.ev(EV_KNOB, 2, 0)                                                # RESO -50
     m.ev(EV_KNOB, 3, 50)                                               # CTRL 3: nothing
     fl_after = [[d[3] for d in m.draw_column(c, 0x7B + c) if d[0] == 'text'] for c in range(3)]
@@ -2480,36 +3111,39 @@ def sy_screen_checks(img, man):
     t_writes = [w for w in m.files.writes if w[0] == SY_PATH]
     t_file = t_writes[-1][1] if t_writes else b''
     texts3 = [[d[3] for d in c if d[0] == 'text'] for c in cols3]
-    shp = 132 + 6 * tone4
+    shp = 204 + 6 * tone4                                          # MIDI out test 4: version 7
     check(page_t == 2 and t_before == [0, 0, 0, 0] and trk == [100, 51, 5, 0] and guard_off == 1 and
           guard_on == (3, ['VOICES', '3']) and texts3 == [['GLITCH', '100'], ['SENS', '50'], ['VOICES', '5']] and
-          page_s == 3 and sh_before == [['ATTACK', '3ms'], ['RELEASE', '450ms'], ['GLIDE', 'OFF']] and
+          page_s == 3 and sh_before == want_s and
           glide_off == 0xFFFF and sh_after == [['ATTACK', '2s'], ['RELEASE', '400ms'], ['GLIDE', '1s']] and
           page_f == 4 and fl_after == [['ENV', '+25'], ['RESO', '-50'], ['', '']] and
-          st_f['knob'][tone4][1] == 32 and st_f['filt'][tone4] == [0, -64] and st_f['shape'][tone4] == [2000, 400, 1000]
-          and page_back == 0 and main_env == ['ENV', '+25'] and
-          len(t_file) == 296 and list(t_file[129:132]) == [100, 51, 0x45] and
+          st_f['knob'][tone4][1] == 0 and st_f['filt'][tone4] == [32, -64] and st_f['shape'][tone4] == [2000, 400, 1000]
+          and page_back == 0 and main_env == ['DRIVE', '0'] and
+          len(t_file) == 464 and list(t_file[201:204]) == [100, 51, 0x45] and
           struct.unpack('<3H', t_file[shp:shp + 6]) == (2000, 400, 1000) and
-          list(t_file[252 + 2 * tone4:254 + 2 * tone4]) == [0, 0xC0],
+          list(t_file[396 + 2 * tone4:398 + 2 * tone4]) == [0x20, 0xC0],
           f'SY test 15: SHIFT\'s third tap shows the TRACK page (every tone): SY test 24: CTRL 1 GLITCH 0..100, CTRL 2 '
           f'SENS 0..100 (64: 50; SY test 32: kept 1..101, 0 = 50), CTRL 3 VOICES in sevenths (20: MONO, 64: 3, 100: '
           f'5); SY test 32: the next tap SHAPE (ATTACK, RELEASE, GLIDE in round ms steps: {sh_before} -> {sh_after}), '
-          f'then FILTER (ENV shared with ENSEMBLE\'s own setting, RESO; CTRL 3 nothing: {fl_after}), then the first '
-          f'page ({main_env}); the file (version 5, {len(t_file)} bytes) keeps GLITCH, SENS, VOICES, SHAPE and FILTER')
+          f'then FILTER (ENV and RESO; SY test 34: {names[tone4]}\'s own setting DRIVE apart; CTRL 3 nothing: '
+          f'{fl_after}), '
+          f'then the first page ({main_env}); the file (version 7, {len(t_file)} bytes) keeps GLITCH, SENS, VOICES, '
+          f'SHAPE and FILTER')
     foot = m.draw_footer()
     texts = [[d[3] for d in c if d[0] == 'text'] for c in cols + cols2]
     t3 = m.sy()
-    want_cols = [['ENV', '0'], ['TONE', '+10'], ['LEVEL', '75'],
-                 ['OCTAVE', str(t3['oct'][3] - 3) if t3['oct'][3] else '0'],
-                 ['SUSTAIN', '50'], ['DYNAMICS', '60']]
+    want_cols = [['DRIVE', '0'], ['TONE', '+10'], ['LEVEL', '75'],
+                 ['OCTAVE', str(t3['oct'][tone4] - 3) if t3['oct'][tone4] else '0'],
+                 ["SUSTAIN", "50"],                                    # MIDI out test 14: DYNAMICS starts at the sound's own (avel)
+                 ['DYNAMICS', str(int(round(100 * dict(sy_voices.DEFAULTS, **sy_voices.VOICES[tone4])['avel'])))]]
     shape = cols[0]
     check(texts == want_cols and shape[:3] == [('color', 0xFFFFFF, 0), ('rect', 0, 0, 43, 39), ('font', 0x1D)] and
           shape[3][1:3] == (21, 3) and shape[4] == ('font', 2) and shape[5][1:3] == (21, 15) and len(shape) == 6 and
-          [d[3] for d in foot if d[0] == 'text'] == ['ENSEMBLE'] and ('font', 0x1D) in foot and not m.kits,
+          [d[3] for d in foot if d[0] == 'text'] == [names[tone4]] and ('font', 0x1D) in foot and not m.kits,
           f'the columns (SY test 6: the sound\'s own setting, TONE -50..+50 (+12 shows +10), LEVEL 0..100 (96 shows '
           f'75); SHIFT: OCTAVE, SUSTAIN, DYNAMICS): the name small at +3 (font 0x1d), the value big at +15 (font 2), '
           f'where the stock column draws its own ({texts}); the footer shows the name of the sound, small '
-          f'("ENSEMBLE"); no kit draw asked')
+          f'("{names[tone4]}"); no kit draw asked')
     other_type = m.draw_column(0, 0x7B, kind=1)
     m.page(1)
     m.call(sym['sy_ui'])
@@ -2561,14 +3195,14 @@ def sy_screen_checks(img, man):
           f'displaced draw skipped, SY test 7\'s "OUT: DRY" centred there; redrawn once after SOUND changed; outside it '
           f'the arp\'s bridges with r0-r5 and lr as they came ({name}, {text[:2]}, {text[4]}, {bar_text})')
     # 8. Leaving and the input: SHIFT + RECORD SETTING gives the page back (and goes on); the chord with EXT SOURCE off
-    #    (the press toggled it off) puts it on; with GATE, its release putting it off: on again; a page asked for that
-    #    never comes: given up after 1 s.
+    #    puts it on, once (MIDI out test 5: VALUE's chord; no EXT SOURCE press to undo, no release to watch); a page
+    #    asked for that never comes: given up after 1 s.
     q = ScreenMachine(img, man, page=SG_PAGE)
     q.start()
-    q.hold(KEY_EXT, True)
+    q.hold(KEY_VALUE, True)
     q.ev(EV_KEY, KEY_REC_SET)
     on_page = q.sy()['mode']
-    q.hold(KEY_EXT, False)
+    q.hold(KEY_VALUE, False)
     q.ev(EV_KEY_UP, KEY_REC_SET)
     q.hold(KEY_SHIFT, True)
     back = q.ev(EV_KEY, KEY_REC_SET)
@@ -2576,28 +3210,27 @@ def sy_screen_checks(img, man):
     st8 = q.sy()
     e = ScreenMachine(img, man, ext=0)
     e.start()
-    e.hold(KEY_EXT, True)
+    e.hold(KEY_VALUE, True)
     e.ev(EV_KEY, KEY_REC_SET)
     sets1 = list(e.sets)
-    e.ext = 0                                                          # GATE: the release put it off
     e.call(sym['sy_ui'])
     held_sets = len(e.sets)
-    e.hold(KEY_EXT, False)
+    e.hold(KEY_VALUE, False)
     e.call(sym['sy_ui'])
     sets2 = list(e.sets)
     e.call(sym['sy_ui'])
     w = ScreenMachine(img, man)
     w.start()
-    w.hold(KEY_EXT, True)
+    w.hold(KEY_VALUE, True)
     w.ev(EV_KEY, KEY_REC_SET)
     w.cyc += 600_000_001
     w.call(sym['sy_ui'])
     check(on_page == 1 and back == (0, True) and st8['mode'] == 0 and st8['leaves'] == 1 and
-          sets1 == [(0x25, 1, 0)] and held_sets == 1 and sets2 == [(0x25, 1, 0), (0x25, 1, 0)] and
-          len(e.sets) == 2 and w.sy()['mode'] == 0 and w.requests == [SG_PAGE],
+          sets1 == [(0x25, 1, 0)] and held_sets == 1 and sets2 == [(0x25, 1, 0)] and len(e.sets) == 1 and
+          w.sy()['mode'] == 0 and w.requests == [SG_PAGE],
           'on the Sound Generator page the chord opens the screen at once; SHIFT + RECORD SETTING closes it and goes on '
-          '(the stock Sound Generator); with EXT SOURCE off the chord puts it on (the settings setter, 0x25 = 1), and '
-          'again once EXT SOURCE is let go if GATE put it off; a page that never comes: given up after 1 s')
+          '(the stock Sound Generator); with EXT SOURCE off the chord puts it on (the settings setter, 0x25 = 1), once; '
+          'a page that never comes: given up after 1 s')
     # 9. The synth plays on the Sound Generator page in the screen (the tracker's synth, test 6, does not).
     g = SyMachine(img, man, page=SG_PAGE)
     g.put(sym['sy'] + g.sl.mode, 1, '<I')
@@ -2726,20 +3359,20 @@ def sy_screen_checks(img, man):
     vf, _ = ScreenMachine(img, man, store={SY_PATH: wrote}), None
     vf.start()
     vf.ev(EV_KEY, KEY_EXT)
-    bad = sy_file_bytes(0, 0, [[0, 0, 0]] * 20, bus=4)
+    bad = sy_file_bytes(0, 0, [[0, 0, 0]] * 32, bus=4)
     vb = ScreenMachine(img, man, store={SY_PATH: bad})
     vb.start()
     vb.ev(EV_KEY, KEY_EXT)
     check(all(x == (1, False) for x in pushes) and seen == [1, 2, 3, 0] and all(polls) and
-          texts == [['OUT: BUS 1'], ['OUT: BUS 2'], ['OUT: BOTH'], ['OUT: DRY']] and len(wrote) == 296 and
-          wrote[128] == 2 and vf.sy()['out_bus'] == 2 and vf.sy()['loads'] == 1 and vb.sy()['out_bus'] == 0 and
+          texts == [['OUT: BUS 1'], ['OUT: BUS 2'], ['OUT: BOTH'], ['OUT: DRY']] and len(wrote) == 464 and
+          wrote[200] == 2 and vf.sy()['out_bus'] == 2 and vf.sy()['loads'] == 1 and vb.sy()['out_bus'] == 0 and
           vb.sy()['loads'] == 1,
           f'SY test 7: VALUE\'s push steps the synth\'s bus DRY -> BUS 1 -> BUS 2 -> BOTH -> DRY ({seen}), press and '
-          f'release taken; the bar shows each ({texts}), redrawn after each; the file keeps it (byte 128 = '
-          f'{wrote[128] if wrote else None}) and gives it back; a bus byte out of range reads as DRY')
+          f'release taken; the bar shows each ({texts}), redrawn after each; the file keeps it (byte 200 = '
+          f'{wrote[200] if wrote else None}) and gives it back; a bus byte out of range reads as DRY')
     # 13. SY test 8: the synth plays from the screen on. EXT SOURCE on, the screen never opened: no engine, no ROUTING
     #     hold; the screen opens: armed, the hold and the engine; EXIT to the main screen: it plays on; EXT SOURCE off:
-    #     disarmed; on again: silent (no hold) until the screen opens again.
+    #     the hold let go, the engine off; MIDI out test 5: still armed, so on again it plays again.
     a = ScreenMachine(img, man, armed=False)
     a.start()
     a.call(sym['sy_ui'])
@@ -2756,18 +3389,21 @@ def sy_screen_checks(img, man):
     a.ext = 0
     a.ui(0)
     a.call(sym['sy_ui'])
-    s3 = a.sy()
+    s3, hold3 = a.sy(), list(a.routing_dt1())
     a.ext = 1
+    a.ui(0)
+    a.call(sym['sy_ui'])
     a.ui(0)
     a.call(sym['sy_ui'])
     s4, hold4 = a.sy(), list(a.routing_dt1())
     check(s0['armed'] == 0 and s0['req'] == 0 and not hold0 and s1['armed'] == 1 and s1['mode'] == 1 and
           hold1 and hold1[-1] == 1 and s1['req'] == 1 and s2['mode'] == 0 and s2['armed'] == 1 and s2['req'] == 1 and
-          s3['armed'] == 0 and s3['req'] == 0 and s4['armed'] == 0 and s4['req'] == 0 and
-          len(hold4) == len(hold1) + 1 and hold4[-1] == a.tt()['routing'],
+          s3['armed'] == 1 and s3['req'] == 0 and len(hold3) == len(hold1) + 1 and hold3[-1] == a.tt()['routing'] and
+          s4['armed'] == 1 and s4['req'] == 1 and len(hold4) == len(hold3) + 1 and hold4[-1] == 1,
           f'SY test 8: EXT SOURCE on, the screen never opened: no synth, no ROUTING hold; the screen opened: armed, held '
-          f'on ExtIn, the synth on; EXIT: it plays on; EXT SOURCE off: disarmed, the hold let go (the user\'s ROUTING '
-          f'sent back); on again: silent until the screen opens (ROUTING sent {hold0} / {hold1} / {hold4})')
+          f'on ExtIn, the synth on; EXIT: it plays on; EXT SOURCE off: the hold let go (the user\'s ROUTING sent back), '
+          f'the engine off; MIDI out test 5: still armed, on again it plays again (ROUTING sent {hold0} / {hold1} / '
+          f'{hold3} / {hold4})')
     # 14. SY test 10: the footer drawn on the plain Sound Generator page (outside the screen) is kept, so opening the
     #     screen over that page redraws it at once; the chord on the looper page (0x27) opens the screen; with looper
     #     mode on (0x82e0b92c), REC on the screen goes on (the looper's), off: taken as before.
@@ -2778,9 +3414,9 @@ def sy_screen_checks(img, man):
     f2.uc.mem_write(page2 + 0x1A6C, struct.pack('<3I', *kids2))
     f2.draw_footer()                                   # the page's own footer ("CHROMATIC INPUT"), the screen not up
     kept = f2.sy()['foot']
-    f2.hold(KEY_EXT, True)
+    f2.hold(KEY_VALUE, True)
     f2.ev(EV_KEY, KEY_REC_SET)
-    f2.hold(KEY_EXT, False)
+    f2.hold(KEY_VALUE, False)
     f2.ev(EV_KEY_UP, KEY_REC_SET)
     f2.call(sym['sy_ui'])
     f2.invalid.clear()
@@ -2788,9 +3424,9 @@ def sy_screen_checks(img, man):
     redrawn = list(f2.invalid)
     lp = ScreenMachine(img, man, page=0x27)
     lp.start()
-    lp.hold(KEY_EXT, True)
+    lp.hold(KEY_VALUE, True)
     lchord = lp.ev(EV_KEY, KEY_REC_SET)
-    lp.hold(KEY_EXT, False)
+    lp.hold(KEY_VALUE, False)
     lreq = list(lp.requests)
     rc = ScreenMachine(img, man, page=SG_PAGE)
     rc.start()
@@ -2804,7 +3440,7 @@ def sy_screen_checks(img, man):
           f'SY test 10: the page\'s own footer kept outside the screen, so the screen opened over the page redraws it '
           f'with the columns ({redrawn}); the chord on the looper page asks for the Sound Generator page ({lreq}); with '
           f'looper mode on REC goes on to the looper, with it off REC is taken as before')
-    report['sy']['screen'] = dict(columns=want_cols, footer='ENSEMBLE', bar='OUT: <bus>', fx_passes=fa['fx_passes'],
+    report['sy']['screen'] = dict(columns=want_cols, footer=names[tone4], bar='OUT: <bus>', fx_passes=fa['fx_passes'],
                                   remain=dict(taps=st_r['rem_taps'], holds=st_r['rem_holds']), bus_texts=texts)
 
 
@@ -3130,6 +3766,446 @@ def crash_checks(parent_img, img, man):
 
 
 # ---------------------------------------------------------------------------------------------
+# MIDI out test 1: the Sound Generator's and the kits' notes out over MIDI (tune_test.c's mo_*)
+MO_WRITER, MO_MENU_GETTER, MO_MENU, MO_PAD_NOTE_OUT = 0x800D93F0, 0x800D61F0, 0x80591ADC, 0x1C5
+MO_BUSY, MO_VENEER, MO_EVENT = SETTINGS_OBJ + 0x64, 0x1FC00, 0x8353B000
+MO_FIELDS = 'ch sent ons offs blocked drops cleared'.split()
+
+
+def mo_on(ch, n, v):
+    return bytes([0x99, 0x90 | ch, n, v]).hex()
+
+
+def mo_off(ch, n):
+    return bytes([0x98, 0x80 | ch, n, 0x40]).hex()
+
+
+class MidiMachine(SynthMachine):
+    """SynthMachine with the link writer and PAD Note Out stubbed. One log holds every packet the writer is given
+    ('out', block, bytes) and every call of the SG's MIDI entry ('sg', block, r0, note, velocity, r3); PAD Note Out and
+    setting 0x5d (the app mode) are what the test sets; arp_note_event is logged (r0-r3, [sp], sp) and returns (the arp
+    and the kits do not run)."""
+    def __init__(self, img, man, pad_out=1, app_mode=0, **kw):
+        self.pad_out, self.app_mode, self.events, self.arp_calls = pad_out, app_mode, [], []
+        super().__init__(img, man, **kw)
+        self.links = {k: int(v, 16) for k, v in man['midi_out']['links'].items()}
+        self.man_kit_mode = man['kit_mode_flag']
+        self.uc.hook_add(UC_HOOK_CODE, self._write, begin=MO_WRITER, end=MO_WRITER)
+        self.uc.hook_add(UC_HOOK_CODE, self._menu, begin=MO_MENU_GETTER, end=MO_MENU_GETTER)
+        a = self.links['MO_ARP_NOTE_EVENT'] & ~1
+        self.uc.hook_add(UC_HOOK_CODE, self._arp_note, begin=a, end=a)
+
+    def _write(self, uc, a, s, _):
+        r0, r1 = uc.reg_read(ar.UC_ARM_REG_R0), uc.reg_read(ar.UC_ARM_REG_R1)
+        self.events.append(('out', self.blk, self.bytes(r0, r1)))
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def _menu(self, uc, a, s, _):
+        args = tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(3))
+        uc.reg_write(ar.UC_ARM_REG_R0, self.pad_out if args == (MO_MENU, MO_PAD_NOTE_OUT, 0) else 0)
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def _getter(self, uc, a, s, _):
+        if a == SET_GET and uc.reg_read(ar.UC_ARM_REG_R0) == SETTINGS_OBJ and uc.reg_read(ar.UC_ARM_REG_R1) == 0x5D:
+            uc.reg_write(ar.UC_ARM_REG_R0, self.app_mode)
+            uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+            return
+        super()._getter(uc, a, s, _)
+
+    def _midi(self, uc, a, s, _):
+        self.events.append(('sg', self.blk) + tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(4)))
+        super()._midi(uc, a, s, _)
+
+    def _arp_note(self, uc, a, s, _):
+        sp = uc.reg_read(ar.UC_ARM_REG_SP)
+        self.arp_calls.append(tuple(uc.reg_read(getattr(ar, f'UC_ARM_REG_R{k}')) for k in range(4)) +
+                              (self.get(sp, '<I'), sp))
+        uc.reg_write(ar.UC_ARM_REG_PC, uc.reg_read(ar.UC_ARM_REG_LR))
+
+    def out(self, since=0):
+        return [e[2].hex() for e in self.events[since:] if e[0] == 'out']
+
+    def pad(self, note, vel, source):
+        """The SG page's pad press (vel > 0) or release (0) as they call v9.5's SG note event 0x1fc01: r0 0x1fc01, r1
+        the note, r2 the velocity, r3 0 on / 1 off, the pad at [sp]. The packets it wrote."""
+        n, sp = len(self.events), STACK - 8
+        self.put(sp, source, '<I')
+        self.call(MO_VENEER, MO_VENEER | 1, note, vel, 0 if vel else 1, sp=sp)
+        return self.out(n)
+
+    def mo_tick(self):
+        n = len(self.events)
+        self.call(self.sym['mo_ui'])
+        return self.out(n)
+
+    def scan(self):
+        n = len(self.events)
+        self.call(self.sym['mo_arp_scan'])
+        return self.out(n)
+
+    def mo(self):
+        m = self.sym['mo']
+        on = struct.unpack('<4I', self.bytes(m, 16))
+        st = dict(zip(MO_FIELDS, struct.unpack(f'<{len(MO_FIELDS)}I', self.bytes(m + 16, 4 * len(MO_FIELDS)))))
+        st['on'] = [n for n in range(128) if on[n >> 5] >> (n & 31) & 1]
+        st['qh'], st['qt'] = struct.unpack('<2I', self.bytes(m + 0x40, 8))
+        st['full'] = self.get(m + 0xC8, '<I')
+        # MIDI out test 4: each mode's channel, the guitar's note on the other mode's channel
+        st['ch_sg'], st['ch_kit'], st['ch_mode'], st['ch_ready'], st['x_lit'], st['x_ch'] = self.bytes(m + 0xCC, 6)
+        st['x_ons'], st['x_offs'], st['swaps'] = struct.unpack('<3I', self.bytes(m + 0xD4, 12))
+        return st
+
+    def kits(self, on):
+        """The kits (kit_mode 1) or the SG's melodic mode (0), as the shortcuts switch them."""
+        self.uc.mem_write(self.man_kit_mode, bytes([1 if on else 0]))
+
+    def mch(self, value=None):
+        """M.CH's byte (0..15 = channel 1..16): set it (a VALUE turn) or read it."""
+        a = self.links['MO_KIT_MIDI_CHANNEL']
+        if value is None:
+            return self.bytes(a, 1)[0]
+        self.uc.mem_write(a, bytes([value]))
+
+    def arp(self, i, note=None, vel=None, gated=None, age=None, src=None, light=None):
+        """The arp's voice i as its start_voice / close_gate leave it."""
+        v = base.SG_VOICES[i]
+        for off, value in ((0x5C, note), (0x198, None if vel is None else vel * 100), (0x1AC, src), (0x19C, light)):
+            if value is not None:
+                self.put(v + off, value)
+        if gated is not None:
+            self.uc.mem_write(self.links['MO_ARP_GATED_ADDR'] + i, bytes([gated]))
+        if age is not None:
+            self.put(self.links['MO_ARP_AGE_ADDR'] + 4 * i, age, '<I')
+
+
+def midi_out_checks(img, man, kit_sym):
+    import numpy as np
+    rep = report['midi_out'] = {}
+    links = {k: int(v, 16) for k, v in man['midi_out']['links'].items()}
+    sym, sp = man['symbols'], STACK - 8
+    # 0. The build: the SG note event's jump re-pointed, the links the kits' own symbols
+    patch = [p for p in man['patches'] if p['address'] == MO_EVENT]
+    names = dict(MO_ARP_NOTE_EVENT='arp_note_event', MO_ARP_MODE='arp_mode', MO_ARP_GATED_ADDR='arp_gated',
+                 MO_ARP_AGE_ADDR='arp_age', MO_HELD_COUNT_ADDR='held_count', MO_HELD_NOTE_ADDR='held_note',
+                 MO_HELD_SRC_ADDR='held_src', MO_KIT_MIDI_CHANNEL='kit_midi_channel')
+    check(len(patch) == 1 and patch[0]['target'] == sym['mo_pad'] & ~1 and
+          patch[0]['original_target'] == kit_sym['arp_note_event'] & ~1 and
+          man['midi_out']['hook']['veneer'] == hex(MO_VENEER) and all(links[k] == kit_sym[n] for k, n in names.items()),
+          "MIDI out: v9.5's SG note event (0x8353b000, reached only through 0x1fc01: the SG page's pad press and "
+          "release) jumps to mo_pad, which goes on to arp_note_event; the arp's and kits' addresses are the kits' own "
+          f"symbols ({', '.join(names.values())})")
+    # 1. A pad on the SG page, ARP off, PAD Note Out on, M.CH 16 (power-on)
+    m = MidiMachine(img, man)
+    a, b = m.pad(21, 100, 3), m.pad(21, 0, 3)
+    check(a == [mo_on(15, 57, 100)] and b == [mo_off(15, 57)] and m.mo()['on'] == [] and
+          m.arp_calls == [(MO_VENEER | 1, 21, 100, 0, 3, sp), (MO_VENEER | 1, 21, 0, 1, 3, sp)],
+          f"MIDI out: a pad on the Sound Generator page (its pitch 21, A3 as heard): note 57 on at its velocity, off at "
+          f"its release, on channel 16 (M.CH at power-on); r0-r3, the pad at [sp] and sp reach arp_note_event as they "
+          f"came: {a + b}")
+    c = m.pad(10, 200, 0) + m.pad(10, 90, 0) + m.pad(100, 100, 1) + m.pad(-40, 100, 2) + m.pad(10, 0, 0)
+    check(c == [mo_on(15, 46, 127), mo_off(15, 46), mo_on(15, 46, 90), mo_off(15, 46)] and m.mo()['on'] == [],
+          f"MIDI out: the same note again goes off first, then on (the synth plays it again); velocity 200 goes as "
+          f"127; a note outside 0..127 as heard goes nowhere: {c}")
+    rep['pads'] = a + b + c
+    # 2. The kits: pads 1..16 are notes 36..51 (the kits' MIDI map) on the kits' own M.CH (test 2: always 10; test 4: 10
+    #    at power-on, then what M.CH says in the kits); SUB PAD (0x13) nothing
+    m = MidiMachine(img, man)
+    m.kits(1)
+    t0 = m.mo_tick()                                                     # the first UI tick: the kits' 10 put in M.CH
+    a = m.pad(5, 100, 0) + m.pad(5, 0, 0) + m.pad(30, 80, 15) + m.pad(30, 0, 15) + m.pad(0, 100, 0x13)
+    ch0 = m.mch()
+    m.mch(2)                                                             # M.CH 3, turned in the kits
+    b = m.pad(5, 90, 1) + m.pad(5, 0, 1)
+    check(t0 == [] and ch0 == 9 and
+          a == [mo_on(9, 36, 100), mo_off(9, 36), mo_on(9, 51, 80), mo_off(9, 51)] and len(m.arp_calls) == 7 and
+          b == [mo_on(2, 37, 90), mo_off(2, 37)],
+          f"MIDI out test 4: the kits at power-on: M.CH shows 10 ({ch0 + 1}), kit pads 1 and 16 send notes 36 and 51 on "
+          f"channel 10; M.CH turned to 3 there: channel 3 (test 2 kept 10); SUB PAD nothing, every event still reaches "
+          f"arp_note_event: {a + b}")
+    rep['kits'] = a
+    # 2c. Each mode its own M.CH (test 4): a turn of M.CH is the current mode's; a mode switch keeps it and puts the other
+    #     mode's in (the VALUE item and MIDI in read that byte), so pads send on their mode's channel
+    m = MidiMachine(img, man)
+    m.mo_tick()
+    seen = [m.mch()]                                                     # melodic at power-on: 16
+    m.mch(0)                                                             # the SG's M.CH 1
+    a = m.mo_tick() + m.pad(21, 100, 3) + m.pad(21, 0, 3)
+    m.kits(1)
+    b = m.mo_tick()
+    seen.append(m.mch())                                                 # the kits' 10
+    c = m.pad(5, 100, 0) + m.pad(5, 0, 0)
+    m.mch(4)                                                             # the kits' M.CH 5
+    d = m.mo_tick() + m.pad(5, 100, 0) + m.pad(5, 0, 0)
+    m.kits(0)
+    e = m.mo_tick()
+    seen.append(m.mch())                                                 # the SG's 1 again
+    f = m.pad(21, 100, 3) + m.pad(21, 0, 3)
+    m.kits(1)
+    m.mo_tick()
+    seen.append(m.mch())                                                 # the kits' 5 again
+    st = m.mo()
+    check(seen == [15, 9, 0, 4] and a == [mo_on(0, 57, 100), mo_off(0, 57)] and b == [] and
+          c == [mo_on(9, 36, 100), mo_off(9, 36)] and d == [mo_on(4, 36, 100), mo_off(4, 36)] and e == [] and
+          f == [mo_on(0, 57, 100), mo_off(0, 57)] and (st['ch_sg'], st['ch_kit'], st['ch_mode']) == (0, 4, 1) and
+          st['swaps'] == 3,
+          f"MIDI out test 4: each mode its own M.CH: the SG at 16 set to 1 sends on 1; the kits come in at 10, set to 5 "
+          f"send on 5; back to the SG M.CH shows 1 and it sends on 1; the kits again show 5 (M.CH as each switch left "
+          f"it: {[c + 1 for c in seen]})")
+    # 2b. A melodic note sounding when the kits come in: its note-off on channel 16 at the next UI tick
+    m = MidiMachine(img, man)
+    a = m.pad(21, 100, 3)
+    m.uc.mem_write(man['kit_mode_flag'], b'\x01')
+    b, c = m.mo_tick(), m.pad(0, 100, 2)
+    check(a == [mo_on(15, 57, 100)] and b == [mo_off(15, 57)] and c == [mo_on(9, 38, 100)],
+          f"MIDI out test 2: the Sound Generator to the kits with a note sounding: its off on channel 16, then the kits "
+          f"on 10: {a + b + c}")
+    # 3. M.CH: the channel; changed while a note sounds, that note goes off on the old channel at the next UI tick
+    m = MidiMachine(img, man)
+    m.uc.mem_write(links['MO_KIT_MIDI_CHANNEL'], bytes([9]))
+    a = m.pad(21, 100, 3)
+    m.uc.mem_write(links['MO_KIT_MIDI_CHANNEL'], bytes([0]))
+    b, c, d = m.mo_tick(), m.pad(21, 0, 3), m.pad(24, 100, 4)
+    check(a == [mo_on(9, 57, 100)] and b == [mo_off(9, 57)] and c == [] and d == [mo_on(0, 60, 100)],
+          f"MIDI out: M.CH 10 sends on channel 10; M.CH changed to 1 while it sounds: off on channel 10 at the next UI "
+          f"tick, its release then nothing, the next note on channel 1: {a + b + c + d}")
+    # 4. PAD Note Out off: nothing goes out; turned off while a note sounds, it goes off at the next UI tick
+    m = MidiMachine(img, man, pad_out=0)
+    a = m.pad(21, 100, 3) + m.pad(21, 0, 3)
+    blocked = m.mo()['blocked']
+    m.pad_out = 1
+    b = m.pad(21, 100, 3)
+    m.pad_out = 0
+    c = m.mo_tick()
+    d = m.pad(21, 0, 3) + m.mo_tick()
+    check(a == [] and blocked == 1 and b == [mo_on(15, 57, 100)] and c == [mo_off(15, 57)] and d == [] and
+          len(m.arp_calls) == 4,
+          f"MIDI out: PAD Note Out off sends nothing (the pad still plays: arp_note_event); turned off while a note "
+          f"sounds, its note-off goes at the next UI tick: {b + c}")
+    # 5. Stock's gates (0x800549e0's): [0x82e01144 + 0x64] set or setting 0x5d = 2: no note-on; a note-off always
+    m = MidiMachine(img, man)
+    m.put(MO_BUSY, 1, '<I')
+    a = m.pad(21, 100, 3)
+    m.put(MO_BUSY, 0, '<I')
+    m.app_mode = 2
+    b = m.pad(22, 100, 3)
+    m.app_mode = 1
+    c = m.pad(23, 100, 3)
+    m.put(MO_BUSY, 1, '<I')
+    d = m.pad(23, 0, 3)
+    check(a == [] and b == [] and c == [mo_on(15, 59, 100)] and d == [mo_off(15, 59)],
+          f"MIDI out: stock's gates: nothing while [0x82e01144 + 0x64] is set or setting 0x5d is 2 (app mode 1: sent); "
+          f"a note on still goes off: {c + d}")
+    # 6. The page left (the SG lets its notes go): every note on goes off at the next UI tick
+    m = MidiMachine(img, man)
+    a = m.pad(21, 100, 3) + m.pad(28, 100, 4)
+    m.page(1)
+    b, c = m.mo_tick(), m.mo_tick()
+    check(a == [mo_on(15, 57, 100), mo_on(15, 64, 100)] and b == [mo_off(15, 57), mo_off(15, 64)] and c == [] and
+          m.mo()['cleared'] == 1,
+          f"MIDI out: the page left with two pads held: both go off at the next UI tick, once: {b}")
+    # 7. ARP on: pads send nothing; the arp's voices do, queued after the audio block (mo_arp_scan writes nothing) and
+    #    sent at the next UI tick
+    m = MidiMachine(img, man)
+    m.put(links['MO_ARP_MODE'], 1)
+    a = m.pad(21, 100, 3) + m.pad(21, 0, 3)
+    m.arp(0, note=21, vel=90, gated=1, age=1)
+    s1, q1 = m.scan(), m.mo()['qh']
+    t1 = m.mo_tick()
+    m.arp(0, gated=0)
+    s2, t2 = m.scan(), m.mo_tick()
+    m.arp(2, note=28, vel=64, gated=1, age=1)
+    m.arp(1, note=24, vel=127, gated=1, age=1)
+    t3 = (m.scan(), m.mo_tick())
+    m.arp(2, note=31, vel=50, gated=1, age=2)
+    t4 = (m.scan(), m.mo_tick())
+    m.put(links['MO_ARP_MODE'], 0)
+    m.arp(1, gated=0)
+    m.arp(2, gated=0)
+    t5 = (m.scan(), m.mo_tick())
+    check(a == [] and s1 == [] and q1 == 1 and t1 == [mo_on(15, 57, 90)] and s2 == [] and t2 == [mo_off(15, 57)] and
+          t3 == ([], [mo_on(15, 60, 127), mo_on(15, 64, 64)]) and t4 == ([], [mo_off(15, 64), mo_on(15, 67, 50)]) and
+          t5 == ([], [mo_off(15, 60), mo_off(15, 67)]) and m.mo()['on'] == [],
+          f"MIDI out, ARP on: the pads send nothing; each note the arp starts goes on with its velocity, off when its "
+          f"gate closes, a voice started again off then on, ARP off lets them go; the audio-side scan only queues (no "
+          f"packet), the UI tick sends: {t1 + t2 + t3[1] + t4[1] + t5[1]}")
+    rep['arp'] = t1 + t2 + t3[1] + t4[1] + t5[1]
+    # 8. ARP in the kits: each voice's pad as the kits pick it (its own pad, a held key an octave away, note % 16)
+    m = MidiMachine(img, man)
+    m.uc.mem_write(man['kit_mode_flag'], b'\x01')
+    m.put(links['MO_ARP_MODE'], 1)
+    m.put(links['MO_HELD_COUNT_ADDR'], 1)
+    m.uc.mem_write(links['MO_HELD_NOTE_ADDR'], bytes([19]))
+    m.put(links['MO_HELD_SRC_ADDR'], 5, '<H')
+    m.arp(1, src=3, light=7, vel=100, gated=1, age=1)
+    m.arp(2, src=-1, light=7, vel=100, gated=1, age=1)
+    m.arp(3, src=-1, light=8, vel=100, gated=1, age=1)
+    t = (m.scan(), m.mo_tick())
+    check(t == ([], [mo_on(9, 39, 100), mo_on(9, 41, 100), mo_on(9, 44, 100)]),
+          f"MIDI out, ARP in the kits (channel 10): a voice's own pad 4 -> 39, a held key's pad 6 an octave from its "
+          f"note -> 41, else its note % 16 (pad 9) -> 44: {t[1]}")
+    # 9. The queue full (the UI task held up): every note goes off once it drains
+    m = MidiMachine(img, man)
+    m.put(links['MO_ARP_MODE'], 1)
+    m.arp(0, note=5, vel=100, gated=1, age=1)
+    m.scan()
+    for k in range(40):
+        m.arp(1, note=k, vel=100, gated=1, age=k + 1)
+        m.scan()
+    st = m.mo()
+    t = m.mo_tick()
+    st2 = m.mo()
+    check(st['full'] == 1 and st['drops'] > 0 and st2['on'] == [] and st2['full'] == 0 and st2['cleared'] == 1 and
+          mo_off(15, 41) in t,
+          f"MIDI out: {st['qh'] + st['drops']} notes queued in one go: {st['drops']} lost, and at the next UI tick the "
+          f"{st['qh']} kept are sent, then every note still on goes off")
+    # 10. The guitar on the SG page (syn_ui): each note out (as heard: the SG's MIDI note - 12) just before the SG gets
+    #     it; drum mode the pad note; ARP on none
+    def pairs(ev, heard, ch):
+        k, ok, n = 0, True, 0
+        while k < len(ev):
+            if ev[k][0] != 'out' or k + 1 >= len(ev) or ev[k + 1][0] != 'sg':
+                return False, n
+            _, _, r0, note, vel, r3 = ev[k + 1]
+            want = mo_on(ch, heard(note), vel) if vel else mo_off(ch, heard(note))
+            ok = ok and ev[k][2].hex() == want and r0 == 2
+            k, n = k + 2, n + 1
+        return ok, n
+    def split(ev, ch):
+        """The SG's calls with the packets on channel ch (the page's), and the other channels' packets as (on/off,
+        channel 1..16, note)."""
+        page = [e for e in ev if e[0] == 'sg' or e[2][1] & 15 == ch]
+        other = [('on' if e[2][0] == 0x99 else 'off', (e[2][1] & 15) + 1, e[2][2])
+                 for e in ev if e[0] == 'out' and e[2][1] & 15 != ch]
+        return page, other
+
+    def x_want(ch, notes):
+        """One note at a time on channel ch (1..16): each on, then off before the next."""
+        return [p for n in notes for p in (('on', ch, n), ('off', ch, n))]
+
+    r = Run(img, man, ref.open_strings((40, 45, 50)), machine=MidiMachine)
+    page, other = split(r.ms.events, 15)
+    ok, n = pairs(page, lambda x: x - 12, 15)
+    check(ok and n == 6 and r.ms.midi == r.model and other == x_want(10, (36, 41, 46)),
+          f"MIDI out: the guitar on the SG page, three open strings: each of the six notes out (the SG's MIDI note - 12, "
+          f"as heard) just before the SG gets it, at the pick's velocity; test 4: at once, the kits' pads for them on "
+          f"the kits' channel 10 (E2 36, A2 41, D3 46): {r.ms.out()}")
+    rep['guitar'] = r.ms.out()
+    r = Run(img, man, ref.open_strings((40, 45, 50)), drum=True, machine=MidiMachine)
+    page, other = split(r.ms.events, 9)
+    ok, n = pairs(page, lambda x: x, 9)
+    check(ok and n == 6 and [e[3] for e in r.ms.events if e[0] == 'sg' and e[4]] == [36, 41, 46] and
+          other == x_want(16, (28, 33, 38)),
+          f"MIDI out: the guitar in the kits: the pad notes it strikes (test 4's map: 36, 41, 46) on channel 10, each "
+          f"just before the kit gets it; test 4: at once, the SG's notes as heard on the SG's channel 16: "
+          f"{r.ms.out()}")
+    r = Run(img, man, ref.open_strings((40, 45, 50)), machine=MidiMachine,
+            setup=lambda ms: ms.put(ms.links['MO_ARP_MODE'], 1))
+    page, other = split(r.ms.events, 15)
+    check([e for e in page if e[0] == 'out'] == [] and len(r.ms.midi) == 6 and other == x_want(10, (36, 41, 46)),
+          f"MIDI out: the guitar with ARP on: no note of its own goes out on the page's channel (the arp's do), the SG "
+          f"still gets all six; test 4: the kits' channel still gets the guitar's pads: {r.ms.out()}")
+    # 11. Test 4: both modes on one channel: the page's notes only
+    r = Run(img, man, ref.open_strings((40, 45, 50)), machine=MidiMachine,
+            setup=lambda ms: ms.mch(9))
+    page, other = split(r.ms.events, 9)
+    ok, n = pairs(page, lambda x: x - 12, 9)
+    check(ok and n == 6 and other == [],
+          f"MIDI out test 4: the SG's M.CH set to 10, the kits' channel too: the guitar's SG notes on 10 only, no pads "
+          f"beside them: {r.ms.out()}")
+    # 12. Test 4: a hammer-on (E2 picked, G2 hammered, no pick). The SG's channel follows the move; the kits strike on
+    #     picks only, their pad sounding until the let-go
+    fs = 48000
+    hz = {n: 440 * 2 ** ((n - 69) / 12) for n in range(30, 90)}
+    x = ref.guitar(hz[40], 1.4, seed=50, bend=(0.6, 0.601, 300)).copy()
+    x[-int(0.05 * fs):] *= np.linspace(1, 0, int(0.05 * fs))
+    x = np.concatenate([np.zeros(fs // 5), x, np.zeros(fs // 2)])
+    rng = np.random.default_rng(50)
+    t = np.arange(len(x)) / fs
+    hammer = x + rng.normal(0, 2e-4, len(x)) + 5e-4 * np.sin(2 * np.pi * 60 * t + rng.uniform(0, 2 * np.pi))
+    r = Run(img, man, hammer, machine=MidiMachine)
+    page, other = split(r.ms.events, 15)
+    moves = [(w >> 15) & 1 for _, w in r.words if w & 0xFF]
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [40, 43] and moves == [0, 1] and
+          [p for p in split(r.ms.events, 9)[1]] == x_want(16, (28, 31)) and other == x_want(10, (36,)),
+          f"MIDI out test 4: a hammer-on in the SG's mode (the tracker's word marks the move, bit 15: {moves}): the SG "
+          f"and its channel play E2 then G2, the kits' channel one pad (36) for the pick, let go with the string: "
+          f"{r.ms.out()}")
+    r = Run(img, man, hammer, drum=True, machine=MidiMachine)
+    page, other = split(r.ms.events, 9)
+    check(r.ms.midi == r.model and [n for n, _ in r.ons()] == [36] and other == x_want(16, (28, 31)) and
+          [(e[2][0], e[2][2]) for e in page if e[0] == 'out'] == [(0x99, 36), (0x98, 36)],
+          f"MIDI out test 4: the hammer-on in the kits: one hit, pad 1 (tests 1-3: the tracker held moves back in drum "
+          f"mode), let go with the string; the SG's channel plays E2 then G2 as heard (28, 31): {r.ms.out()}")
+    # 13. Test 4: the other channel's note goes with the page, PAD Note Out and a mode switch (mo_ui)
+    def sounding(ms):
+        ms.mo_tick()                                                     # each mode's channel set up, as on the unit
+        a2 = np.concatenate([np.zeros(fs // 10), ref.guitar(hz[45], 0.8, seed=7)])
+        for values in ref.to_blocks(a2)[:300]:
+            ms.tick(values)
+        return ms.mo()['x_lit']
+    m = MidiMachine(img, man)
+    m.ui(0)
+    m.ui(0)
+    lit = sounding(m)
+    m.page(1)
+    a = m.mo_tick()
+    m2 = MidiMachine(img, man)
+    m2.ui(0)
+    m2.ui(0)
+    lit2 = sounding(m2)
+    m2.kits(1)
+    b = m2.mo_tick()
+    check(lit == 42 and mo_off(9, 41) in a and lit2 == 42 and mo_off(9, 41) in b and m2.mo()['x_lit'] == 0,
+          f"MIDI out test 4: an A2 ringing (its pad 41 on the kits' channel): the page left lets it go at the next UI "
+          f"tick ({a}), and so does a switch to the kits ({b})")
+    # 14. Test 4 (the user: MARK to the looper from the Sound Generator, "guitar plays whatever synth guitar state"):
+    #     the looper's page reached from the plain page keeps the guitar on the SG (the tracker and the ROUTING hold
+    #     too, MIDI out with them); leaving the looper lets the note sounding go (stock stops the SG's voices only as
+    #     its own page goes). From the guitar synth screen the looper keeps nothing (its synth plays there, as before).
+    LOOPER = 0x27
+    gs = sym['gsyn']
+    lm = MidiMachine(img, man)
+    lm.ui(0)
+    lm.ui(0)
+    lm.mo_tick()
+    lm.tick()                                                          # the plain page seen
+    lm.page(LOOPER)
+    lm.tick()
+    lm.call(sym['tune_ui'])
+    kept = (lm.get(gs + 48, '<I'), lm.tt()['req'], lm.tt()['hold'])   # loop, the tracker asked for, the hold
+    n0 = len(lm.events)
+    for values in ref.to_blocks(np.concatenate([np.zeros(fs // 10), ref.guitar(hz[45], 0.8, seed=7)]))[:300]:
+        lm.tick(values)
+    on_looper = [e for e in lm.events[n0:]]
+    sg_on = [e[3] for e in on_looper if e[0] == 'sg' and e[4]]
+    lm.mo_tick()
+    out_on = [e[2].hex() for e in on_looper if e[0] == 'out']
+    sounding_before = lm.gsyn()['sounding']
+    n1 = len(lm.events)
+    lm.page(1)
+    lm.tick()
+    left = [(e[0], e[3], e[4]) if e[0] == 'sg' else e[2].hex() for e in lm.events[n1:]]
+    lm.call(sym['tune_ui'])
+    after = (lm.get(gs + 48, '<I'), lm.get(gs + 60, '<I'), lm.gsyn()['sounding'], lm.tt()['req'])
+    sm = MidiMachine(img, man)                                         # from the guitar synth screen: nothing kept
+    sm.ui(0)
+    sm.ui(0)
+    sm.tick()
+    sl = SyLayout(sm, sm.sym)
+    sm.put(sym['sy'] + sl.mode, 1, '<I')                               # the screen up on the page
+    sm.tick()
+    sm.page(LOOPER)
+    sm.tick()
+    screen_loop = sm.get(gs + 48, '<I')
+    check(kept == (1, 1, 1) and sg_on == [45] and any(p.startswith('999f21') for p in out_on) and
+          sounding_before == 45 and ('sg', 45, 0) in left and mo_off(15, 33) in left and
+          after[:3] == (0, 1, -1) and screen_loop == 0,
+          f"MIDI out test 4: the looper reached from the plain page keeps the guitar on the SG (loop, tracker, hold "
+          f"{kept}; A2 played there: {sg_on}, out {out_on[:2]}); leaving it lets the note go ({left}); from the guitar "
+          f"synth screen nothing is kept (loop {screen_loop})")
+
+
+# ---------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('out', type=Path)
@@ -3137,7 +4213,7 @@ def main():
     ap.add_argument('--seeds', type=int, default=12)
     ap.add_argument('--blocks', type=int, default=6)
     ap.add_argument('--mixer-runs', type=int, default=4)
-    ap.add_argument('--only', help='comma-separated: static,tune,synth,sy,meter (default all)')
+    ap.add_argument('--only', help='comma-separated: static,tune,synth,sy,midi,meter (default all)')
     a = ap.parse_args()
     out = a.out.resolve()
     man = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
@@ -3149,7 +4225,7 @@ def main():
     if not kit_sym:
         raise SystemExit('no kit symbols beside the parent APP1')
     sym = man['symbols']
-    only = set((a.only or 'static,tune,synth,sy,meter').split(','))
+    only = set((a.only or 'static,tune,synth,sy,midi,meter').split(','))
     if 'static' in only:
         static_checks(out, man, parent_img, img)
     if 'tune' in only:
@@ -3159,6 +4235,8 @@ def main():
     if 'sy' in only:
         sy_checks(parent_img, img, man, kit_sym)
         crash_checks(parent_img, img, man)                    # SY test 18
+    if 'midi' in only:
+        midi_out_checks(img, man, kit_sym)                    # MIDI out test 1
     if 'meter' in only:
         entry_checks(parent_img, img, sym)
         base.arithmetic(img, man)

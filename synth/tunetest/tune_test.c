@@ -132,6 +132,9 @@
                                                                     code first; DM-404 stopped it on its 4th step) */
 #define LOOPER_PAGE 0x27                                         /* SY test 10: the looper (MARK with MARK = Looper) */
 #define LOOPER_ON (*(volatile const u8 *)0x82E0B92Cu)            /* looper mode on: the SG page's REC goes to it */
+#define LOOPER_STATE (*(volatile const u8 *)0x82E0B81Du)         /* MIDI out test 7: the looper's state (its block
+                                                                    0x82e0b71c + 0x101): 1 REC waiting for AUTO TRIG,
+                                                                    2 recording (DM-404: mark_rec_dm404.py) */
 #define SY_BAR_X1 127
 #define PADS 16u                   /* key IDs 0..15 are the pads */
 #define KEY_BYTES 11
@@ -255,28 +258,35 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define FILE_WRITE ((s32 (*)(s32, const void *, s32))0x800DD9B9u)
 #define FILE_CLOSE ((s32 (*)(s32))0x800DEBD9u)
 #define SY_FILE_MAGIC 0x4E545953u                              /* "SYTN" */
-#define SY_FILE_VERSION 5u                                     /* SY test 11: the 20 tones; SY test 32: 5 */
+#define SY_FILE_VERSION 7u                                     /* SY test 11: the 20 tones; SY test 32: 5; 34: 6; MIDI */
+                                                               /*   out test 4: 7, the 32 tones */
+/* Version 7 (MIDI out test 4): version 6's layout for SY_NTONES (32) tones; a version 4-6 file's 20 tones are read
+ * into theirs (the twelve new ones as designed). The layout for nt tones: */
+#define SY_FILE_OLD_TONES 20u
+#define SYF_OCT(nt) (SY_FILE_KNOB + 3u * (nt))
+#define SYF_SUS(nt) (SYF_OCT(nt) + (nt))
+#define SYF_DYN(nt) (SYF_SUS(nt) + (nt))
+#define SYF_BUS(nt) (SYF_DYN(nt) + (nt))
+#define SYF_SUM4(nt) (SYF_BUS(nt) + 4u)                        /* version 4's sum (132 for 20) */
+#define SYF_SHAPE(nt) SYF_SUM4(nt)                             /* version 5-7: the SHAPE page, then FILTER */
+#define SYF_FILT(nt) (SYF_SHAPE(nt) + 6u * (nt))
+#define SYF_SUM5(nt) (SYF_FILT(nt) + 2u * (nt))                /* 292 for 20, 460 for 32 */
+#define SY_FILE_MAX (SYF_SUM5(SY_NTONES) + 4u)                 /* version 7's 464 bytes */
 /* Version 5 (SY test 32): version 4's 132 bytes (SENS's byte now 0 = 50, else 1..101; a tone whose own setting is
  * ATTACK or GLIDE keeps it on the SHAPE page), the SHAPE page (20 x ATTACK, RELEASE, GLIDE: u16 ms, little-endian)
  * and the FILTER page (20 x ENV, RESO: knob position - 64), FNV-1a of the first 292. A version 4 file is read with
- * SENS 50, those tones' own setting as designed and SHAPE / FILTER as designed. */
+ * SENS 50, those tones' own setting as designed and SHAPE / FILTER as designed.
+ * Version 6 (SY test 34): version 5's layout; no tone's own setting is a SHAPE or FILTER one any more. A version 4 or
+ * 5 file is read the same way, then a tone whose own setting changed (SYV_P2KIND_V5: tests 11-33's) takes its old ENV
+ * or RESO to the FILTER page (where version 5 shared them) and its CTRL 1 goes to the middle. */
 #define SY_LAST_PAGE 4u                                        /* SY test 32: main, OTHERS, TRACK, SHAPE, FILTER */
 #define SY_GLIDE_OFF 0xFFFFu                                   /* SY test 32: a SHAPE GLIDE of none */
-#define SY_FILE5_BYTES 296
-#define SY_FILE5_SUM 292
-#define SY_FILE_SHAPE 132
-#define SY_FILE_FILT (SY_FILE_SHAPE + 6 * SY_NTONES)
 /* Version 4: magic, version, tone, muted, 20; 60 knob positions, 20 OCTAVE, 20 SUSTAIN, 20 DYNAMICS, the bus, SY test
  * 15's WAIT, SENS and GUARD (zero in tests 11-14's files: test 11's tracking; test 18: LAW in WAIT's byte, marked
  * 0x80; SY test 24: GLITCH there, unmarked, and VOICES in GUARD's byte, marked 0x40); FNV-1a of the first 132. Version 3 (tests 6-10, 104 bytes, the sum of the first 100 at 100: the old 15 tones): only
- * its bus (byte 98) and SOUND OFF are kept, the new tones start as designed. */
-#define SY_FILE_BYTES 136
-#define SY_FILE_SUM 132
-#define SY_FILE_KNOB 8
-#define SY_FILE_OCT (SY_FILE_KNOB + 3 * SY_NTONES)
-#define SY_FILE_SUS (SY_FILE_OCT + SY_NTONES)
-#define SY_FILE_DYN (SY_FILE_SUS + SY_NTONES)
-#define SY_FILE_BUS (SY_FILE_DYN + SY_NTONES)
+ * its bus (byte 98) and SOUND OFF are kept, the new tones start as designed. (The SYF_ layout above: version 4 = 136
+ * bytes for 20 tones, 5 and 6 = 296.) */
+#define SY_FILE_KNOB 8u
 #define SY_SENS_MAX 100u                                       /* SY test 15: the TRACK page's ranges (24: SENS 0..100, */
 #define SY_GLITCH_MAX 100u                                     /*   GLITCH 0..100 in WAIT's / LAW's byte, unmarked) */
 #define SY_VOICES_MAX 6u                                       /* SY test 24: VOICES (0 the tone's, 1 single notes, 2..6) */
@@ -314,6 +324,8 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define KEY_SUB_PAD 0x13
 #define KEY_REC_SET 0x16                               /* RECORD SETTING */
 #define KEY_REC 0x1B
+#define KEY_MARK 0x19                                  /* MIDI out test 9 */
+#define KEY_ROLL 0x21                                  /* MIDI out test 13 */
 /* Note repeat's handler for every UI event (the builder reads it from its bridge's call, which now comes here). */
 #define NR_EVENT ((s32 (*)(const s16 *))NR_EVENT_C)
 #define PAGE_REQUEST ((void (*)(s32))0x800DA599u)     /* ask for a page: it comes at a later UI event */
@@ -334,8 +346,10 @@ EXPORT const u32 sy_layout[] = {                          /* SY tests 1 and 2: t
 #define FONT_BIG 2                                     /* the value big at +15 (DM-404 renders them so) */
 #define COL_BASE 0x7B                                  /* the SG knob columns' parameter IDs (SHIFT: 0x7e..0x80) */
 #define SG_CHILDREN 0x1A6C                             /* the SG page's three knob columns */
-#define SY_SOUNDS (SY_NTONES + 1u)                     /* SOUND: OFF, then the tones (test 11: 20) */
-#define SY_SHIFT_TONES (SY_NTONES - 15u)               /* SY test 11: SHIFT + pads 1-5: tones 16-20 */
+#define SY_BANKS (SYV_SLOTS / 16u)                     /* MIDI out test 12: banks of 16 sounds (2) */
+#define SY_SOUNDS (SYV_SLOTS + 1u)                     /* SOUND: OFF, then the tones in pad order (MIDI out test 4: */
+                                                       /*   32, pads 1-16 then SHIFT + pads 1-16; test 11: 20) */
+_Static_assert(SYV_SLOTS == SY_NTONES && SYV_SLOTS == 32u, "every tone on a pad");
 
 /* ---- the synth: the tracker's note on the Sound Generator ---- */
 #define SG_PAGE 0x1E                                   /* the Sound Generator page (the kits' and the arp's) */
@@ -357,9 +371,42 @@ typedef struct {
     u32 mix, hint_due, hints;                          /* on the page with EXT SOURCE on and ROUTING Mix; the hint
                                                           still to show; hints shown */
     u32 off, toggles;                                  /* SY test 31: the guitar's notes off on the page (EXT SOURCE +
-                                                          SUB PAD there; the file keeps it); times switched */
+                                                          SUB PAD there; MIDI out test 2: EXT SOURCE + VALUE's push;
+                                                          the file keeps it); times switched */
+    u32 ext_tap, ext_taps;                             /* MIDI out test 2: EXT SOURCE pressed on the page with nothing
+                                                          else since (a tap so far); taps that switched the input */
+    u32 lit;                                           /* MIDI out test 4: EXT SOURCE's light as last set: 1 + the
+                                                          option on the page, 0 stock's (test 5: 3 green on any
+                                                          page, 0xFF to paint again) */
+    u32 loop, page_seen, sg_plain, loop_offs;          /* MIDI out test 4: the looper's page reached (MARK) from the
+                                                          plain page: the guitar keeps playing the SG / kits there;
+                                                          the page last seen; the plain page (not the guitar synth
+                                                          screen) was up there; notes let go leaving the looper */
+    u32 ext_gate, synth_switches, notes_switches, hint;   /* MIDI out test 5: EXT SOURCE pressed on the page with its
+                                                          gate on (the input on until the release); HOLD + EXT SOURCE
+                                                          and HOLD + RECORD SETTING / PATTERN EDIT used; PATTERN EDIT
+                                                          pulsing with stock's SHIFT hint */
+    u32 rec_lit, rec_paints, loop_back, loop_backs;    /* MIDI out test 7: REC painted for the looper (waiting or
+                                                          recording off its page), times painted; the guitar synth
+                                                          screen left for the looper (MARK), times it came back */
+    u32 val_down, val_used, val_chords, val_passes;    /* MIDI out test 8: VALUE's press on the SG page held back (1)
+                                                          or handed to stock (2); RECORD SETTING came while held (the
+                                                          chord, no push for stock); chords; presses handed on */
+    s32 val_v;                                         /*   its press's value */
+    u32 loop_from, loop_keeps;                         /* MIDI out test 9: the page the looper's was opened from; MARKs
+                                                          that went back to the SG page in looper mode */
+    u32 bank, pads_on;                                 /* MIDI out test 12: the guitar synth screen's bank (0, 1); its
+                                                          pads painted (stock's colours kept below) */
+    u32 pad_rgb[16];
+    u8 pad_mode[16];
 } gsyn_t;
 EXPORT gsyn_t gsyn = {-1, 0, 0, 0, 0, 0, 0};
+
+/* MIDI out test 4 (the user: going to the looper with MARK from the Sound Generator, "guitar plays whatever synth guitar
+ * state"): where the guitar plays the Sound Generator / the kits: their page (not the guitar synth screen), and the
+ * looper's page reached from it (MARK), with the option the page had. The mixer renders the SG on every page
+ * (0x1c766), so its voices sound there; the guitar synth stays off there (sy_can_play). */
+static inline u32 gsyn_page(void) { return (PAGE == SG_PAGE && !sy.mode) || (PAGE == LOOPER_PAGE && gsyn.loop); }
 
 /* Shown once each time the page is open with EXT SOURCE on and ROUTING on Mix (the synth stays silent there). The
  * widest line is 95 px in the popup font: a 112 px box (test_tune_test.py checks it fits the 128 px screen). */
@@ -791,10 +838,13 @@ __attribute__((naked, used)) void meter_sg_pre(void) {
         ".ltorg\n");
 }
 
-/* The SG stub's final pop {r4-r8, pc} lands here: stamp the end, back to the mixer. */
+/* The SG stub's final pop {r4-r8, pc} lands here: stamp the end, back to the mixer. MIDI out test 1: first the arp's
+ * notes this block (mo_arp_scan: the arp's tick ran in the stub; it only queues them for the UI tick), inside the SG
+ * span the meter measures. */
 __attribute__((naked, used)) void meter_sg_end(void) {
     __asm__ volatile(
-        "push {r0, r1}\n"
+        "push {r0, r1, r2, r3}\n"
+        "bl mo_arp_scan\n"
         "ldr r0, =meter\n"
         "ldr r1, =0xE0001004\n"
         "ldr r1, [r1]\n"
@@ -803,7 +853,7 @@ __attribute__((naked, used)) void meter_sg_end(void) {
         "orr r1, r1, #8\n"
         "str r1, [r0, #" XS(OFF_STAMPS) "]\n"
         "ldr r12, [r0, #" XS(OFF_SG_RET) "]\n"
-        "pop {r0, r1}\n"
+        "pop {r0, r1, r2, r3}\n"
         "bx r12\n"
         ".ltorg\n");
 }
@@ -1095,7 +1145,7 @@ static inline u32 syn_live(const tt_t *t) { return t->ext && t->hold && DWT_CYCC
  * firmware sends into ExtIn too (the RECORD SETTING and looper screens, its chip resets). The recorder meanwhile gets
  * the mix (pair 1 x 2) on ROUTING Mix, the input and the synth on ExtIn (sy_rec). */
 UI_SMALL static void route_hold(tt_t *t, u32 now) {
-    u32 want = t->ext && ((PAGE == SG_PAGE && !sy.mode && !gsyn.off) ||   /* test 5: the SG page's own synth (SY test
+    u32 want = t->ext && ((gsyn_page() && !gsyn.off) ||                   /* test 5: the SG page's own synth (SY test
                                                                              31: unless its notes are off) */
                           (!sy.muted && sy.armed));                      /* SY test 8: armed */
     if (want && !t->hold) {
@@ -1140,7 +1190,7 @@ EXPORT UI_SMALL void tune_ui(void) {
         const s32 v = sy.trk[1] ? (s32)sy.trk[1] - 1 : 50, d = (v - 50) * 12;
         t->sens_db = (d + (d >= 0 ? 25 : -25)) / 50;
     }
-    u32 want = meter.shown || (PAGE == SG_PAGE && !sy.mode && !gsyn.off && syn_live(t)) ||   /* test 5: not in the SY
+    u32 want = meter.shown || (gsyn_page() && !gsyn.off && syn_live(t)) ||                  /* test 5: not in the SY
                                                                                                screen; SY test 31 */
                (sy.req && sy.state == SY_RUN && sy_block.mono);                /* SY test 19 */
     if (!want) t->req = 0;
@@ -1188,9 +1238,13 @@ UI_SMALL static void sy_start(sy_t *s) {
 /* Where the synth can play: every page but the Sound Generator's (guitar synth test 6 plays there; test 5: but the SY
  * screen's), with EXT SOURCE on and the chip held on ExtIn (test 4; on Mix it hands back the mix as heard: the engine
  * would hear its own sound). */
-static inline u32 sy_can_play(void) { return syn_live(&tt) && sy.armed && (PAGE != SG_PAGE || sy.mode); }
+static inline u32 sy_can_play(void) {                /* MIDI out test 4: not the looper from the SG; test 5: there */
+    return syn_live(&tt) && sy.armed && !(gsyn_page() && !gsyn.off);   /* too with the guitar's notes off */
+}
 
 UI_SMALL SCREEN static void sy_mode_tick(sy_t *s, u32 now);
+UI_SMALL static void sy_pad_tick(sy_t *s);              /* MIDI out test 12 (test 13: the module, not .sytext: full) */
+UI_SMALL SCREEN static u32 sy_sound(const sy_t *s);
 
 /* Every UI tick: the SY engine where it can play, unless SOUND is OFF (test 2: pad 16). Leaving that lets it fade out
  * over 8 blocks. Every 0.1 s: the SP's tempo (test 2: the SEQ tone's steps), as the arp reads it. Test 5: the guitar
@@ -1200,10 +1254,10 @@ EXPORT UI_SMALL void sy_ui(void) {
     u32 now = DWT_CYCCNT;
     if (PAGE != SG_PAGE) s->sg_page = 0;                /* SY test 6: its object goes with the page */
     sy_mode_tick(s, now);
-    if (s->mode == 1u)                                  /* SY test 8: the screen arms the synth; EXT SOURCE off */
-        s->armed = 1;                                   /* disarms it (not while the chord's release puts it on) */
-    else if (!tt.ext && !s->ext_fix)
-        s->armed = 0;
+    sy_pad_tick(s);                                     /* MIDI out test 12: the pads' lights */
+    if (s->mode == 1u) s->armed = 1;                    /* SY test 8: the screen arms the synth (MIDI out test 5:
+                                                           the input off no longer disarms it; HOLD + EXT SOURCE
+                                                           switches it) */
     if (now - s->tempo_checked >= CHECK_CYCLES) {
         s->tempo_checked = now;
         s32 bank = CUR_BANK;
@@ -1223,8 +1277,9 @@ EXPORT UI_SMALL void sy_ui(void) {
     if (!s->req && s->state == SY_OFF) sy_start(s);
 }
 
-EXPORT const char sy_path[] = "B:/_sy_tones.bin";
-EXPORT u8 sy_file[SY_FILE5_BYTES] __attribute__((aligned(4)));   /* SY test 32: version 5's */
+EXPORT const char sy_path[] = SYV_FILE_NAME;   /* "B:/_sy_tones.bin" (MIDI out test 4: from sy_voices.py, so an
+                                                  audition build keeps its settings apart) */
+EXPORT u8 sy_file[SY_FILE_MAX] __attribute__((aligned(4)));   /* SY test 32: version 5's; MIDI out test 4: 7's */
 
 UI_SMALL static u32 sy_fnv(const u8 *p, u32 n) {
     u32 h = FNV;
@@ -1247,7 +1302,7 @@ UI_SMALL static void sy_ready(void) {
     s->loaded = 1;
     s32 fd = FILE_OPEN(sy_path, 0);
     if (fd < 0) return;
-    s32 n = FILE_READ(fd, sy_file, SY_FILE5_BYTES);
+    s32 n = FILE_READ(fd, sy_file, SY_FILE_MAX);
     FILE_CLOSE(fd);
     if (n == SY_FILE3_BYTES && get32(sy_file) == SY_FILE_MAGIC && sy_file[4] == 3u &&
         get32(sy_file + SY_FILE3_SUM) == sy_fnv(sy_file, SY_FILE3_SUM)) {   /* SY test 11: tests 6-10's file */
@@ -1258,48 +1313,55 @@ UI_SMALL static void sy_ready(void) {
         s->loads++;
         return;
     }
-    const u32 v5 = n == SY_FILE5_BYTES && sy_file[4] == SY_FILE_VERSION &&   /* SY test 32: version 5, or 4 */
-                   get32(sy_file + SY_FILE5_SUM) == sy_fnv(sy_file, SY_FILE5_SUM);
-    if (get32(sy_file) != SY_FILE_MAGIC || sy_file[7] != SY_TONE_COUNT ||
-        (!v5 && (n != SY_FILE_BYTES || sy_file[4] != 4u || get32(sy_file + SY_FILE_SUM) != sy_fnv(sy_file, SY_FILE_SUM)))) {
+    /* SY test 32: version 5, or 4; 34: 6 too; MIDI out test 4: 7 (32 tones), or a version 4-6 file's 20 */
+    const u32 ver = sy_file[4], nt = sy_file[7];
+    const u32 v5 = n == (s32)(SYF_SUM5(nt) + 4u) &&
+                   ((nt == SY_FILE_OLD_TONES && (ver == 5u || ver == 6u)) || (nt == SY_TONE_COUNT && ver == SY_FILE_VERSION)) &&
+                   get32(sy_file + SYF_SUM5(nt)) == sy_fnv(sy_file, SYF_SUM5(nt));
+    const u32 v4 = n == (s32)(SYF_SUM4(nt) + 4u) && nt == SY_FILE_OLD_TONES && ver == 4u &&
+                   get32(sy_file + SYF_SUM4(nt)) == sy_fnv(sy_file, SYF_SUM4(nt));
+    if (get32(sy_file) != SY_FILE_MAGIC || (!v5 && !v4)) {
         s->bad_files++;
         return;
     }
-    for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) {
+    for (u32 i = 0; i < 3u * nt; i++) {
         u32 v = sy_file[SY_FILE_KNOB + i];
         s->knob[i / 3u][i % 3u] = (s8)((v > 127u ? 127u : v) - 64u);
     }
-    for (u32 i = 0; i < SY_TONE_COUNT; i++) {
-        u32 o = sy_file[SY_FILE_OCT + i], su = sy_file[SY_FILE_SUS + i], dk = sy_file[SY_FILE_DYN + i];
+    for (u32 i = 0; i < nt; i++) {
+        u32 o = sy_file[SYF_OCT(nt) + i], su = sy_file[SYF_SUS(nt) + i], dk = sy_file[SYF_DYN(nt) + i];
         s->oct[i] = (s8)(o <= SY_OCTAVES ? o : 0u);
         s->susk[i] = (u8)(su <= 101u ? su : 0u);
         s->dynk[i] = (u8)(dk <= 101u ? dk : 0u);
     }
     {
-        u32 bus = sy_file[SY_FILE_BUS];                 /* SY test 7: the synth's bus */
+        u32 bus = sy_file[SYF_BUS(nt)];                 /* SY test 7: the synth's bus */
         s->out_bus = (u8)(bus <= 3u ? bus : 0u);
-        u32 w = sy_file[SY_FILE_BUS + 1u], se = sy_file[SY_FILE_BUS + 2u];   /* SY test 15: the TRACK page */
+        u32 w = sy_file[SYF_BUS(nt) + 1u], se = sy_file[SYF_BUS(nt) + 2u];   /* SY test 15: the TRACK page */
         s->trk[0] = (u8)(w <= SY_GLITCH_MAX ? w : 0u);  /* SY test 24: GLITCH in LAW's byte (a test 18-23 file's LAW */
                                                         /*   is 0 or marked 0x81 / 0x82: GLITCH 0, clean); LAW and */
                                                         /*   GUARD fixed (SY 1:1, PICK) */
         s->trk[1] = (u8)(v5 && se <= SY_SENS_MAX + 1u ? se : 0u);   /* SY test 32: SENS 0 = 50, else 1..101 (a */
                                                                        /*   version 4 file's gate: 50) */
-        u32 vb = sy_file[SY_FILE_BUS + 3u];             /* SY test 24: VOICES in GUARD's byte, marked (a test 16-23 */
+        u32 vb = sy_file[SYF_BUS(nt) + 3u];             /* SY test 24: VOICES in GUARD's byte, marked (a test 16-23 */
         s->trk[2] = (u8)((vb & ~7u) == SY_VOICES_MARK && (vb & 7u) <= SY_VOICES_MAX ? vb & 7u : 0u);   /* GUARD: 0) */
     }
-    for (u32 t = 0; t < SY_TONE_COUNT; t++) {           /* SY test 32: the SHAPE and FILTER pages */
-        if (!v5) {
-            if (SYV_P2KIND[t] == SYV_PK_ATTACK || SYV_P2KIND[t] == SYV_PK_GLIDE) s->knob[t][1] = 0;
-            continue;
+    for (u32 t = 0; t < nt; t++) {                      /* SY test 32: the SHAPE and FILTER pages */
+        if (v5) {
+            for (u32 k = 0; k < 3u; k++) {
+                const u8 *q = sy_file + SYF_SHAPE(nt) + 6u * t + 2u * k;
+                s->shape[t][k] = (u16)(q[0] | q[1] << 8);
+            }
+            s->filt[t][0] = (s8)sy_file[SYF_FILT(nt) + 2u * t];
+            s->filt[t][1] = (s8)sy_file[SYF_FILT(nt) + 2u * t + 1u];
         }
-        for (u32 k = 0; k < 3u; k++) {
-            const u8 *q = sy_file + SY_FILE_SHAPE + 6u * t + 2u * k;
-            s->shape[t][k] = (u16)(q[0] | q[1] << 8);
+        if (ver <= 5u && SYV_P2KIND_V5[t] != SYV_P2KIND[t]) {   /* SY test 34: a version 4 / 5 */
+            if (SYV_P2KIND_V5[t] == SYV_PK_ENV) s->filt[t][0] = s->knob[t][1];      /* file: a changed own setting's */
+            else if (SYV_P2KIND_V5[t] == SYV_PK_RESO) s->filt[t][1] = s->knob[t][1];   /* old ENV / RESO to FILTER (5 */
+            s->knob[t][1] = 0;                                                     /* shared them), CTRL 1 the middle */
         }
-        s->filt[t][0] = (s8)sy_file[SY_FILE_FILT + 2u * t];
-        s->filt[t][1] = (s8)sy_file[SY_FILE_FILT + 2u * t + 1u];
     }
-    if (!v5) s->dirty = 1;                              /* written as version 5 at the next save */
+    if (ver != SY_FILE_VERSION) s->dirty = 1;           /* written as version 7 at the next save */
     s->tone_req = sy_file[5] < SY_TONE_COUNT ? sy_file[5] : 0u;
     s->muted = sy_file[6] & 1u;
     gsyn.off = (sy_file[6] >> 1) & 1u;                  /* SY test 31: the guitar's notes off on the SG page */
@@ -1331,30 +1393,31 @@ UI_SMALL static void sy_save(void) {
     sy_file[7] = SY_TONE_COUNT;
     for (u32 i = 0; i < 3u * SY_TONE_COUNT; i++) sy_file[SY_FILE_KNOB + i] = (u8)(s->knob[i / 3u][i % 3u] + 64);
     for (u32 i = 0; i < SY_TONE_COUNT; i++) {
-        sy_file[SY_FILE_OCT + i] = (u8)s->oct[i];
-        sy_file[SY_FILE_SUS + i] = s->susk[i];
-        sy_file[SY_FILE_DYN + i] = s->dynk[i];
+        sy_file[SYF_OCT(SY_TONE_COUNT) + i] = (u8)s->oct[i];
+        sy_file[SYF_SUS(SY_TONE_COUNT) + i] = s->susk[i];
+        sy_file[SYF_DYN(SY_TONE_COUNT) + i] = s->dynk[i];
     }
-    sy_file[SY_FILE_BUS] = s->out_bus;                  /* SY test 7 */
-    sy_file[SY_FILE_BUS + 1u] = s->trk[0];              /* SY test 24: GLITCH in LAW's byte, unmarked (LAW OFF to */
-    sy_file[SY_FILE_BUS + 2u] = s->trk[1];              /*   tests 18-23); SENS; VOICES in GUARD's byte, marked */
-    sy_file[SY_FILE_BUS + 3u] = (u8)(SY_VOICES_MARK | s->trk[2]);   /*   (GUARD OFF to tests 16-23) */
+    u8 *bus = sy_file + SYF_BUS(SY_TONE_COUNT);
+    bus[0] = s->out_bus;                                /* SY test 7 */
+    bus[1] = s->trk[0];                                 /* SY test 24: GLITCH in LAW's byte, unmarked (LAW OFF to */
+    bus[2] = s->trk[1];                                 /*   tests 18-23); SENS; VOICES in GUARD's byte, marked */
+    bus[3] = (u8)(SY_VOICES_MARK | s->trk[2]);          /*   (GUARD OFF to tests 16-23) */
     for (u32 t = 0; t < SY_TONE_COUNT; t++) {           /* SY test 32: version 5's SHAPE and FILTER pages */
         for (u32 k = 0; k < 3u; k++) {
-            u8 *q = sy_file + SY_FILE_SHAPE + 6u * t + 2u * k;
+            u8 *q = sy_file + SYF_SHAPE(SY_TONE_COUNT) + 6u * t + 2u * k;
             q[0] = (u8)s->shape[t][k];
             q[1] = (u8)(s->shape[t][k] >> 8);
         }
-        sy_file[SY_FILE_FILT + 2u * t] = (u8)s->filt[t][0];
-        sy_file[SY_FILE_FILT + 2u * t + 1u] = (u8)s->filt[t][1];
+        sy_file[SYF_FILT(SY_TONE_COUNT) + 2u * t] = (u8)s->filt[t][0];
+        sy_file[SYF_FILT(SY_TONE_COUNT) + 2u * t + 1u] = (u8)s->filt[t][1];
     }
-    put32(sy_file + SY_FILE5_SUM, sy_fnv(sy_file, SY_FILE5_SUM));
+    put32(sy_file + SYF_SUM5(SY_TONE_COUNT), sy_fnv(sy_file, SYF_SUM5(SY_TONE_COUNT)));
     s32 n = -1, fd = FILE_OPEN(sy_path, 0x601);
     if (fd >= 0) {
-        n = FILE_WRITE(fd, sy_file, SY_FILE5_BYTES);
+        n = FILE_WRITE(fd, sy_file, SY_FILE_MAX);
         FILE_CLOSE(fd);
     }
-    if (n == SY_FILE5_BYTES) {
+    if (n == SY_FILE_MAX) {
         s->dirty = 0;
         s->saves++;
     } else {
@@ -1389,16 +1452,255 @@ UI_SMALL SCREEN static void sy_ext_on(void) {
     LIGHTS |= 0x10;
 }
 
-/* SY test 31: EXT SOURCE + SUB PAD on the Sound Generator page (the plain page, the kits): the guitar's notes there off,
- * or on again, with a popup; the file keeps it (written at the next key release: EXT SOURCE's). The input is left as
- * it is: stock ignores EXT SOURCE on that page (DM-404: its press there never switches the input). */
+/* MIDI out test 5 (the user, after test 4's three options: "ext shouldn't cycle through 3 settings because user may
+ * want to like switch to mic or something while playing machine"; then the layout, HOLD for switches and VALUE for
+ * screens):
+ *   EXT SOURCE: the input on/off only, as stock. Stock ignores it on the Sound Generator page, so a tap there switches
+ *     the input (a popup); with EXT SOURCE's gate on (settings 0x58, stock's EXT SOURCE + GATE) the input is on only
+ *     while the key is held, as stock's own pages have it (0x80087fec: the setting = the key held);
+ *   HOLD + EXT SOURCE, on any page: the guitar synth on (armed, SOUND on with the sound it had) or off (SOUND OFF), the
+ *     key's press and release taken, so the input and its gate are untouched;
+ *   HOLD + RECORD SETTING on the Sound Generator page (HOLD + PATTERN EDIT in the kits): the guitar's notes on/off (SY
+ *     test 31's switch, the file's byte 6 bit 1); with the notes off the guitar is heard as the synth has it: dry, or
+ *     the guitar synth;
+ *   VALUE + RECORD SETTING: the guitar synth screen (EXT SOURCE + RECORD SETTING until test 4).
+ * The synth keeps its on/off through the input's switches (SY test 8 disarmed it with the input off). FX deep edit's
+ * HOLD + VALUE (hidden FX on/off) and VALUE + EXT SOURCE (the input FX's pages) stay as they are. */
 #define GN_POPUP_MS 1500
-UI_SMALL SCREEN static void gsyn_toggle(sy_t *s) {
+#define KEY_HOLD 0x11
+#define KEY_PTN_EDIT 0x15                              /* PATTERN EDIT (SHIFT + PATTERN EDIT: the kits) */
+#define EXT_GATE 0x58                                  /* settings: EXT SOURCE's gate (the input only while held) */
+
+/* What the guitar does on the Sound Generator page, for EXT SOURCE's light there: 0 the input off; 1 dry; 2 the
+ * page's notes, or the guitar synth (the screen with SOUND on; the plain page with the notes off and the synth on). */
+UI_SMALL static u32 gsyn_state(void) {
+    if (!SET_GET(SETTINGS, EXT_SOURCE, 0)) return 0;
+    if (sy.mode) return sy.muted ? 1u : 2u;
+    return (!gsyn.off || (sy.armed && !sy.muted)) ? 2u : 1u;
+}
+
+/* EXT SOURCE's light for a state: as stock's main page sets it (its key-light update at 0x8002bec0) the key light
+ * table (each key's mode at +0 and colour at +4, 8 bytes a key, at 0x83008a24) and the light itself (0x800d4910: key,
+ * mode, colour). 0: the light out (mode 1, colour 0), then the table's resting entry (mode 0, 0x1f1f00); 1: white, as
+ * stock's on; 2: green (a colour stock gives this key, 0x8010274e). MIDI out test 2-3 only asked for the lights to be
+ * painted again, which paints the table: with the guitar's notes off nothing set EXT SOURCE's entry, and its light
+ * stayed lit (the user, test 3). */
+#define KEY_LIGHT ((void (*)(s32, s32, u32))0x800D4911u)
+#define LIGHT_TABLE 0x83008A24u
+#define EXT_WHITE 0x00FFFFFFu
+#define EXT_GREEN 0x0000FF00u
+#define EXT_REST 0x001F1F00u
+UI_SMALL static void gsyn_ext_light(u32 st) {
+    volatile s8 *mode = (volatile s8 *)(LIGHT_TABLE + 8u * KEY_EXT_SOURCE);
+    volatile u32 *colour = (volatile u32 *)(LIGHT_TABLE + 8u * KEY_EXT_SOURCE + 4u);
+    if (st) {
+        const u32 c = st == 2u ? EXT_GREEN : EXT_WHITE;
+        *mode = 1;
+        *colour = c;
+        KEY_LIGHT(KEY_EXT_SOURCE, 1, c);
+    } else {
+        *mode = 1;
+        *colour = 0;
+        KEY_LIGHT(KEY_EXT_SOURCE, 1, 0);
+        *mode = 0;
+        *colour = EXT_REST;
+    }
+}
+
+#define LIGHT_MODE_OF(k) (*(volatile const u8 *)(0x80BBCCFCu + (k)))      /* the key light's caches: mode per key, */
+#define LIGHT_LEVEL_OF(k) (*(volatile const u32 *)(0x80BBCC34u + 4u * (k)))  /* level per key (0x800d4910) */
+
+/* Every UI tick (syn_ui): EXT SOURCE's light. On the Sound Generator page it shows gsyn_state (it changes from the
+ * screen too: opening it, SOUND OFF). MIDI out test 5 (the user: "hold+ext source would change ext source light to
+ * green to indicate guitar synth is on"): on every other page it is green while the input is on and the guitar synth
+ * on (armed, SOUND on), else stock's (white or out, set once as ours ends). Green is painted again whenever stock
+ * paints over it (the key light's caches read otherwise). */
+UI_SMALL static void gsyn_light_tick(gsyn_t *g) {
+    u32 want;                                           /* 1 + the state painted (3: green), 0 stock's */
+    if (PAGE == SG_PAGE)
+        want = 1u + gsyn_state();
+    else
+        want = SET_GET(SETTINGS, EXT_SOURCE, 0) && sy.armed && !sy.muted ? 3u : 0u;
+    if (want == 3u && (LIGHT_MODE_OF(KEY_EXT_SOURCE) != 1u || LIGHT_LEVEL_OF(KEY_EXT_SOURCE) != EXT_GREEN))
+        g->lit = 0xFFu;                                 /* stock painted over the green (or it never was) */
+    if (want == g->lit) return;
+    gsyn_ext_light(want ? want - 1u : (u32)(SET_GET(SETTINGS, EXT_SOURCE, 0) != 0));
+    g->lit = want;
+}
+
+/* The light at once after a switch (the UI tick would set it a tick later). */
+UI_SMALL static void gsyn_light_now(gsyn_t *g) {
+    g->lit = 0xFFu;
+    gsyn_light_tick(g);
+}
+
+/* EXT SOURCE on the Sound Generator page (stock ignores it there) with no other key held (SHIFT + EXT SOURCE is stock's
+ * INPUT SETTING, REMAIN + EXT SOURCE its input bus, HOLD + EXT SOURCE the synth, VALUE + EXT SOURCE FX deep edit's):
+ * gate off, a tap (pressed and let go with no other key, pad, knob or VALUE turn between) switches the input, a popup;
+ * gate on, the input is on from the press to the release. Its press and release go on to stock as before. Sees every
+ * UI event first (sy_event). */
+UI_SMALL static void gsyn_ext(s32 type, s32 what) {
+    gsyn_t *g = &gsyn;
+    if (what == KEY_EXT_SOURCE && (type == EV_KEY || type == EV_KEY_UP)) {
+        if (type == EV_KEY) {
+            g->ext_tap = 0;
+            g->ext_gate = 0;
+            if (PAGE != SG_PAGE || key_held(KEY_SHIFT) || key_held(KEY_REMAIN) || key_held(KEY_HOLD) ||
+                key_held(KEY_VALUE))
+                return;
+            if (SET_GET(SETTINGS, EXT_GATE, 0)) {
+                g->ext_gate = 1;
+                if (!SET_GET(SETTINGS, EXT_SOURCE, 0)) SET_SET(SETTINGS, EXT_SOURCE, 1, 0);
+                gsyn_light_now(g);
+            } else {
+                g->ext_tap = 1;
+            }
+            return;
+        }
+        if (g->ext_gate && PAGE == SG_PAGE) {
+            SET_SET(SETTINGS, EXT_SOURCE, 0, 0);
+            gsyn_light_now(g);
+        } else if (g->ext_tap && PAGE == SG_PAGE) {
+            const u32 on = !SET_GET(SETTINGS, EXT_SOURCE, 0);
+            SET_SET(SETTINGS, EXT_SOURCE, (s32)on, 0);
+            gsyn_light_now(g);
+            POPUP_POST(on ? "EXT IN\nON" : "EXT IN\nOFF", GN_POPUP_MS);
+            g->ext_taps++;
+        }
+        g->ext_tap = 0;
+        g->ext_gate = 0;
+        return;
+    }
+    if (type == EV_KEY || type == EV_PAD || type == EV_KNOB || type == EV_ENCODER) g->ext_tap = 0;
+}
+
+/* HOLD + EXT SOURCE, on any page: the guitar synth on (armed, SOUND on with the sound it had) or off (SOUND OFF). */
+UI_SMALL static void gsyn_synth_switch(void) {
+    sy_t *s = &sy;
+    const u32 on = !s->armed || s->muted;
+    if (on) {
+        s->armed = 1;
+        s->muted = 0;
+    } else {
+        s->muted = 1;
+    }
+    s->dirty = 1;
+    s->rev++;                                           /* the screen's SOUND drawn again */
+    s->bar_rev++;
+    gsyn.synth_switches++;
+    gsyn_light_now(&gsyn);
+    POPUP_POST(on ? "GUITAR SYNTH\nON" : "GUITAR SYNTH\nOFF", GN_POPUP_MS);
+}
+
+/* HOLD + RECORD SETTING (HOLD + PATTERN EDIT in the kits) on the Sound Generator page: the guitar's notes on/off (the
+ * note sounding is let go by syn_ui). */
+UI_SMALL static void gsyn_notes_switch(void) {
     gsyn_t *g = &gsyn;
     g->off = !g->off;
     g->toggles++;
-    s->dirty = 1;
+    g->notes_switches++;
+    sy.dirty = 1;                                       /* the file keeps it (byte 6 bit 1) */
+    gsyn_light_now(g);
     POPUP_POST(g->off ? "GUITAR NOTES\nOFF" : "GUITAR NOTES\nON", GN_POPUP_MS);
+}
+
+/* Every UI tick (syn_ui). MIDI out test 5 (the user: "it seems meant to flash when shift held so maybe our pattern edit
+ * should flash too when shift held since it goes to kits"): stock pulses RECORD SETTING and RESAMPLE while SHIFT is
+ * held (the key light 0x800d4910 at mode 3, level 0xff; its caches, mode per key at 0x80bbccfc and level at 0x80bbcc34,
+ * read so for RECORD SETTING then). On the pages where SHIFT + PATTERN EDIT opens the kits (kit_shortcut.inc: the main
+ * screen, 0x22, 0x13, RESAMPLE) PATTERN EDIT pulses with them; after, its light as the light table has it. */
+#define HINT_MODE 3
+#define HINT_LEVEL 0xFFu
+UI_SMALL static void gsyn_hint_tick(gsyn_t *g) {
+    const s32 page = PAGE;
+    const u32 want = key_held(KEY_SHIFT) && LIGHT_MODE_OF(KEY_REC_SET) == HINT_MODE &&
+                     (page == MAIN_PAGE || page == 0x22 || page == 0x13 || page == 0x0E);
+    if (want) {
+        if (LIGHT_MODE_OF(KEY_PTN_EDIT) != HINT_MODE || LIGHT_LEVEL_OF(KEY_PTN_EDIT) != HINT_LEVEL)
+            KEY_LIGHT(KEY_PTN_EDIT, HINT_MODE, HINT_LEVEL);
+        g->hint = 1;
+    } else if (g->hint) {
+        g->hint = 0;
+        KEY_LIGHT(KEY_PTN_EDIT, *(volatile const s8 *)(LIGHT_TABLE + 8u * KEY_PTN_EDIT),
+                  *(volatile const u32 *)(LIGHT_TABLE + 8u * KEY_PTN_EDIT + 4u));
+    }
+}
+
+/* MIDI out test 7 (the user, 11-11: on the Sound Generator / kits, MARK, REC with AUTO TRIG on, MARK back: "rec is
+ * not flashing but pressing pad triggers start of loop recording"; the same going on to sample mode). Stock 5.52 does
+ * so (DM-404, mark_rec_dm404.py): MARK ends looper mode (0x82e0b92c to 0), but the looper goes on waiting (its state 1;
+ * a pad's sound starts it: 2, recording) and REC shows the page's own light (the SG page steady, the main screen dim);
+ * SHIFT + RECORD SETTING from the looper keeps looper mode on, and REC flashing as the looper's page has it (waiting:
+ * the key light at mode 5, recording: mode 2, level 0xff). Every UI tick, on the Sound Generator page (the kits, the
+ * guitar synth screen) and the main screen: REC as the looper's page shows it while the looper waits or records;
+ * after, the page's own light (its light table entry). */
+#define REC_WAIT_MODE 5
+#define REC_LOOP_MODE 2
+#define REC_LOOP_LEVEL 0xFFu
+UI_SMALL static void loop_light_tick(gsyn_t *g) {
+    const s32 page = PAGE;
+    const u32 st = LOOPER_STATE, here = page == SG_PAGE || page == MAIN_PAGE;
+    const u32 mode = !here ? 0u : st == 1u ? REC_WAIT_MODE : st == 2u ? REC_LOOP_MODE : 0u;
+    if (mode) {
+        if (LIGHT_MODE_OF(KEY_REC) != mode || LIGHT_LEVEL_OF(KEY_REC) != REC_LOOP_LEVEL) {
+            KEY_LIGHT(KEY_REC, (s32)mode, REC_LOOP_LEVEL);
+            g->rec_paints++;
+        }
+        g->rec_lit = 1;
+    } else if (g->rec_lit) {
+        g->rec_lit = 0;
+        if (here)
+            KEY_LIGHT(KEY_REC, *(volatile const s8 *)(LIGHT_TABLE + 8u * KEY_REC),
+                      *(volatile const u32 *)(LIGHT_TABLE + 8u * KEY_REC + 4u));
+    }
+}
+
+/* MIDI out test 12: the pads on the guitar synth screen (every UI tick): the current sound's pad lit (bright), the rest
+ * dim, the leads and basses (pads 1-8) cyan, the chord sounds (9-16) magenta; SHIFT held: pads 1 and 2 the banks (the
+ * current one lit white), the rest dark. The key light 0x800d4910 takes a pad's colour as 0xRRGGBB (mode 0 resting,
+ * 1 lit), painted only where its caches differ. Stock's colours (the SG page's keyboard, the kits' pads) are kept as
+ * the screen opens and painted back as it closes on that page (another page paints its own). */
+#define PADC_LEAD 0x004444u
+#define PADC_CHORD 0x440044u
+#define PADC_LEAD_ON 0x00FFFFu
+#define PADC_CHORD_ON 0xFF00FFu
+#define PADC_BANK_ON 0xFFFFFFu
+#define PADC_BANK 0x222222u
+UI_SMALL static void sy_pad_light(u32 k, u32 mode, u32 rgb) {
+    if (LIGHT_MODE_OF(k) != mode || LIGHT_LEVEL_OF(k) != rgb) KEY_LIGHT((s32)k, (s32)mode, rgb);
+}
+
+UI_SMALL static void sy_pad_tick(sy_t *s) {
+    gsyn_t *g = &gsyn;
+    if (!sy_shown()) {
+        if (g->pads_on) {
+            g->pads_on = 0;
+            if (PAGE == SG_PAGE)
+                for (u32 k = 0; k < PADS; k++) KEY_LIGHT((s32)k, (s32)g->pad_mode[k], g->pad_rgb[k]);
+        }
+        return;
+    }
+    if (key_held(KEY_MFX)) return;                      /* MIDI out test 13: MFX's pads are stock's while it is held
+                                                           (MFX + a pad picks an effect) */
+    const u32 n = sy_sound(s);
+    if (!g->pads_on) {
+        g->pads_on = 1;
+        for (u32 k = 0; k < PADS; k++) {
+            g->pad_mode[k] = LIGHT_MODE_OF(k);
+            g->pad_rgb[k] = LIGHT_LEVEL_OF(k);
+        }
+        if (n) g->bank = (n - 1u) >> 4;
+    }
+    const u32 cur = n && ((n - 1u) >> 4) == g->bank ? (n - 1u) & 15u : PADS;
+    const u32 shift = key_held(KEY_SHIFT);
+    for (u32 k = 0; k < PADS; k++) {
+        if (shift)
+            sy_pad_light(k, k == g->bank ? 1u : 0u, k >= SY_BANKS ? 0u : k == g->bank ? PADC_BANK_ON : PADC_BANK);
+        else if (k == cur)
+            sy_pad_light(k, 1u, k < 8u ? PADC_LEAD_ON : PADC_CHORD_ON);
+        else
+            sy_pad_light(k, 0u, k < 8u ? PADC_LEAD : PADC_CHORD);
+    }
 }
 
 UI_SMALL SCREEN static void sy_mode_off(sy_t *s) {
@@ -1408,9 +1710,8 @@ UI_SMALL SCREEN static void sy_mode_off(sy_t *s) {
     sy_changed(s);                                      /* the page's own draws come back if it stays up */
 }
 
-/* EXT SOURCE + RECORD SETTING: the screen on the Sound Generator page (asked for from the main screen), the synth on with
- * the sound it had. The EXT SOURCE press went to stock: the input off now (the press toggled it off) is put on again,
- * and its release is watched (with GATE on stock switches the input off there). */
+/* VALUE + RECORD SETTING (MIDI out test 5; EXT SOURCE + RECORD SETTING until test 4): the screen on the Sound Generator
+ * page (asked for from the main screen), the synth on with the sound it had, the input on if it was off. */
 UI_SMALL SCREEN static void sy_mode_on(sy_t *s) {
     s->enters++;
     if (s->muted) {
@@ -1418,7 +1719,7 @@ UI_SMALL SCREEN static void sy_mode_on(sy_t *s) {
         s->dirty = 1;
     }
     if (!SET_GET(SETTINGS, EXT_SOURCE, 0)) sy_ext_on();
-    s->ext_fix = 1;
+    gsyn.loop_back = 0;                                 /* MIDI out test 7: opened, not brought back */
     s->shift_down = 0;                                  /* test 10: the footer kept (it was cleared here, so a screen
                                                            opened over the page up kept the page's own footer) */
     sy_changed(s);
@@ -1431,9 +1732,12 @@ UI_SMALL SCREEN static void sy_mode_on(sy_t *s) {
     }
 }
 
-/* Every UI tick: the page asked for has come (or 1 s passed: given up); another page closes the screen; EXT SOURCE let
- * go after the chord: the input on again if stock put it off (GATE). */
+/* Every UI tick: the page asked for has come (or 1 s passed: given up); another page closes the screen. MIDI out test 7
+ * (the user: MARK, MARK from the guitar synth screen "goes to either sound gen or kit depending on what was last on
+ * before guitar synth"): the screen left for the looper's page comes back when the looper is left for the Sound
+ * Generator page (MARK: stock gives back the page it came from); left for any other page, not. */
 UI_SMALL SCREEN static void sy_mode_tick(sy_t *s, u32 now) {
+    gsyn_t *g = &gsyn;
     if (s->mode == 2) {
         if (PAGE == SG_PAGE) {
             s->mode = 1;
@@ -1443,22 +1747,28 @@ UI_SMALL SCREEN static void sy_mode_tick(sy_t *s, u32 now) {
         }
     } else if (s->mode == 1 && PAGE != SG_PAGE) {
         sy_mode_off(s);
+        g->loop_back = PAGE == LOOPER_PAGE;
+    } else if (!s->mode && g->loop_back && PAGE != LOOPER_PAGE) {
+        g->loop_back = 0;
+        if (PAGE == SG_PAGE) {
+            s->mode = 1;
+            g->loop_backs++;
+            sy_changed(s);
+        }
     }
     if (PAGE != SG_PAGE) s->foot = 0;
-    if (s->ext_fix && !key_held(KEY_EXT_SOURCE)) {
-        s->ext_fix = 0;
-        if (!SET_GET(SETTINGS, EXT_SOURCE, 0)) sy_ext_on();
-    }
 }
 
-/* SOUND: 0 OFF, 1..15 the tones. */
-UI_SMALL SCREEN static u32 sy_sound(const sy_t *s) { return s->muted ? 0u : sy_tone(s) + 1u; }
+/* SOUND: 0 OFF, then the tones in pad order (MIDI out test 4: SOUND n is pad slot n - 1's tone, SYV_SLOT_TONE). */
+UI_SMALL SCREEN static u32 sy_sound(const sy_t *s) { return s->muted ? 0u : SYV_TONE_SLOT[sy_tone(s)] + 1u; }
 
 UI_SMALL SCREEN static void sy_sound_set(sy_t *s, u32 n) {
-    if (n == sy_sound(s)) return;
+    if (n == sy_sound(s) || n >= SY_SOUNDS) return;
     if (n) {
-        s->tone_req = n - 1u;
+        s->tone_req = SYV_SLOT_TONE[n - 1u];
         s->muted = 0;
+        gsyn.bank = (n - 1u) >> 4;                      /* MIDI out test 12: the bank follows the sound (VALUE) */
+        if (s->shift_page == SY_LAST_PAGE && !SYV_FLT[s->tone_req]) s->shift_page = 0;   /* MIDI out test 11 */
     } else {
         s->muted = 1;
     }
@@ -1467,14 +1777,16 @@ UI_SMALL SCREEN static void sy_sound_set(sy_t *s, u32 n) {
     sy_changed(s);
 }
 
-/* SY test 11: a pad's SOUND: pads 1-15 the tones 1-15, pad 16 OFF; with SHIFT held, pads 1-5 the tones 16-20 (SHIFT
- * then counts as used: its release keeps the page). */
+/* SY test 11: a pad's SOUND (SHIFT then counts as used: its release keeps the page). MIDI out test 4: pads 1-16 the
+ * slots 1-16, with SHIFT held 17-32 (pad 16 was OFF, SHIFT + pads 1-5 the tones 16-20: those stay where they were; the
+ * EXT SOURCE tap's REGULAR is the synth off now). */
 UI_SMALL SCREEN static u32 sy_pad_sound(sy_t *s, u32 pad) {
-    if (key_held(KEY_SHIFT) && pad < SY_SHIFT_TONES) {
+    if (key_held(KEY_SHIFT)) {
         s->shift_used |= 1u;                            /* SY test 17: bit 0 a pad, bit 1 a knob */
-        return 16u + pad;
+        if (pad < SY_BANKS) gsyn.bank = pad;            /* MIDI out test 12: SHIFT + pad 1 / 2 the bank (was the */
+        return sy_sound(s);                             /*   sounds 17-32), the sound as it is; pads 3-16 nothing */
     }
-    return pad == SY_OFF_PAD ? 0u : pad + 1u;
+    return gsyn.bank * 16u + pad + 1u;                  /* MIDI out test 12: the sound in the bank */
 }
 
 /* SY test 15: the page shown: 0 the main one, 1 OTHERS, 2 TRACK (SHIFT tapped steps them). SHIFT held with a knob
@@ -1500,9 +1812,13 @@ UI_SMALL static void sy_shape_set(sy_t *s, u32 tone, u32 k, s32 pos) {
     s->shape[tone][k] = st[((u32)pos * n) >> 7];
 }
 
-/* SY test 32: where a FILTER value lives: a tone whose own setting is ENV (RESO) keeps it there, the main page's CTRL 1. */
+/* SY test 32: where a FILTER value lives: a tone whose own setting is ENV (RESO) keeps it there, the main page's CTRL 1.
+ * MIDI out test 11 (the user: "some tone had env res screen with no adjustable paramters. but env on different
+ * screen"): a Sound Generator sound's ENV preset (its CTRL 1) is the FILTER page's ENV too, as SG SYNTH's is. */
 UI_SMALL static volatile s8 *sy_filt_at(sy_t *s, u32 tone, u32 k) {
-    return SYV_P2KIND[tone] == (k ? SYV_PK_RESO : SYV_PK_ENV) ? &s->knob[tone][1] : &s->filt[tone][k];
+    const u32 kind = SYV_P2KIND[tone];
+    return (k ? kind == SYV_PK_RESO : kind == SYV_PK_ENV || kind == SYV_P_ENVSEL) ? &s->knob[tone][1]
+                                                                                 : &s->filt[tone][k];
 }
 
 /* CTRL 1-3 on the screen (k 0..2, the knob's position 0..127): test 6: the tone's own setting, TONE and LEVEL (knob -
@@ -1622,6 +1938,63 @@ UI_SMALL SCREEN static u32 sy_remain(sy_t *s, s32 type, s32 what, s32 val) {
     return 0;
 }
 
+/* MIDI out test 8 (the user: "in sound gen/kits mode it is weird to press value + rec setting to go into guitar synth
+ * mode because value press something in those modes": there VALUE's push moves the PRM cursor to the value, and the
+ * screen's bar then showed the value's box). On the Sound Generator page (the kits too), not on the screen, with no
+ * SHIFT, HOLD, REMAIN or EXT SOURCE held (their own VALUE chords: stock's MARK function, the input FX pages, EXT SOURCE
+ * + VALUE as stock), VALUE's press is held back, its held bit set as stock's press would: RECORD SETTING while
+ * it is held opens the screen (sy_event's chord) and VALUE never reaches stock; any other input first hands stock
+ * VALUE's press (VALUE + a knob, a pad, a turn work as before); a plain push reaches stock at its release.
+ * MIDI out test 13 (the conflict review): not with ROLL held either (note repeat's ROLL + VALUE press: the pad follows
+ * ROLL or ignores it); a press handed on goes as it would have: note repeat's handler first, then stock's key press if
+ * note repeat leaves it (test 8 handed it to stock alone); a plain push's release then goes on as itself. 1 takes the
+ * event. */
+UI_SMALL SCREEN static void sy_value_press(gsyn_t *g) {
+    const s16 e[3] = {EV_KEY, KEY_VALUE, (s16)g->val_v};
+    sy_key_bit(KEY_VALUE, 0);                           /* (stock's press sets it, after note repeat) */
+    if (!NR_EVENT(e)) KEY_DOWN_FN(e);
+}
+
+UI_SMALL SCREEN static u32 sy_value(sy_t *s, s32 type, s32 what, s32 val) {
+    gsyn_t *g = &gsyn;
+    if (g->val_down == 1u) {
+        if (type == EV_KEY_UP && what == KEY_VALUE) {
+            g->val_down = 0;
+            if (g->val_used) {                          /* the chord: its release taken too */
+                sy_key_bit(KEY_VALUE, 0);
+                return 1;
+            }
+            sy_value_press(g);                          /* a plain push: its press now, its release goes on */
+            return 0;
+        }
+        if (g->val_used) return 0;
+        if (type == EV_KEY && what == KEY_REC_SET && !key_held(KEY_SHIFT)) {
+            g->val_used = 1;                            /* the chord: VALUE's push never reaches stock */
+            g->val_chords++;
+            return 0;
+        }
+        if ((u32)(type - EV_KEY) <= (u32)(EV_KNOB - EV_KEY) || type == EV_PAD || type == EV_PAD_UP) {
+            g->val_down = 2;                            /* anything else: VALUE's press first */
+            sy_value_press(g);
+            g->val_passes++;
+        }
+        return 0;
+    }
+    if (g->val_down == 2u) {
+        if (type == EV_KEY_UP && what == KEY_VALUE) g->val_down = 0;   /* handed on: its release goes on too */
+        return 0;
+    }
+    if (type == EV_KEY && what == KEY_VALUE && PAGE == SG_PAGE && !s->mode && !key_held(KEY_SHIFT) &&
+        !key_held(KEY_HOLD) && !key_held(KEY_REMAIN) && !key_held(KEY_EXT_SOURCE) && !key_held(KEY_ROLL)) {
+        g->val_down = 1;
+        g->val_used = 0;
+        g->val_v = val;
+        sy_key_bit(KEY_VALUE, 1);
+        return 1;
+    }
+    return 0;
+}
+
 /* An event on the screen; 1 takes it. A pad picks a sound (pad 16: OFF), silently: its press as a pad hit and as a key,
  * and SUB PAD's, never reach stock (no sample, no Sound Generator note). CTRL 1-3 edit, VALUE steps SOUND; VALUE's
  * push and REC are taken (no edit mode, no export). SHIFT goes on (its held bit) and is noted for the page; SHIFT +
@@ -1670,14 +2043,17 @@ UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val)
             s->shift_down = 1;
             s->shift_used = 0;
             s->rev++;
-        } else if (what == KEY_REC_SET && key_held(KEY_SHIFT)) {
-            sy_mode_off(s);
-        }
-        return 0;
+        } else if ((what == KEY_REC_SET || what == KEY_PTN_EDIT) && key_held(KEY_SHIFT)) {
+            sy_mode_off(s);                             /* MIDI out test 8: SHIFT + PATTERN EDIT too (the user: "in */
+        }                                               /*   guitar synth mode i can get into sound gen mode but not */
+        return 0;                                       /*   kits"; kit_shortcut switches at its release) */
     }
     if (type == EV_KEY_UP && what == KEY_SHIFT && s->shift_down) {
-        if (!s->shift_used) s->shift_page = (u8)(s->shift_page >= SY_LAST_PAGE ? 0u : s->shift_page + 1u);   /* test */
-                                                                                    /* 15: 3; SY test 32: 5 */
+        if (!s->shift_used) {                           /* test 15: 3 pages; SY test 32: 5 */
+            u32 np = s->shift_page >= SY_LAST_PAGE ? 0u : s->shift_page + 1u;
+            if (np == SY_LAST_PAGE && !SYV_FLT[sy_tone(s)]) np = 0u;   /* MIDI out test 11: no filter, no FILTER page */
+            s->shift_page = (u8)np;
+        }
         s->shift_down = 0;
         s->rev++;
     }
@@ -1685,30 +2061,49 @@ UI_SMALL SCREEN static u32 sy_screen_event(sy_t *s, s32 type, s32 what, s32 val)
 }
 
 /* Every UI event, at the UI dispatcher's entry (note repeat's bridge calls this in place of nr_event_c); 1 takes it.
- * The file is read at the first key, pad or knob event after the boot and written at a key release. EXT SOURCE held +
- * RECORD SETTING, on the main screen or the Sound Generator page, opens the guitar synth screen (its press and release
- * taken). The screen's own events (sy_screen_event); everything else on to note repeat's handler. */
+ * The file is read at the first key, pad or knob event after the boot and written at a key release. VALUE held +
+ * RECORD SETTING, on the main screen, the Sound Generator page or the looper, opens the guitar synth screen (its press
+ * and release taken); HOLD held + EXT SOURCE switches the guitar synth, + RECORD SETTING (the kits: PATTERN EDIT) on
+ * the Sound Generator page the guitar's notes (MIDI out test 5). The screen's own events (sy_screen_event); everything else on to note repeat's handler. */
 EXPORT SCREEN s32 sy_event(const s16 *ev) {
     sy_t *s = &sy;
     s32 type = ev[0], what = ev[1];
     if ((u32)(type - EV_KEY) <= (u32)(EV_KNOB - EV_KEY) || type == EV_PAD || type == EV_PAD_UP) sy_ready();
+    gsyn_ext(type, what);                               /* MIDI out test 2: EXT SOURCE tapped on the page (sees all) */
     if ((type == EV_KEY_UP || type == EV_PAD_UP) && sy_untake(s, type, what)) return 1;
     if ((type == EV_KEY || type == EV_KEY_UP) && sy_remain(s, type, what, ev[2])) return 1;
     if (type == EV_KEY_UP) sy_flush(s);
-    if (type == EV_KEY && what == KEY_REC_SET && key_held(KEY_EXT_SOURCE) && !key_held(KEY_SHIFT) &&
-        (PAGE == MAIN_PAGE || PAGE == SG_PAGE || PAGE == LOOPER_PAGE)) {   /* test 10: the looper too */
+    if (sy_value(s, type, what, ev[2])) return 1;      /* MIDI out test 8: VALUE held back on the SG page */
+    /* MIDI out test 9 (the user, test 8 on the unit: after MARK back "if u press sound to start looper, u can't press rec
+     * to stop capture like u can as if you entered mode from mark with shift + etc."; "I WANT the same behaviour"):
+     * stock's MARK ends looper mode (0x82e0b92c), so the page's REC no longer reaches the looper, which goes on waiting
+     * or recording. MARK on the looper's page while it waits (state 1) or records (2), the looper opened from the Sound
+     * Generator page (the kits, the guitar synth screen): taken (its release too) and the SG page asked for, as the
+     * kits' SHIFT + PATTERN EDIT jump does from there: looper mode stays on, REC flashes and stops the take as after
+     * SHIFT + RECORD SETTING; the machine and the screen as they were (sy_mode_tick reopens the screen). */
+    if (type == EV_KEY && what == KEY_MARK && PAGE == LOOPER_PAGE && gsyn.loop_from == SG_PAGE &&
+        (LOOPER_STATE == 1u || LOOPER_STATE == 2u) && !key_held(KEY_SHIFT)) {
         sy_take(s, what);
-        sy_mode_on(s);
+        gsyn.loop_keeps++;
+        PAGE_REQUEST(SG_PAGE);
         return 1;
     }
-    if ((type == EV_KEY || type == EV_PAD) && what == KEY_SUB_PAD && key_held(KEY_EXT_SOURCE) && PAGE == SG_PAGE &&
-        !sy.mode) {                                     /* SY test 31: the guitar's notes on the page off / on */
-        if (type == EV_PAD) {
-            s->pads_taken |= 1u << 16;                  /* the pad hit too (no preview), its release with it */
-        } else {
+    if (type == EV_KEY && key_held(KEY_HOLD) && !key_held(KEY_SHIFT)) {   /* MIDI out test 5: HOLD's switches */
+        if (what == KEY_EXT_SOURCE) {
             sy_take(s, what);
-            gsyn_toggle(s);
+            gsyn_synth_switch();
+            return 1;
         }
+        if (PAGE == SG_PAGE && !s->mode && what == (KIT_MODE_ON ? KEY_PTN_EDIT : KEY_REC_SET)) {
+            sy_take(s, what);
+            gsyn_notes_switch();
+            return 1;
+        }
+    }
+    if (type == EV_KEY && what == KEY_REC_SET && key_held(KEY_VALUE) && !key_held(KEY_SHIFT) &&
+        (PAGE == MAIN_PAGE || PAGE == SG_PAGE || PAGE == LOOPER_PAGE)) {   /* test 10: the looper too; MIDI out */
+        sy_take(s, what);                                                  /* test 5: VALUE (was EXT SOURCE) */
+        sy_mode_on(s);
         return 1;
     }
     if (sy_shown()) {
@@ -1754,7 +2149,7 @@ UI_SMALL SCREEN static u32 sy_pct(u32 pos) { return pos <= 64u ? (pos * 50u + 32
 EXPORT UI_SMALL void sy_col_text(u32 col, char *label, char *value) {
     sy_t *s = &sy;
     u32 tone = sy_tone(s), i = col + 3u * sy_page(s), kind = SYV_P2KIND[tone];
-    *put_str(label, i == 0u ? SYV_P2NAME[tone] : SY_LABELS[i]) = 0;
+    *put_str(label, i == 0u ? SYV_P2NAME[tone] : i == 1u && kind == SYV_P_WAVE ? "DUTY" : SY_LABELS[i]) = 0;
     char *p = value;
     if (i == 0 && (kind == SYV_PK_ATTACK || kind == SYV_PK_GLIDE))   /* SY test 32: the SHAPE page's value */
         i = kind == SYV_PK_ATTACK ? 9u : 11u;
@@ -1764,10 +2159,22 @@ EXPORT UI_SMALL void sy_col_text(u32 col, char *label, char *value) {
             ms = k == 0u ? SYV_ATK_MS[tone] : k == 1u ? SYV_REL_MS[tone] : SYV_GLI_MS[tone] ? SYV_GLI_MS[tone]
                                                                                            : SY_GLIDE_OFF;
         p = ms ? put_ms(p, ms) : put_str(p, "AUTO");   /* a Sound Generator tone's: its ENV preset's */
+    } else if (i == 12u && (kind == SYV_P_WAVE || kind == SYV_P_ENVSEL)) {   /* MIDI out test 7, SG SYNTH: its ENV
+                                                                                preset, by name; test 11: every SG
+                                                                                sound's (its CTRL 1's) */
+        s32 k = *sy_filt_at(s, tone, 0u), z = ((64 + k) * 10) >> 7;
+        u32 pre = k ? (u32)(z < 0 ? 0 : z > 9 ? 9 : z) : SYV_PRESET_OF[tone];
+        p = put_str(p, SYV_PRESET_NAME[pre]);
     } else if (i == 12u || i == 13u) {                  /* SY test 32: FILTER (no filter, or the SG's: nothing) */
         p = SYV_FLT[tone] == 0u || SYV_FLT[tone] == 6u ? put_str(p, "--")
                                                        : put_signed(p, sy_pm50(*sy_filt_at(s, tone, i - 12u)));
     } else if (i == 14u) {
+    } else if (i == 0 && kind == SYV_P_WAVE) {          /* MIDI out test 7, SG SYNTH: the wave, by name */
+        s32 k = s->knob[tone][1], z = ((64 + k) * 32) >> 7;
+        p = put_str(p, SYV_WAVE_NAME[k ? (z < 0 ? 0 : z > 31 ? 31 : z) : SYV_WAVE_OF[tone]]);
+    } else if (i == 1 && kind == SYV_P_WAVE) {          /* its DUTY, 0..100 (TONE moves it +-50) */
+        s32 d = (s32)SYV_DUTY0[tone] + (s->knob[tone][0] * 50) / 64;
+        p = put_u(p, (u32)(d < 0 ? 0 : d > 100 ? 100 : d));
     } else if (i == 0 && kind == SYV_P_ENVSEL) {        /* SY test 11: the ENV preset itself, by name */
         s32 k = s->knob[tone][1], z = ((64 + k) * 10) >> 7;
         u32 pre = k ? (u32)(z < 0 ? 0 : z > 9 ? 9 : z) : SYV_PRESET_OF[tone];
@@ -1914,8 +2321,9 @@ __attribute__((naked, used)) SCREEN void sy_bar_name(void) {
 
 /* From 0x80123be6 (likewise): r0-r3 the displaced draw call's arguments, r4 the bar, r6 the item, the item box's y0
  * and y1 at sp + 0x1c and sp + 0x24, the value text at sp + 0x28. On the screen (test 6): the displaced draw skipped,
- * the PRM part painted over, an empty value text, on at 0x80123c5a (which draws it); else the arp's bridge (it draws
- * first). */
+ * the PRM part painted over, an empty value text, on at 0x80123c7a (which draws it; MIDI out test 8: was 0x80123c5a,
+ * which first fills the value's box white when the SG's cursor is on the value: "OUT: D" and a white box, the user's
+ * "messed up" bar); else the arp's bridge (it draws first). */
 __attribute__((naked, used)) SCREEN void sy_bar_text(void) {
     __asm__ volatile(
         "push {r0, r1, r2, r3, r4, lr}\n"
@@ -1929,7 +2337,7 @@ __attribute__((naked, used)) SCREEN void sy_bar_text(void) {
         "bl sy_bar_blank_c\n"
         "add r0, sp, #0x28\n"
         "bl sy_bar_text_c\n"
-        "movw r12, #0x3c5b\n"
+        "movw r12, #0x3c7b\n"
         "movt r12, #0x8012\n"
         "bx r12\n"
         "1:\n"
@@ -1958,6 +2366,299 @@ __attribute__((naked, used)) SCREEN void sy_bar_poll(void) {
         "bx r12\n");
 }
 
+/* ---- MIDI out test 1: the Sound Generator's and the kits' notes out over MIDI (USB and MIDI OUT) ----
+ * Stock 5.52 sends PAD Note Out only for sample pads (its pad-event consumer 0x80050be0): the Sound Generator page plays
+ * its pads straight into its voices, the kits use that path, and the guitar's notes go in as MIDI-in notes, so nothing
+ * went out from there. Now, while PAD Note Out (the MIDI menu) is on, on M.CH (the kits' VALUE item, 16 at power-on;
+ * MIDI out test 2: the kits on channel 10, General MIDI's drums):
+ *   - a pad on the Sound Generator page (ARP off): the note it plays as heard (A4 = 69: the SG's pitch + 36, its
+ *     pitch 33 being TUNE); in the kits pads 1..16 are notes 36..51 (the kits' own MIDI-in map);
+ *   - the guitar's notes there (syn_ui, ARP off): the note the SG plays (its MIDI note - 12: the SG sounds MIDI an
+ *     octave low); in the kits the pad note it strikes (36..51);
+ *   - ARP on: the arp's notes, not the keys held (mo_arp_scan reads the arp's four voices after every audio block, the
+ *     UI tick sends what it queued).
+ * MIDI out test 4: each mode its own M.CH (mo_channels: the SG 16 and the kits 10 at power-on, each turned in its own
+ * mode; MIDI in follows), and the guitar's notes on both at once (mo_x: the other mode's channel gets them too, so a
+ * drum module and a synth play the guitar together).
+ * Not sent: MIDI coming in (Soft Through's job), the guitar synth screen (the user: only the SG and the kits).
+ * The sender is the stock link writer 0x800d93f0 (buf, len), as stock's own note senders (0x800549e0) do: it takes the
+ * link's lock (waiting: the UI task only, so the audio task queues) and polls the 4-byte packet out (cable 9, code 9
+ * note on / 8 note off). A note-on follows stock's gates (PAD Note Out on, setting 0x5d of 0x82e01144 not 2,
+ * [0x82e01144 + 0x64] clear); a note we turned on always gets its note-off (velocity 64, as stock's), also when PAD Note
+ * Out goes off, M.CH changes or the page is left (the SG lets its notes go then). */
+#define MO_WRITE ((void (*)(const u8 *, u32))MO_RAW_WRITE)              /* the link writer (buf, len) */
+#define MO_MENU_GET ((u32 (*)(u32, u32, u32))MO_MENU_GETTER)             /* menu settings (0x80591adc, id, index) */
+#define MO_SET_GET ((s32 (*)(u32, u32, u32))0x800D94D9u)                 /* settings (0x82e01144, id, index) */
+#define MO_MENU 0x80591ADCu
+#define MO_PAD_NOTE_OUT 0x1C5u                                           /* PAD Note Out (MIDI menu) */
+#define MO_SETTINGS 0x82E01144u
+#define MO_APP_MODE 0x5Du                                                /* 2: no note goes out (stock's gate) */
+#define MO_BUSY (*(volatile const u32 *)(MO_SETTINGS + 0x64u))           /* set: no note goes out (stock's gate) */
+#define MO_CH (*(volatile const u8 *)MO_KIT_MIDI_CHANNEL)                /* M.CH: 0..15 = channel 1..16 */
+#define MO_CH_W (*(volatile u8 *)MO_KIT_MIDI_CHANNEL)                    /* MIDI out test 4: a mode's own put in */
+#define MO_CHANNEL mo_channel(KIT_MODE_ON)                               /* MIDI out test 4: the mode's own M.CH (test 2:
+                                                                            the kits always on 10) */
+#define MO_X_CHANNEL mo_channel(!KIT_MODE_ON)                            /* MIDI out test 4: the other mode's (mo_x) */
+#define MO_ARP_ON (*(volatile const s32 *)MO_ARP_MODE != 0)               /* ARP: 0 OFF */
+#define MO_ARP_GATED ((volatile const u8 *)MO_ARP_GATED_ADDR)             /* the arp's voice i: its note's gate open */
+#define MO_ARP_AGE ((volatile const u32 *)MO_ARP_AGE_ADDR)               /* bumped by every note the arp starts on it */
+#define MO_HELD_COUNT (*(volatile const s32 *)MO_HELD_COUNT_ADDR)        /* the arp's keys held: count, notes, sources */
+#define MO_HELD_NOTE ((volatile const s8 *)MO_HELD_NOTE_ADDR)
+#define MO_HELD_SRC ((volatile const u16 *)MO_HELD_SRC_ADDR)
+#define MO_SINGLETON 0x80249800u                                         /* the SG's voice 0; 1..3 the clones (v9.5) */
+#define MO_CLONE_BASE 0x8353A310u
+#define MO_VOICE_SIZE 0x1B0u
+#define MO_Q 32u                                                          /* queued notes (a power of two) */
+
+typedef struct {
+    u32 on[4];                  /* the notes we have on (a bit a note), on channel ch */
+    u32 ch;
+    u32 sent, ons, offs, blocked, drops, cleared;   /* packets out, note-ons, note-offs, gated note-ons, lost to a
+                                                        full queue, lets-go of everything (the checks read these) */
+    u32 age[4];                 /* audio task: each arp voice's age as last seen */
+    u8 lit[4];                  /* audio task: the note + 1 each arp voice has on (0 none) */
+    volatile u32 qh;            /* audio task: notes queued */
+    volatile u32 qt;            /* UI task: notes sent */
+    volatile u32 q[MO_Q];       /* note | velocity << 8 (0: off) */
+    volatile u32 full;          /* the queue overflowed: the UI lets every note go */
+    /* MIDI out test 4 (UI task) */
+    u8 ch_sg, ch_kit;           /* each mode's M.CH, 0..15: the SG's (melodic) and the kits' */
+    u8 ch_mode, ch_ready;       /* the mode whose channel M.CH's byte holds (1 the kits); set up at the first tick */
+    u8 x_lit, x_ch;             /* the guitar's note on the other mode's channel + 1 (0 none), and that channel */
+    u8 x_pad[2];
+    u32 x_ons, x_offs, swaps;   /* its note-ons and note-offs; mode switches that put a channel in M.CH (the checks) */
+} mo_t;
+EXPORT mo_t mo;
+
+/* MIDI out test 4: the channel a mode sends on (kits 1, melodic 0). M.CH's byte holds the current mode's (mo_channels
+ * puts it in at a mode switch); the other mode's is kept here. Before the first tick: the byte's, the kits 10. */
+UI_SMALL static u32 mo_channel(u32 kits) {
+    if (!mo.ch_ready) return kits ? 9u : (u32)(MO_CH & 15u);
+    return kits == mo.ch_mode ? (u32)(MO_CH & 15u) : (u32)(kits ? mo.ch_kit : mo.ch_sg);
+}
+
+/* MIDI out test 4 (the user: "why would they be tied"): the SG and the kits each send on a channel of their own. M.CH
+ * (the kits' VALUE item 21) is one byte, also MIDI in's channel: every UI tick a turn of it is the current mode's, and
+ * a mode switch (kit_shortcut_select has let every voice go and forgotten the arp's held keys) keeps the old mode's and
+ * puts the new mode's in, so the VALUE item, MIDI in and MIDI out follow the mode. Power-on: the SG 16 (the byte's own),
+ * the kits 10 (General MIDI's drums). */
+UI_SMALL static void mo_channels(void) {
+    const u32 kits = KIT_MODE_ON, cur = MO_CH & 15u;
+    if (!mo.ch_ready) {
+        mo.ch_ready = 1;
+        mo.ch_mode = (u8)kits;
+        mo.ch_sg = kits ? 15u : (u8)cur;
+        mo.ch_kit = 9u;
+        if (kits && cur != 9u) {
+            MO_CH_W = 9u;
+            mo.swaps++;
+        }
+        return;
+    }
+    if (mo.ch_mode)                                    /* the byte is mo.ch_mode's: a turn of M.CH there */
+        mo.ch_kit = (u8)cur;
+    else
+        mo.ch_sg = (u8)cur;
+    if (kits != mo.ch_mode) {
+        const u8 want = kits ? mo.ch_kit : mo.ch_sg;
+        mo.ch_mode = (u8)kits;
+        if (want != cur) {
+            MO_CH_W = want;
+            mo.swaps++;
+        }
+    }
+}
+
+UI_SMALL static void mo_raw(u32 status, u32 d1, u32 d2) {
+    u8 pk[4] = {(u8)(0x90u | (status >> 4)), (u8)status, (u8)d1, (u8)d2};
+    MO_WRITE(pk, 4u);
+    mo.sent++;
+}
+
+UI_SMALL static u32 mo_any(void) {
+    return mo.on[0] | mo.on[1] | mo.on[2] | mo.on[3];
+}
+
+UI_SMALL static void mo_all_off(void) {
+    for (u32 n = 0; n < 128u; n++)
+        if (mo.on[n >> 5] & (1u << (n & 31u))) {
+            mo_raw(0x80u | mo.ch, n, 0x40u);
+            mo.offs++;
+        }
+    mo.on[0] = mo.on[1] = mo.on[2] = mo.on[3] = 0;
+    mo.cleared++;
+}
+
+/* Stock's gates for a note-on: PAD Note Out on, setting 0x5d not 2, [0x82e01144 + 0x64] clear. */
+UI_SMALL static u32 mo_gate(void) {
+    return !MO_BUSY && MO_SET_GET(MO_SETTINGS, MO_APP_MODE, 0) != 2 && MO_MENU_GET(MO_MENU, MO_PAD_NOTE_OUT, 0);
+}
+
+/* A note on (velocity 1..127) or off (0), from the UI task only (the link writer waits for the link's lock). */
+UI_SMALL static void mo_note(s32 note, s32 vel) {
+    if ((u32)note > 127u) return;
+    u32 bit = 1u << (note & 31), *w = &mo.on[note >> 5];
+    if (vel <= 0) {
+        if (*w & bit) {
+            mo_raw(0x80u | mo.ch, (u32)note, 0x40u);
+            *w &= ~bit;
+            mo.offs++;
+        }
+        return;
+    }
+    if (!mo_gate()) {
+        mo.blocked++;
+        return;
+    }
+    u32 ch = MO_CHANNEL;
+    if (ch != mo.ch && mo_any()) mo_all_off();        /* M.CH or the mode changed: the old channel's notes go first */
+    mo.ch = ch;
+    if (*w & bit) {                                    /* on already: off first, so the synth plays it again */
+        mo_raw(0x80u | ch, (u32)note, 0x40u);
+        mo.offs++;
+    }
+    mo_raw(0x90u | ch, (u32)note, vel > 127 ? 127u : (u32)vel);
+    *w |= bit;
+    mo.ons++;
+}
+
+/* MIDI out test 4 (the user: "send both at once from guitar"): the guitar's note on the other mode's channel too, so a
+ * drum module and a synth play it together. In the SG's melodic mode the kits' pad (36..47) on the kits' M.CH, struck
+ * on picks only; in the kits the SG's note as heard on the SG's M.CH, slides and hammer-ons too. Not while both modes
+ * share a channel (the page's own notes only). One note at a time, each let go before the next; n < 0: let go. */
+UI_SMALL static void mo_x_off(void) {
+    if (!mo.x_lit) return;
+    mo_raw(0x80u | mo.x_ch, mo.x_lit - 1u, 0x40u);
+    mo.x_lit = 0;
+    mo.offs++;
+    mo.x_offs++;
+}
+
+UI_SMALL static void mo_x(s32 n, s32 vel) {
+    mo_x_off();
+    if ((u32)n > 127u || vel <= 0) return;
+    const u32 ch = MO_X_CHANNEL;
+    if (ch == MO_CHANNEL) return;
+    if (!mo_gate()) {
+        mo.blocked++;
+        return;
+    }
+    mo_raw(0x90u | ch, (u32)n, vel > 127 ? 127u : (u32)vel);
+    mo.x_lit = (u8)(n + 1);
+    mo.x_ch = (u8)ch;
+    mo.ons++;
+    mo.x_ons++;
+}
+
+/* Every UI tick (diag_ui): each mode's channel (test 4), the arp's queued notes, then let every note go if the page was
+ * left (the SG let its notes go), PAD Note Out went off, M.CH changed or the queue overflowed; the guitar's note on the
+ * other mode's channel likewise, and when that channel changed (a mode switch) or became the page's. */
+EXPORT UI_SMALL void mo_ui(void) {
+    mo_channels();
+    while (mo.qt != mo.qh) {
+        u32 e = mo.q[mo.qt & (MO_Q - 1u)];
+        __asm__ volatile("dmb" ::: "memory");
+        mo.qt = mo.qt + 1u;
+        mo_note((s32)(e & 0xFFu), (s32)((e >> 8) & 0xFFu));
+    }
+    const u32 away = PAGE != SG_PAGE && !(PAGE == LOOPER_PAGE && gsyn.loop);   /* test 4: the looper from the SG too */
+    if (mo.x_lit && (away || mo.x_ch != MO_X_CHANNEL || MO_X_CHANNEL == MO_CHANNEL ||
+                     !MO_MENU_GET(MO_MENU, MO_PAD_NOTE_OUT, 0)))
+        mo_x_off();
+    if (!mo_any()) {
+        mo.full = 0;
+        return;
+    }
+    if (mo.full || away || MO_CHANNEL != mo.ch || !MO_MENU_GET(MO_MENU, MO_PAD_NOTE_OUT, 0)) {
+        mo.full = 0;
+        mo_all_off();
+    }
+}
+
+/* The SG's note event (v9.5's 0x8353b000, which the arp points at arp_note_event; the SG page's pad press and release
+ * reach it through 0x1fc01) comes here first: r1 the note, r2 the velocity (0 off), the pad (source) at [sp]. A pad's
+ * note goes out (mo_pad_c), then every register and the stack go on to arp_note_event as they came. UI task. */
+EXPORT __attribute__((naked, used)) void mo_pad(void) {
+    __asm__ volatile(
+        "push {r0, r1, r2, r3, r4, lr}\n"
+        "mov r0, r1\n"
+        "mov r1, r2\n"
+        "ldr r2, [sp, #24]\n"
+        "bl mo_pad_c\n"
+        "pop {r0, r1, r2, r3, r4, lr}\n"
+        "ldr r12, =" XS(MO_ARP_NOTE_EVENT) "\n"
+        "bx r12\n"
+        ".ltorg\n");
+}
+
+EXPORT UI_SMALL void mo_pad_c(s32 note, s32 vel, s32 source) {
+    if (vel > 0 && MO_ARP_ON) return;                  /* ARP on: the arp's notes go out (mo_arp_scan) */
+    s32 n;
+    if (KIT_MODE_ON) {
+        u32 pad = (u32)source & 0xFFu;
+        if (pad >= 16u) return;
+        n = 36 + (s32)pad;                             /* the kits' MIDI map: pads 1..16 = 36..51 */
+    } else
+        n = note + 36;                                 /* the SG's pitch 33 is TUNE (A4, 69) */
+    mo_note(n, vel);
+}
+
+/* The guitar's note on the SG page (syn_ui): out is what goes to the SG's MIDI entry (0 velocity: off). */
+UI_SMALL static void mo_guitar(s32 out, s32 vel, u32 drum) {
+    if (vel > 0 && MO_ARP_ON) return;                  /* ARP on: the arp plays the guitar's notes: its notes go out */
+    mo_note(drum ? out : out - 12, vel);               /* the SG sounds MIDI an octave low: the note heard */
+}
+
+static inline void mo_push(u32 note, u32 vel) {       /* audio task: the next UI tick sends it */
+    u32 h = mo.qh;
+    if (h - mo.qt >= MO_Q) {
+        mo.full = 1;
+        mo.drops++;
+        return;
+    }
+    mo.q[h & (MO_Q - 1u)] = note | vel << 8;
+    __asm__ volatile("dmb" ::: "memory");
+    mo.qh = h + 1u;
+}
+
+/* Which kit pad an arp voice plays (the kits' kit_pad_of): its own pad, an arp step's held key an octave apart, or
+ * its note % 16. */
+UI_SMALL static s32 mo_kit_pad(const volatile u8 *v) {
+    s32 src = *(const volatile s32 *)(v + 0x1AC), note = *(const volatile s32 *)(v + 0x19C);
+    if (src >= 0 && src < 16) return src;
+    s32 n = MO_HELD_COUNT;
+    for (s32 k = 0; k < n && k < 16; k++) {
+        s32 d = note - MO_HELD_NOTE[k];
+        if (MO_HELD_SRC[k] < 16u && d % 12 == 0) return (s32)MO_HELD_SRC[k];
+    }
+    return ((note % 16) + 16) % 16;
+}
+
+/* Audio task, after every block's SG render (meter_sg_end: the arp's tick has run): each of the arp's four voices. A
+ * new note (its age moved: the arp's start_voice) goes out with its velocity, its note-off when its gate closes (the
+ * arp's close_gate, a steal, ARP off, the page left). Only queued here: the UI tick sends. */
+EXPORT UI_SMALL void mo_arp_scan(void) {
+    for (u32 i = 0; i < 4u; i++) {
+        u32 age = MO_ARP_AGE[i], lit = mo.lit[i];
+        if (age != mo.age[i]) {
+            mo.age[i] = age;
+            if (lit) mo_push(lit - 1u, 0);
+            lit = 0;
+            const volatile u8 *v = (const volatile u8 *)(i ? MO_CLONE_BASE + (i - 1u) * MO_VOICE_SIZE : MO_SINGLETON);
+            s32 n = KIT_MODE_ON ? 36 + mo_kit_pad(v) : *(const volatile s32 *)(v + 0x5C) + 36;
+            s32 vel = *(const volatile s32 *)(v + 0x198) / 100;
+            if ((u32)n <= 127u && vel > 0 && MO_ARP_GATED[i]) {
+                mo_push((u32)n, vel > 127 ? 127u : (u32)vel);
+                lit = (u32)n + 1u;
+            }
+        } else if (lit && !MO_ARP_GATED[i]) {
+            mo_push(lit - 1u, 0);
+            lit = 0;
+        }
+        mo.lit[i] = (u8)lit;
+    }
+}
+
 /* Every UI tick, on the Sound Generator page: the tracker's note there, through the entry MIDI IN on the page's
  * channel takes (the kits' note gates' SG route: r0 = 2, r1 note, r2 velocity, r3 0 on / 1 off), so ARP and drum
  * mode treat it as they treat MIDI. One note at a time: a new note lets go of the one before. Leaving the page
@@ -1971,27 +2672,52 @@ __attribute__((naked, used)) SCREEN void sy_bar_poll(void) {
  * so test 5's "SYNTH NEEDS ROUTING ExtIn" popup is gone.
  * SY test 6: drum mode strikes a pad for every guitar note: the kits play notes 36..51 only (pads 1..16), and the
  * guitar's E2..D#3 struck pads 5..16. Now the open low E is pad 1 (36), a pad a fret to G3 on pad 16, and the notes
- * outside an octave nearer at a time. */
+ * outside an octave nearer at a time.
+ * MIDI out test 4: above G3 that rule only reached pads 5..16 (an octave down from pad 17 is pad 5), so pads 1-4 never
+ * came back past the 15th fret (the user: "confusing"). The user's map: "kit pads 1-12 followed E-D# on guitar. and
+ * then start again next octave pads 1-12": each note name has its pad in every octave, E pad 1 (36) .. D# pad 12 (47);
+ * pads 13-16 are left to the hands. */
 UI_SMALL SCREEN static s32 syn_kit_note(s32 note) {
     s32 v = note - 40;
     while (v < 0) v += 12;
-    while (v > 15) v -= 12;
+    while (v > 11) v -= 12;
     return 36 + v;
 }
 
 EXPORT UI_SMALL void syn_ui(void) {
     gsyn_t *s = &gsyn;
     u32 drum = KIT_MODE_ON;
-    tt.drum = drum;                                     /* the tracker plays only plucks in drum mode */
+    gsyn_light_tick(s);                                 /* MIDI out test 4: EXT SOURCE's light shows the option */
+    gsyn_hint_tick(s);                                  /* test 5: PATTERN EDIT pulses with stock's SHIFT hint */
+    loop_light_tick(s);                                 /* test 7: REC flashes while the looper waits, any page */
+    tt.drum = drum;                                     /* the readout's (MIDI out test 4: the tracker moves there too) */
     u32 w = tt.syn, seq = w >> 16;
     s32 note = (s32)(w & 0xFFu) - 1, vel = (s32)((w >> 8) & 0x7Fu);
-    if (PAGE != SG_PAGE || sy.mode || s->off) {        /* SY test 5: the SY screen plays the SY synth instead; SY */
+    const u32 move = (w >> 15) & 1u;                    /* MIDI out test 4: a slide or hammer-on (no pick) */
+    if (PAGE == SG_PAGE) s->sg_plain = !sy.mode;        /* MIDI out test 4: the looper's page reached from the plain */
+    if ((u32)PAGE != s->page_seen) {                    /*   page keeps the guitar on the SG / kits (gsyn_page) */
+        const u32 was_loop = s->loop;
+        s->loop = PAGE == LOOPER_PAGE && s->page_seen == SG_PAGE && s->sg_plain;
+        if (PAGE == LOOPER_PAGE) s->loop_from = s->page_seen;   /* MIDI out test 9: where the looper was opened */
+        s->page_seen = (u32)PAGE;
+        if (was_loop && s->sounding >= 0) {            /* leaving the looper: stock stops the SG's voices only as its
+                                                          own page goes, so our note goes here */
+            mo_guitar(s->sounding, 0, drum);
+            SG_MIDI_EVENT(2u, s->sounding, 0, 1);
+            s->offs++;
+            s->loop_offs++;
+            s->sounding = -1;
+        }
+    }
+    if (!gsyn_page() || s->off) {                      /* SY test 5: the SY screen plays the SY synth instead; SY */
                                                        /*   test 31: the guitar's notes switched off there */
-        if (PAGE == SG_PAGE && s->sounding >= 0) {     /* the screen opened on the page (or the notes went off): let
-                                                          our note go */
+        if ((PAGE == SG_PAGE || s->loop) && s->sounding >= 0) {   /* the screen opened on the page (or the notes went
+                                                                     off): let our note go */
+            mo_guitar(s->sounding, 0, drum);           /* MIDI out test 1 (leaving the page: mo_ui lets it go) */
             SG_MIDI_EVENT(2u, s->sounding, 0, 1);
             s->offs++;
         }
+        mo_x(-1, 0);                                   /* MIDI out test 4: the other mode's channel too */
         s->sounding = -1;
         s->done = seq;
         return;
@@ -2002,27 +2728,47 @@ EXPORT UI_SMALL void syn_ui(void) {
     }
     if (seq != s->done) {
         s->done = seq;
+        s32 sg = -1, pad = -1;
+        const s32 v = vel ? vel : SYN_VELOCITY;
+        if (note >= 0) {
+            const s32 oct = SG_OCT;
+            sg = note + 12 * (oct < -3 ? -3 : oct > 4 ? 4 : oct);   /* the SG's MIDI note (it sounds an octave lower) */
+            pad = syn_kit_note(note);
+        }
+        /* MIDI out test 4: drum mode strikes on picks only (tests 1-3: the tracker held moves back there), so a move
+           leaves the pad sounding; the SG's channel takes the new note. */
+        if (drum && move && note >= 0) {
+            mo_x(sg >= 12 && sg <= 127 ? sg - 12 : -1, v);
+            return;
+        }
         if (s->sounding >= 0) {
+            mo_guitar(s->sounding, 0, drum);           /* MIDI out test 1: out first (the SG may wait for a voice) */
             SG_MIDI_EVENT(2u, s->sounding, 0, 1);
             s->offs++;
             s->sounding = -1;
         }
         if (note >= 0) {
-            s32 oct = SG_OCT, out = note;
-            if (!drum)
-                out += 12 * (oct < -3 ? -3 : oct > 4 ? 4 : oct);
-            else
-                out = syn_kit_note(note);
+            const s32 out = drum ? pad : sg;
+            if (out >= 12 && out <= 127)
+                mo_guitar(out, v, drum);
+            if (drum)                                  /* MIDI out test 4: the other mode's channel: the SG's note */
+                mo_x(sg >= 12 && sg <= 127 ? sg - 12 : -1, v);
+            else if (!move)                            /*   heard, or the kits' pad (struck on picks only) */
+                mo_x(pad, v);
             if (out >= 12 && out <= 127) {
-                SG_MIDI_EVENT(2u, out, vel ? vel : SYN_VELOCITY, 0);
+                SG_MIDI_EVENT(2u, out, v, 0);
                 s->ons++;
                 s->sounding = out;
             }
         }
-    } else if (note < 0 && s->sounding >= 0) {
-        SG_MIDI_EVENT(2u, s->sounding, 0, 1);
-        s->offs++;
-        s->sounding = -1;
+    } else if (note < 0) {
+        if (s->sounding >= 0) {
+            mo_guitar(s->sounding, 0, drum);
+            SG_MIDI_EVENT(2u, s->sounding, 0, 1);
+            s->offs++;
+            s->sounding = -1;
+        }
+        mo_x_off();                                    /* MIDI out test 4: let go on the other channel too */
     }
 }
 
@@ -2195,6 +2941,7 @@ EXPORT void diag_ui(int elapsed) {
     meter_ui_tick(elapsed);
     tune_ui();
     syn_ui();
+    mo_ui();                                                    /* MIDI out test 1: the arp's queued notes, lets-go */
     sy_ui();
     crash_ui(elapsed);                                          /* SY test 18 */
 }

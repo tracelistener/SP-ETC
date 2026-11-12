@@ -81,6 +81,12 @@ QUIET_REF, QUIET_RATIO, QUIET_ENV = 0.35, 3.0, 0.2
 ENV_TAU = 0.3
 ENV_K = float(np.float32(math.exp(-FRAMES / 48000.0 / ENV_TAU)))
 JUMP_ENV, MOVE_HOLD, PLUCK_HOLD, DROP = 1.3, 0.4, 0.25, 0.2
+# Playability (a repeat picked softer than the note before: the jump and click tests miss it, 24 of 140
+# repeated picks on the model guitar): a re-pick by a break. The synth's own note read clean BRK_PRE times,
+# then BRK_MIN..BRK_MAX readings that are not (the pick touching the string), then clean on it again with the
+# level at BRK_HOLD x the level follower or more: picked again, a note-on now (repeats 116 -> 132 of 140,
+# bass lines 78 -> 80 of 92; nothing else moved).
+BRK_PRE, BRK_MIN, BRK_MAX, BRK_HOLD = 5, 4, 16, float(np.float32(0.4))
 RING_MIN, SUB_MIN, SUB_NEG, THR_SUB, COMMON_TOL = 0.08, 0.2, 0.5, 0.3, 0.03
 BASE = W12 + 2 * T6MAX + 8                         # the samples before a pluck kept for the refinement
 
@@ -134,7 +140,7 @@ def period_blocks(freq):
 
 class Tracker:
     def __init__(self, drum=False, click=True, hf_ratio=HF_RATIO, hf_min=HF_MIN, repick=REPICK, test6=True, sens_db=0):
-        self.drum = drum            # tt.drum: the kits' drum mode, only plucks play notes
+        self.drum = drum            # tt.drum: the kits' drum mode (MIDI out test 4: moves there too, marked)
         self.sens_db = sens_db      # SY test 32: tt.sens_db, SENS: the floors' dB down (-12..+12)
         self.click, self.hf_ratio, self.hf_min, self.repick = click, hf_ratio, hf_min, repick
         self.test6 = test6          # False: test 5's rules (for the checks' before/after)
@@ -171,6 +177,11 @@ class Tracker:
         self.sub_lock = False                                   # the synth's note came from the subtraction
         self.stops = self.drops = self.sub_locks = self.blocked = 0
         self.old_at = -1000                                     # SY test 27: the synth's note last read steady
+        # Playability (the audition builds: notes missing over held strings and in bass lines):
+        self.voiced_pb = 4                                      # blocks a period of the last clean reading spans
+        self.last_note, self.last_voiced = -1, False            # the last plain analysis: its note, voiced or not
+        self.ring_note = -1                                     # what the last one before the pending pluck read
+        self.pre_run = self.brk_run = self.breaks = 0           # playability: a re-pick by a break (BRK_*)
         self.move_quick = 0                                     # the last note-on a quick move (a fret change)
 
     def floor_g(self):
@@ -196,11 +207,11 @@ class Tracker:
         n = min(blk - (self.onset_blk + 4) + 1, PEAKS - 4)
         return max((self.peaks[(blk - k) & (PEAKS - 1)] for k in range(n)), default=0.0)
 
-    def syn_send(self, note, vel=0):
+    def syn_send(self, note, vel=0, move=0):
         seq = self.syn >> 16
         if note >= 0:
             seq = (seq + 1) & 0xFFFF
-        self.syn = seq << 16 | (vel << 8 | (note + 1) if note >= 0 else 0)
+        self.syn = seq << 16 | (move << 15 | vel << 8 | (note + 1) if note >= 0 else 0)   # MIDI out test 4: bit 15 a move
         self.syn_note = note
         self.syn_sends += 1
         self.move_quick = 0                                     # SY test 27 (the move sets it after)
@@ -264,6 +275,7 @@ class Tracker:
                     self.env = pk                           # SY test 30: the level starts again from this pick
                 self.last_onset = self.onset_blk = blk
                 self.first_pending = self.lock_pending = True
+                self.ring_note = self.last_note if self.last_voiced else -1   # playability: what rang before it
                 self.agree = 0
                 self.res['onsets'] += 1
                 self.d_base = self.d_last.copy()            # test 6: what rang before it
@@ -368,6 +380,16 @@ class Tracker:
                     aper, clean, freq, voiced, sub = a2, c2, f2, v2, True
         midi = 69 + 12 * math.log2(freq / 440.0)
         note = round_s(midi)
+        if not pre:
+            # Playability: after a pluck over ringing strings, a plain reading of the note read just before the
+            # pluck is the ringing strings' own note or their common period (an open D chord reads D2, a barre chord
+            # its root), not the string picked: it counts as murky, unless it is the synth's own note (a re-pick).
+            # The tracker locked it and sent it as the pick's note (11 of 408 picks over held strings).
+            if (self.test6 and self.lock_pending and self.pluck_ref >= RING_MIN * self.pick_peak and not sub and
+                    voiced and note == self.ring_note and note != self.syn_note and self.syn_note >= 0):
+                clean = 1.0
+            if not sub:
+                self.last_note, self.last_voiced = note, bool(voiced)
         r = self.res
         r['analyses'] += 1
         r['voiced'] = int(voiced)
@@ -380,9 +402,37 @@ class Tracker:
         if pre:
             return
         now = self.win_peak(blk, period_blocks(freq), self.onset_blk + 4)   # test 6: the level now, over a period
+        own = voiced and clean <= CLEAN_APER and self.syn_note >= 0 and note == self.syn_note   # playability: a
+        if self.syn_note < 0 or self.lock_pending or self.sub_lock:                          # re-pick by a
+            self.pre_run = self.brk_run = 0                                                  # break (BRK_*)
+        elif own:
+            lvl = self.win_peak(blk, period_blocks(freq))
+            if (self.pre_run >= BRK_PRE and BRK_MIN <= self.brk_run <= BRK_MAX and
+                    lvl >= BRK_HOLD * self.env and blk - self.last_onset >= REFRACTORY):
+                self.breaks += 1                            # the same note again after a break, its level held
+                self.last_onset = self.onset_blk = blk
+                self.pluck_click = 3
+                self.pluck_ref = self.voiced_level
+                self.pick_peak = lvl
+                r['onsets'] += 1
+                self.first_pending = False
+                self.syn_send(note, velocity(lvl))
+                self.pre_run = 0
+            self.pre_run = self.pre_run + 1 if self.brk_run == 0 else 1
+            self.brk_run = 0
+        elif voiced and clean <= CLEAN_APER:
+            self.pre_run = self.brk_run = 0                 # another note, clean: the move's business
+        elif self.pre_run >= BRK_PRE:
+            self.brk_run += 1                               # not clean: the break
+        else:
+            self.pre_run = 0
         if voiced and clean <= CLEAN_APER:                  # test 4: clean (one string; strings ringing together
             self.unvoiced = 0                               # read murky, and murky counts as nothing heard)
-            self.voiced_level = self.recent_peak(blk)
+            # Playability: the level over a period of the note (was the newest 4 blocks: a low string's blocks swing
+            # within its period, E2's is 9 blocks, so murky readings after a soft pick on it read as a stopped
+            # string and the note was let go while it rang)
+            self.voiced_pb = period_blocks(freq)
+            self.voiced_level = self.win_peak(blk, self.voiced_pb)
             if self.first_pending:
                 self.first_pending = False
                 r['first_ms'] = ms(age)
@@ -416,7 +466,7 @@ class Tracker:
                         self.sub_locks += sub
                     else:
                         self.syn_strays += 1                # its own note, no pick's level: a stray pluck
-                elif (self.syn_note >= 0 and not same and not self.drum and not self.sub_lock and
+                elif (self.syn_note >= 0 and not same and not self.sub_lock and
                       self.agree >= MOVE_AGREE and abs(r['cents']) <= MOVE_CENTS and
                       abs(note - self.syn_note) not in HARMONIC_JUMPS):
                     if self.test6 and now < MOVE_HOLD * self.env:
@@ -424,7 +474,7 @@ class Tracker:
                     else:
                         quick = (blk - self.old_at <= MOVE_QUICK and   # SY test 27: a fret change, not a bend or
                                  now >= QUICK_HOLD * self.win_peak(blk - QUICK_BACK, QUICK_WIN))   # slide; SY test
-                        self.syn_send(note, velocity(self.level(blk)))  # 30: the level held. The pitch moved while
+                        self.syn_send(note, velocity(self.level(blk)), 1)   # 30: the level held. The pitch moved while
                         self.move_quick = int(quick)                    # it plays
         else:
             if voiced:
@@ -436,7 +486,8 @@ class Tracker:
             if self.unvoiced >= RELEASE:
                 r['note'] = -1
                 if self.syn_note >= 0:
-                    if self.unvoiced >= SYN_RELEASE_LONG or self.recent_peak(blk) < SYN_DROP * self.voiced_level:
+                    if self.unvoiced >= SYN_RELEASE_LONG or \
+                            self.win_peak(blk, self.voiced_pb) < SYN_DROP * self.voiced_level:   # playability
                         self.syn_send(-1)                   # the string stopped: let go
                     else:
                         self.syn_holds += 1                 # as loud as before: hold on

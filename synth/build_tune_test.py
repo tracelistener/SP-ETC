@@ -95,12 +95,18 @@ SOURCES = [INTEGER_SOURCE, SRC / 'tune_fp.c', SRC / 'sy_fp.c', SRC / 'sy_voice.c
 SIZE_SOURCES = ('sy_voice.c',)                 # SY test 11: built -Os (its slots are small)
 HEADERS = [SRC / 'tune_test.h', SRC / 'sy_ref.py', SRC / 'sy_voice.h', SRC / 'sy_voices.py']
 THIRD_PARTY = ()
-TEST_PLAN = SRC / 'HARDWARE_TEST.md'
+TEST_PLAN = Path(os.environ['SY_TEST_PLAN']) if os.environ.get('SY_TEST_PLAN') else SRC / 'HARDWARE_TEST.md'
+#                                     (MIDI out test 4's audition builds bring their own sheet)
 FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'sy-synth-test32'
+REVISION = os.environ.get('SY_REVISION', 'midi-out-test14')   # (an audition build names itself)
+#                                     MIDI out test 1: SY synth test 34 + the SG's and the kits' notes out over MIDI;
+                                     # test 2: kits on channel 10, EXT SOURCE + VALUE, EXT SOURCE tap, ACID BASS retrig;
+                                     # test 3: a murky low reading no longer attacks the note sounding (held chords);
+                                     # test 4: a channel per mode, the guitar on both, kits E..D#, three EXT options,
+                                     # the looper keeps the SG, 32 tones, CTRL 1 stronger
 BASE = 0x83FC9000
 LIMIT = 0x83FD4000                  # sg-subpad's row starts here
 GAP_END = 0x83FF0000                # cacheable SDRAM ends here
@@ -130,8 +136,16 @@ SYV_DATA = (0x83FEF100, 0x83FF0000)    # its constants and smaller functions: th
 # SY test 24: the mono notes (and test 11's, GLITCH's top half) and two oscillator passes in the rest of bounce's slot
 # (its rows end at 0x83fea990; nothing in v9.52 refers to 0x83fea990..0x83fed000), making room for GLITCH
 SYV_MORE = (0x83FEAA00, 0x83FED000)
-SYV_SLOTS = (SYV_TEXT, SYV_NOTES, SYV_BSS, SYV_DATA, SYV_MORE)
-SYV_CODE = {'.syvtext': SYV_TEXT, '.syvnotes': SYV_NOTES, '.syvdata': SYV_DATA, '.syvmore': SYV_MORE}
+# MIDI out test 4: the tones' table (sy_voices.py: 32 tones x 228 bytes; 20 filled the module's .rodata) in three
+# slots of its own, each checked free in the input, rows and references like the others: the free tops of
+# sg-subpad's slot (its row ends at 0x83fd40a8), of the slot whose row ends at 0x83fdb420 and of note repeat's (its
+# row ends at 0x83fdd4fd). sy_voices.TONE_SPLIT: 16, 13, the rest.
+SYV_TONES0 = (0x83FD4100, 0x83FD5000)
+SYV_TONES1 = (0x83FDB440, 0x83FDC000)
+SYV_TONES2 = (0x83FDD500, 0x83FDE000)
+SYV_SLOTS = (SYV_TEXT, SYV_NOTES, SYV_BSS, SYV_DATA, SYV_MORE, SYV_TONES0, SYV_TONES1, SYV_TONES2)
+SYV_CODE = {'.syvtext': SYV_TEXT, '.syvnotes': SYV_NOTES, '.syvdata': SYV_DATA, '.syvmore': SYV_MORE,
+            '.syvtone0': SYV_TONES0, '.syvtone1': SYV_TONES1, '.syvtone2': SYV_TONES2}
 TX_BRIDGE, RX_BRIDGE, UI_BRIDGE = 0x83FE8000, 0x83FE8030, 0x83FE8080   # bounce-3-test9's bridges
 TX_SITE, RX_SITE, FEED, LOOP, TX_BACK, TICK_REST = 0x0001D090, 0x0001D0C2, 0x0001CA80, 0x0001D05C, 0x0001D09A, 0x8006B95C
 
@@ -171,7 +185,29 @@ SHA_GUARDS = [
      'a page\'s i-th view (list = page + 0x38), 0 past the last: the FX screen check walks TOP\'s'),
     (0x8005EDA8, 0x8005EE4A, 'c20fec979fc3f36e617c845a861d61a6201739654a997ff567b796b9c1dc2a3a',
      'TOP\'s registry handler: the page object [0x80cfd350] with vtable 0x8022ce5c (TOP\'s views at +0x38)'),
+    # MIDI out test 1: the kit stage's arp and kits, code and initial data (kits-v9.46-test3's build, as combined-test20
+    # has it): MO_LINKS' addresses are where that code keeps them
+    (0x83FA2000, 0x83FBFCC0, '4661da01f70109f4eaa240d1c0bf7e439508c1c6929ec462bf9953276fc00c8c',
+     "the kit stage's arp and kits (kits-v9.46-test3's code as combined-test20 has it): arp_note_event, ARP's mode, its "
+     "voices' gates and ages, the keys held and M.CH where MO_LINKS says"),
 ]
+# MIDI out test 1: the Sound Generator's and the kits' notes out over MIDI (the user: there only, not the guitar synth
+# screen). v9.5's SG note event at 0x8353b000 is the arp's jump to arp_note_event (movw/movt ip, bx ip), reached only
+# through v9.5's ITCM jump at 0x1fc00, which the SG page's pad press and release call (0x1fc01, the pad as the source):
+# the builder points it at mo_pad, which sends the pad's note and goes on to arp_note_event. The arp's notes are read
+# after every audio block (mo_arp_scan, from meter_sg_end), the guitar's in syn_ui; the UI tick (mo_ui) sends.
+MO_NOTE_EVENT, MO_NOTE_VENEER = 0x8353B000, 0x0001FC00
+MO_LINKS = dict(                     # tune_test_links.h: the kit stage's (kits-v9.46-test3's symbols) and stock's
+    MO_ARP_NOTE_EVENT=0x83FA3399,    # arp_note_event (the kits' wrapper: kit_note_seen, then the arp's)
+    MO_ARP_MODE=0x83FC7B70,          # arp_mode (int, 0 OFF)
+    MO_ARP_GATED_ADDR=0x83FC7BF0,    # arp_gated[4] (u8): a voice's arp note, its gate open
+    MO_ARP_AGE_ADDR=0x83FC7C08,      # arp_age[4] (u32): bumped by every note the arp starts on the voice
+    MO_HELD_COUNT_ADDR=0x83FC7B84,   # held_count, held_note[16] (s8), held_src[16] (u16): the arp's keys
+    MO_HELD_NOTE_ADDR=0x83FC7B9C,
+    MO_HELD_SRC_ADDR=0x83FC7BBC,
+    MO_KIT_MIDI_CHANNEL=0x83FBFCBC,  # kit_midi_channel (u8): M.CH, 0..15 = channel 1..16, 15 at power-on
+    MO_RAW_WRITE=0x800D93F1,         # stock: the link writer (buf, len), guarded below
+    MO_MENU_GETTER=0x800D61F1)       # stock: menu settings (0x80591adc, id, index), as PAD Note Out's sender asks it
 FDE_SLOT = (0x83FE2000, 0x83FE6000)
 PAD_TEMPO = 0x80047DD0              # the stock sample tempo (BPM x 100) for a pad, as the arp asks it
 # SY test 4: the DT1 builder's entry, where v9.52's FX deep edit jumps to its fde_dt1 (movw/movt ip, bx ip)
@@ -203,9 +239,10 @@ EXPORTS = ('meter_mix_entry', 'meter_mix_exit', 'meter_voice', 'meter_sg_pre', '
            'sy_fp_step', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file', 'sy_feed', 'sy_dt1', 'sy_route_dt1',
            'sy_event', 'sy_shown', 'sy_col_draw', 'sy_foot_draw', 'sy_sg_poll', 'sy_bar_name', 'sy_bar_text',
            'sy_bar_poll', 'sy_bar_name_c', 'sy_bar_text_c', 'sy_bar_poll_c', 'sy_col_text', 'sy_foot_text',
-           'sy_fault', 'sy_fault_c', 'sy_crash', 'sy_recover', 'sy_crash_live')   # SY test 21: the last two
+           'sy_fault', 'sy_fault_c', 'sy_crash', 'sy_recover', 'sy_crash_live',   # SY test 21: the last two
+           'mo', 'mo_pad', 'mo_pad_c', 'mo_ui', 'mo_arp_scan')                   # MIDI out test 1
 DATA = ('meter', 'tt', 'tt_block', 'tt_layout', 'gsyn', 'sy', 'sy_block', 'sy_layout', 'sy_path', 'sy_file',
-        'sy_crash', 'sy_crash_live')
+        'sy_crash', 'sy_crash_live', 'mo')
 
 # Exact instructions at and around every site (capstone text).
 GUARDS = [
@@ -301,7 +338,12 @@ GUARDS = [
     # SY test 5, the guitar synth screen: the stock code its draws and bridges use or go on into
     (0x800BBCC2, 4, ['add sp, #0x68', 'pop {r4, r5, r7, pc}'], "the bar's item name function ends (sy_bar_name)"),
     (0x80123C5A, 12, ['ldr.w r0, [sb, #0x14]', 'cmp r0, #1', 'bne #0x80123c7a', 'ldr.w r0, [r4, #0x84]'],
-     "the bar's value text: drawn from sp + 0x28 here (the arp's draw bridge and sy_bar_text go on here)"),
+     "the bar's value text: its box filled white when the cursor is on the value, then drawn from sp + 0x28 (the "
+     "arp's draw bridge goes on here)"),
+    (0x80123C7A, 0x10, ['ldr r0, [sp, #8]', 'ldrh.w r2, [sp, #0xc]', 'ldr r1, [sp, #0x10]', 'add r3, sp, #0x28',
+                        'add r1, r0', 'adds r2, #1', 'sxth r2, r2'],
+     "the bar's value text drawn from sp + 0x28 in its box at sp + 8, no fill (MIDI out test 8: sy_bar_text goes on "
+     "here)"),
     (0x800DA598, 8, ['push {r4, lr}', 'mov r4, r0', 'cmp r0, #1', 'bne #0x800da5b0'],
      'a page asked for (the kits\' KIT_PAGE_REQUEST): the screen asks for the SG page (0x1e)'),
     (0x800D0018, 0x16, ['ldrb.w r1, [r0, #0x94]', 'cmp r1, #0', 'itt ne', 'movne r1, #1', 'strbne.w r1, [r0, #0x55]',
@@ -317,6 +359,25 @@ GUARDS = [
      "the stock SG page update: its knob columns at page + 0x1a6c..0x1a74 (the kits' children)"),
     (0x80170838, 0x10, ['ldr.w r0, [r4, #0x308]', 'strh.w r0, [fp, #8]', 'cmp r0, #3', 'ldr.w r1, [r4, #0x310]'],
      'the stock knob column draw: its descriptor type at +0x308, its parameter at +0x310'),
+    # MIDI out test 1: what mo_raw sends through, and the gates stock's PAD Note Out sender applies (mo_note's own)
+    (0x800D93F0, 0x4A, ['push {r4, r5, r6, r7, lr}', 'sub sp, #4', 'movw r7, #0x25e4', 'mov r4, r1', 'movt r7, #0x8059',
+                        'mov r5, r0', 'movs r1, #1', 'mov.w r2, #-1', 'ldr r0, [r7, #0x10]', 'bl #0x800d3252',
+                        'cbz r4, #0x800d942c', 'movw r6, #0xc000', 'movt r6, #0x4018', 'nop', 'mov r0, r6',
+                        'bl #0x800d9f10', 'lsls r0, r0, #8', 'bpl #0x800d9418', 'subs r4, #1', 'ldrb r0, [r5], #1',
+                        'str r0, [r6, #0x1c]', 'bne #0x800d9418', 'ldr r0, [r7, #0x10]', 'movs r1, #1', 'add sp, #4',
+                        'pop.w {r4, r5, r6, r7, lr}', 'b.w #0x800d3248'],
+     "the link writer (buf, len): the link's lock ([0x805925f4], waiting with no limit) taken, each byte polled out to "
+     "LPUART3 (0x4018c000), the lock given back: from tasks only, never an interrupt (mo_raw: the UI task)"),
+    (0x800549E0, 0x46, ['push.w {r4, r5, r6, r7, r8, sb, lr}', 'sub sp, #4', 'movw r0, #0x1144', 'movt r0, #0x82e0',
+                        'ldr r0, [r0, #0x64]', 'cbz r0, #0x800549f8', 'add sp, #4', 'pop.w {r4, r5, r6, r7, r8, sb, pc}',
+                        'movw r0, #0x1144', 'mov r4, r2', 'mov r5, r1', 'movt r0, #0x82e0', 'movs r1, #0x5d',
+                        'movs r2, #0', 'bl #0x800d94d8', 'cmp r0, #2', 'beq #0x800549f2', 'movw r0, #0x1adc',
+                        'movw r1, #0x1c5', 'movt r0, #0x8059', 'movs r2, #0', 'bl #0x800d61f0', 'cmp r0, #0',
+                        'beq #0x800549f2'],
+     "stock's PAD Note Out sender (chromatic pads, channel 16): nothing while [0x82e01144 + 0x64] is set or setting 0x5d "
+     "is 2, nor unless PAD Note Out (0x1c5, menu getter 0x800d61f0) is on: mo_note's gates for a note-on"),
+    (MO_NOTE_VENEER, 10, ['movw ip, #0xb001', 'movt ip, #0x8353', 'bx ip'],
+     "v9.5's SG note event in ITCM (the SG page's pad press and release call 0x1fc01): on to 0x8353b000"),
 ]
 
 MD = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB | capstone.CS_MODE_MCLASS)
@@ -656,6 +717,26 @@ def screen_hooks(img):
     return out
 
 
+def mo_hook(img):
+    """MIDI out test 1: v9.5's SG note event at 0x8353b000 is the arp's jump to arp_note_event, and only v9.5's ITCM jump
+    (0x1fc00, guarded) refers to it; that jump is called from the SG page's pad press and release (0x1fc01) only."""
+    code = read(img, MO_NOTE_EVENT, 10)
+    mm = movw_movt(code, MO_NOTE_EVENT)
+    if not mm or mm[1] != 'ip' or mm[0] != MO_LINKS['MO_ARP_NOTE_EVENT'] or listing(code, MO_NOTE_EVENT)[2:3] != ['bx ip']:
+        raise ValueError(f'{MO_NOTE_EVENT:#x}: expected the arp\'s jump to arp_note_event, found {listing(code, MO_NOTE_EVENT)}')
+    loaded = [(load - FLASH, load - FLASH + n) for load, dst, n, fn in scatter(img) if fn == COPY and load]
+    in_rows = lambda hit: any(lo <= hit[1] < hi for lo, hi in loaded)   # noqa: E731 (not a dead old table's word)
+    to_event = [h for h in refs_into(bytes(img), MO_NOTE_EVENT, MO_NOTE_EVENT + 10) if in_rows(h)]
+    to_veneer = [h for h in refs_into(bytes(img), MO_NOTE_VENEER, MO_NOTE_VENEER + 2) if in_rows(h)]
+    near = branches_into(bytes(img), MO_NOTE_EVENT, MO_NOTE_EVENT + 10) + \
+        branches_into(bytes(img), MO_NOTE_VENEER, MO_NOTE_VENEER + 2)
+    if len(to_event) != 1 or len(to_veneer) != 2 or near:
+        raise ValueError(f'the SG note event: expected one reference to {MO_NOTE_EVENT:#x} (0x1fc00\'s jump) and two to '
+                         f'0x1fc01 (the SG page\'s press and release), no direct branch: {to_event} {to_veneer} {near}')
+    return dict(site=hex(MO_NOTE_EVENT), target=hex(MO_LINKS['MO_ARP_NOTE_EVENT']), veneer=hex(MO_NOTE_VENEER),
+                veneer_callers=[f'{k} at file {off:#x}' for k, off, _ in to_veneer], listing=listing(code, MO_NOTE_EVENT))
+
+
 def check_guards(img):
     found = {}
     for addr, size, expect, why in GUARDS:
@@ -716,6 +797,7 @@ def check_guards(img):
     found['fde'] = {k: dict(bridge=hex(v['bridge']), call=hex(v['call']), handler=hex(v['handler']),
                             listing=v['listing']) for k, v in fde.items()}
     found['screen'] = screen_hooks(img)
+    found['midi_out'] = mo_hook(img)                   # MIDI out test 1
     for lo, hi, digest, why in SHA_GUARDS:
         if sha(read(img, lo, hi - lo)) != digest:
             raise ValueError(f'{lo:#x}..{hi:#x} ({why}): its code is not the one FX deep edit checked')
@@ -837,7 +919,8 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fd
         f'#define NR_EVENT_C {nr_event_c:#010x}u\n' +
         ''.join(f'#define {name} {value | 1:#010x}u\n' for _, value, _, name, _ in SG_POINTERS) +
         ''.join(f'#define {name}_LO {value & 0xFFFF:#x}\n#define {name}_HI {value >> 16:#x}\n'
-                for _, value, _, name, _ in BAR_SITES),
+                for _, value, _, name, _ in BAR_SITES) +
+        ''.join(f'#define {name} {value:#010x}u\n' for name, value in MO_LINKS.items()),   # MIDI out test 1
         encoding='ascii', newline='\n')
     (folder / 'sy_tables.h').write_text(sy_ref.c_header(tones=False), encoding='ascii', newline='\n')
     (folder / 'syv_tables.h').write_text(sy_voices.c_header(), encoding='ascii', newline='\n')
@@ -860,6 +943,9 @@ SECTIONS {{
  .syvmore {SYV_MORE[0]:#x} : {{ KEEP(*(.syvmore)) . = ALIGN(4); }}
  .syvtext {SYV_TEXT[0]:#x} : {{ KEEP(*(.syvtext)) *sy_voice.o(.text*) . = ALIGN(4); }}
  .syvdata {SYV_DATA[0]:#x} : {{ KEEP(*(.syvdata)) *sy_voice.o(.rodata*) . = ALIGN(4); }}
+ .syvtone0 {SYV_TONES0[0]:#x} : {{ KEEP(*(.syvtone0)) . = ALIGN(4); }}
+ .syvtone1 {SYV_TONES1[0]:#x} : {{ KEEP(*(.syvtone1)) . = ALIGN(4); }}
+ .syvtone2 {SYV_TONES2[0]:#x} : {{ KEEP(*(.syvtone2)) . = ALIGN(4); }}
  /DISCARD/ : {{ *(.ARM.exidx*) *(.ARM.extab*) *(.comment) *(.note*) *(.ARM.attributes) }}
 }}
 ''', encoding='ascii', newline='\n')
@@ -899,6 +985,7 @@ SECTIONS {{
     if len(read_module.syv_bss) != 1 or read_module.syv_bss[0][0] != SYV_BSS[0] or syms.get('syv_state') != SYV_BSS[0]:
         raise ValueError(f'syv_state not alone at {SYV_BSS[0]:#x}: {read_module.syv_bss} {syms.get("syv_state")}')
     compile_module.syv = dict(text=syv['.syvtext'], notes=syv['.syvnotes'], data=syv['.syvdata'], more=syv['.syvmore'],
+                              tone0=syv['.syvtone0'], tone1=syv['.syvtone1'], tone2=syv['.syvtone2'],
                               bss=read_module.syv_bss[0], maps=read_module.sytext_maps)
     missing = [n for n in EXPORTS + ('tt_integer_end',) if n not in syms]
     if missing:
@@ -1056,7 +1143,10 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
             (bridges['rx_call'], 'diag_rx', bridges['bnc_rx'], "bounce's bridge call -> diag_rx"),
             (bridges['ui_call'], 'diag_ui', bridges['bnc_ui'], "bounce's bridge call -> diag_ui"),
             (bridges['feed_call'], 'sy_feed', FEED | 1, "bounce's rx bridge: the recorder feed's call -> sy_feed"),
-            (DT1_ENTRY, 'sy_dt1', fde_dt1, "the DT1 builder's jump to FX deep edit's fde_dt1 -> sy_dt1")) + tuple(
+            (DT1_ENTRY, 'sy_dt1', fde_dt1, "the DT1 builder's jump to FX deep edit's fde_dt1 -> sy_dt1"),
+            (MO_NOTE_EVENT, 'mo_pad', MO_LINKS['MO_ARP_NOTE_EVENT'],
+             "MIDI out test 1: v9.5's SG note event's jump to arp_note_event -> mo_pad (the pad's note out, then on to "
+             "arp_note_event)")) + tuple(
             (addr, ours, value, f'SY test 5, {what} -> {ours}') for addr, value, ours, _, what in BAR_SITES):
         t = syms[name] | 1
         off = file_offset(img, site, 8)
@@ -1108,6 +1198,7 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     syvn_at = append(img, syv['notes'][1], 16)
     syvd_at = append(img, syv['data'][1], 16)
     syvm_at = append(img, syv['more'][1], 16)                  # SY test 24
+    tone_at = [append(img, syv[f'tone{k}'][1], 16) for k in range(3)]   # MIDI out test 4
     table = append(img, b'', 16)
     sy_lo, sy_hi = compile_module.sy_bss
     syv_lo, syv_hi = syv['bss']
@@ -1117,7 +1208,8 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
             [FLASH + syvn_at, syv['notes'][0], len(syv['notes'][1]), COPY],
             [FLASH + syvd_at, syv['data'][0], len(syv['data'][1]), COPY],
             [FLASH + syvm_at, syv['more'][0], len(syv['more'][1]), COPY],
-            [0, syv_lo, syv_hi - syv_lo, ZERO]]
+            [0, syv_lo, syv_hi - syv_lo, ZERO]] + \
+        [[FLASH + tone_at[k], syv[f'tone{k}'][0], len(syv[f'tone{k}'][1]), COPY] for k in range(3)]
     # SY test 22: the stock copy and zero handlers (0x600800e4, 0x60080100) move whole words only: a row's last
     # size % 4 bytes never arrive. Tests 20 and 21's .syvnotes was 5,526 bytes, so b_start's closing bx lr stayed
     # behind and the unit ran on into stale SDRAM (SY CRASH 6, PC 0x83fd8f96). The sections end word-aligned now.
@@ -1136,7 +1228,106 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='SY synth test 32: test 31 with SENS, a low-note fix, SHAPE / FILTER pages and cleaner chords, measured on the model guitar (the user: test with the model synthetic guitar, no worse latency, ENV / RESO labels kept). SENS (TRACK page, 50 as before) moves the tracker\'s floors -12..+12 dB (tt.sens_db; the voices\' old SENS gate is off): on the model guitar ~40 dB down 0 of 30 separate notes played, 30 of 30 at +12 (1 stray). The low-note fix: a murky reading 5+ semitones under the note with its band silent (the old and new strings read together in note-to-note picking: E2 for 5-20 ms) attacks at the same moment on the note sounding and moves to the next clean reading: model far-off starts 8 -> 0, no attack moved. SHAPE (SHIFT x3): ATTACK, RELEASE, GLIDE in round ms steps per tone (0 as designed; a tone whose own setting is ATTACK or GLIDE shares it); FILTER (SHIFT x4): ENV and RESO as offsets (shared with a tone whose own setting is ENV or RESO); file version 5 (296 bytes). Cleaner chords: a poly voice playing an overtone (3rd, 5th, 6th, 7th, 9th, 10th harmonic) of another note fades to -12 dB over 60 ms; the note manager unchanged (no start moved): model POLY PAD wrong notes 18.0% -> 8.9% of the sound. '
+        description='MIDI out test 14: test 13 with the user\'s final 32 sounds (tunetest/sy_final.py, written by '
+                    'analysis/midi-out/candidates/make_final.py): bank 1 pads 1-8 SYNC LEAD, LADDER LEAD, SH-101 LEAD, '
+                    'MARS LEAD, ODYSSEY LEAD, CHIP LEAD, HOOVER, SPOOKY 8-BIT, pads 9-16 POLY PAD, STRINGS, VECTOR PAD, '
+                    'OB PAD, JP WARM PAD, AM STRINGS, AAH CHOIR, HEAVENS GATE; bank 2 pads 1-8 BREATH HORNS, SG SYNTH, '
+                    'FAT BASS, ACID BASS, PUNCH BASS, SUB BASS, SH-101 BASS, TAL 101 BASS, pads 9-16 FM PIANO, M1 PIANO, '
+                    'FM CHORUS EP, SG ORGAN, RAVE ORGAN, POLY BRASS, SQ PROPHET, SUPERSAW; each as its audition build '
+                    'played it (SG SYNTH: SG PLUCK\'s gain and single notes); settings in their own file '
+                    'B:/_sy_sounds.bin (the old one is by slot). '
+                    'MIDI out test 13: test 12 with two conflicts from a review fixed: VALUE is not held back while ROLL is '
+                    'held on the Sound Generator page (note repeat\'s ROLL + VALUE press), and a held-back press goes to note '
+                    'repeat first, then stock; the pads stay stock\'s while MFX is held. '
+                    'MIDI out test 12: test 11 with the guitar synth screen\'s sounds in two banks of 16 (the '
+                    'user): SHIFT + pad 1 or 2 picks the bank (SHIFT + pads picked the sounds 17-32), pads 1-16 the sound '
+                    'in it; the pads lit: the current sound bright, pads 1-8 (leads and basses) dim cyan, 9-16 (chords) '
+                    'dim magenta, SHIFT held pads 1-2 the banks; stock\'s colours back as the screen closes. '
+                    'MIDI out test 11: test 10 with the guitar synth screen\'s FILTER page sorted out (the user: '
+                    '"some tone had env res screen with no adjustable paramters. but env on different screen"): a Sound '
+                    'Generator sound\'s ENV preset (its CTRL 1) is the FILTER page\'s ENV too, and a sound with no '
+                    'filter (the FM sounds) has no FILTER page (SHIFT steps past it). '
+                    'MIDI out test 10: test 9 with two chord fixes (the user on the chord sounds: "glitchy '
+                    'artifacts"; the chord test and a twin prototype, "Yes, build them"): a sounding chord voice given '
+                    'another note fades out over a block on its old pitch and starts the new one from silence (hard '
+                    'pitch switches 13.5 -> 0.4 a second on the model guitar), and a pick strikes only the FM voices it '
+                    'starts, a soft start keeping a sounding voice\'s FM (FM CHORUS EP\'s and MALLET\'s clicks gone); '
+                    'single-note sounds unchanged. '
+                    'MIDI out test 9: test 8 with MARK on the looper\'s page, while the looper waits or records '
+                    '(opened from the Sound Generator page), going back to that page in looper mode as SHIFT + RECORD '
+                    'SETTING does, so REC there flashes and stops the take (the user: "I WANT the same behaviour"). '
+                    'MIDI out test 8: test 7 with the guitar synth screen\'s ways in and out fixed (the user): on '
+                    'the Sound Generator page and the kits VALUE\'s push is held back until RECORD SETTING (the screen '
+                    'opens, VALUE never reaches stock) or anything else (stock gets it first; a plain push at its '
+                    'release); SHIFT + PATTERN EDIT on the screen goes to the kits; the screen\'s bar skips the SG\'s '
+                    'value box (it showed "OUT: D" and a white box). '
+                    'MIDI out test 7: test 6 with the looper\'s REC light kept (the user: MARK, REC with AUTO TRIG '
+                    'on, MARK back to the Sound Generator / kits or on to sample mode: "rec is not flashing but pressing '
+                    'pad triggers start of loop recording"; stock 5.52 does so in DM-404): on the Sound Generator page '
+                    'and the main screen REC flashes while the looper waits and blinks while it records, as on the '
+                    'looper\'s page; MARK, MARK from the guitar synth screen comes back to the screen; SG SYNTH (the '
+                    'Sound Generator as one patch: WAVE on CTRL 1, DUTY on TONE, the ENV preset on the FILTER page) in '
+                    'the engine and screen, for a tone set that has it. '
+                    'MIDI out test 6: test 5 with the playability study\'s fixes for single-note sounds '
+                    '(E:\\Claude\\sy_playability\\REPORT.md): in bands_mono a murky reading of a band that rang through '
+                    'the pluck starts nothing, a tracker note waiting for its band is kept while the tracker holds it, '
+                    'a reading backed by a struck peak attacks at once and an unbacked one waits for a second while '
+                    'strings ring, a long-gone note\'s ringing band does not restart it; the tracker measures the '
+                    'let-go level over a period and counts the ringing strings\' own reading as murky; a 4 ms dip on a '
+                    're-pick of a held single note; WHISTLE and HOOVER GLIDE 60 ms. '
+                    'MIDI out test 5: test 4 with the guitar\'s switches moved off EXT SOURCE (the user: "ext shouldn\'t '
+                    'cycle through 3 settings because user may want to switch to mic or something while playing '
+                    'machine"; then HOLD for switches, VALUE for screens). EXT SOURCE: the input only, as stock (on the '
+                    'Sound Generator page, where stock ignores it, a tap switches the input, and with its gate on '
+                    '(settings 0x58, EXT SOURCE + GATE) the input is on only while held). HOLD + EXT SOURCE on any page: '
+                    'the guitar synth on/off (its press and release taken, so the input and its gate are untouched; the '
+                    'input off no longer disarms it). HOLD + RECORD SETTING on the Sound Generator page, HOLD + PATTERN '
+                    'EDIT in the kits: the guitar\'s notes on/off (off: the guitar heard dry or through the guitar synth, '
+                    'which now plays there too). VALUE + RECORD SETTING: the guitar synth screen (was EXT SOURCE + '
+                    'RECORD SETTING). SHIFT held: PATTERN EDIT pulses with stock\'s RECORD SETTING / RESAMPLE hint (mode '
+                    '3) where SHIFT + PATTERN EDIT opens the kits. FX deep edit unchanged (HOLD + VALUE hidden FX, VALUE '
+                    '+ EXT SOURCE the input FX pages). '
+                    'MIDI out test 4: test 3 after the user\'s walkthrough. (1) Each mode its own M.CH: mo_channels keeps '
+                    'the SG\'s and the kits\' and puts the mode\'s own in the kits\' M.CH byte at a mode switch (MIDI in '
+                    'follows), SG 16 and kits 10 at power-on (test 2: the kits always on 10). (2) The guitar on both '
+                    'channels at once (mo_x): in the SG\'s mode the kits\' pad on the kits\' channel on picks only, in the '
+                    'kits the SG\'s note as heard on the SG\'s channel, moves too; nothing while both share a channel; the '
+                    'tracker word\'s bit 15 marks a move and the tracker moves in drum mode too (the kits strike on picks '
+                    'only). (3) Kits: pads 1-12 = E..D# in every octave (the user\'s map; SY test 6 folded notes past G3 '
+                    'onto pads 5-16). (4) EXT SOURCE tapped on the Sound Generator page (the kits, the guitar synth '
+                    'screen) steps NO EXT IN / REGULAR (the input on, the notes off or SOUND OFF) / GUITAR SYNTH, a popup '
+                    'each, the key\'s light out / white / green through the key light function 0x800d4910 and its table '
+                    'at 0x83008a24 (tests 2-3 left it lit with the notes off); EXT SOURCE + VALUE is gone. (5) MARK to '
+                    'the looper from the plain page keeps the guitar on the SG / kits (and MIDI out; the guitar synth off '
+                    'there): the mixer renders the SG on every page. (6) 32 guitar synth tones: pad 16 (was OFF) and SHIFT '
+                    '+ pads 6-16 the twelve new ones (pads 1-15 and SHIFT + pads 1-5 as before), settings file version 7 '
+                    '(a version 4-6 file\'s 20 tones read in), the tone table out of the module in three slots '
+                    '(.syvtone0..2). (7) CTRL 1: WIDTH thin to square, DRIVE clean to 16 x, RATE now WOBBLE (the LFO\'s '
+                    'depth with its speed). '
+                    'MIDI out test 3: test 2 after the user\'s hardware test ("still missing notes on acid bass ... hold '
+                    'gcea on 5th fret and pick back and forth slowly, some notes miss"): on the model guitar 3 of 13 '
+                    'such picks (the string before still ringing) read murky and low first, and test 32\'s placeholder '
+                    'attacked on the note sounding (that string) 8-13 ms before the picked note came in with no attack '
+                    'of its own. Such a reading now starts nothing: the pluck still owes its attack, which the next '
+                    'reading read twice or the tracker\'s note-on makes on the note picked; bands_mono only (every '
+                    'single-note tone and VOICES MONO), the chord tones untouched. '
+                    'MIDI out test 2: test 1 after the user\'s hardware test ("midi works but sends on ch 16 both sound '
+                    'gen/kits"; missing notes on ACID BASS; EXT SOURCE + SUB PAD a bad chord: SUB PAD retriggers pads; '
+                    'EXT SOURCE cannot be toggled on the Sound Generator page): the kits send on channel 10 (General '
+                    'MIDI drums), the SG on M.CH; EXT SOURCE + VALUE\'s push switches the guitar\'s notes on the page '
+                    '(SUB PAD stock\'s again); EXT SOURCE tapped alone on the page switches the input (the stock setter, '
+                    'as bounce does); ACID BASS retriggers (every pick attacks, slides and hammer-ons still slide: as a '
+                    'legato tone a pick over its ringing note slid in silently under test 33\'s 303 envelope). '
+                    'MIDI out test 1: SY synth test 34 with the Sound Generator\'s and the kits\' notes out over MIDI '
+                    '(USB and MIDI OUT; stock 5.52 sends PAD Note Out for sample pads only), while PAD Note Out is on, '
+                    'on M.CH: SG pads as heard (the SG\'s pitch + 36), kit pads 36..51, the guitar\'s notes on the SG '
+                    'page (syn_ui: its MIDI note - 12, kits 36..51), with ARP on the arp\'s notes (mo_arp_scan after '
+                    'every audio block, queued); sent from the UI task through the stock link writer 0x800d93f0 with '
+                    'stock\'s gates; every note on gets its note-off (page left, PAD Note Out off, M.CH changed); not '
+                    'the guitar synth screen, not MIDI coming in. '
+                    'SY synth test 34: test 33 after the user\'s hardware test ("tracking works well, no obvious missed or extra notes"): each tone\'s own setting (CTRL 1) no longer one the SHAPE or FILTER page has (POLY PAD and STRINGS RATE, POLY KEYS and PUNCH BASS WIDTH (P_DUTY, renamed), the rest DRIVE), settings file version 6 (a version 4 / 5 file\'s shared ENV / RESO moved to FILTER, a changed CTRL 1 to the middle); SG ORGAN DUTY 90 (every drawbar) and SG CZ KEYS DUTY 90 (DUTY 60 was its fundamental and little more) so they no longer sound like the plain guitar; every tone 6 dB down (resampling was at full scale), SG ORGAN / CZ KEYS levelled to the median. '
+                    'SY synth test 33: test 32 with nine of the style tones moved towards the instruments they are styled on, measured against the official plugins (JUNO-106, JUPITER-8, TB-303) and Dexed with the DX7 factory cartridge (E.PIANO 1, TUB BELLS), notes set directly at a steady level, mono and dry: values only (cutoff, filter envelope, resonance, key tracking, envelope times, sub, pulse width, FM depths) in POLY PAD, STRINGS, POLY BRASS, ENSEMBLE, POLY KEYS, SYNC LEAD, ACID BASS, FM PIANO and FM BELL, their gains matched to the old loudness (peaks under 0.9); no attack slower, no oscillator, filter or voice added (E:/Claude/sy32_demos/emulations). '
+                    'SY synth test 32: test 31 with SENS, a low-note fix, SHAPE / FILTER pages and cleaner chords, measured on the model guitar (the user: test with the model synthetic guitar, no worse latency, ENV / RESO labels kept). SENS (TRACK page, 50 as before) moves the tracker\'s floors -12..+12 dB (tt.sens_db; the voices\' old SENS gate is off): on the model guitar ~40 dB down 0 of 30 separate notes played, 30 of 30 at +12 (1 stray). The low-note fix: a murky reading 5+ semitones under the note with its band silent (the old and new strings read together in note-to-note picking: E2 for 5-20 ms) attacks at the same moment on the note sounding and moves to the next clean reading: model far-off starts 8 -> 0, no attack moved. SHAPE (SHIFT x3): ATTACK, RELEASE, GLIDE in round ms steps per tone (0 as designed; a tone whose own setting is ATTACK or GLIDE shares it); FILTER (SHIFT x4): ENV and RESO as offsets (shared with a tone whose own setting is ENV or RESO); file version 5 (296 bytes). Cleaner chords: a poly voice playing an overtone (3rd, 5th, 6th, 7th, 9th, 10th harmonic) of another note fades to -12 dB over 60 ms; the note manager unchanged (no start moved): model POLY PAD wrong notes 18.0% -> 8.9% of the sound. '
                     'SY synth test 31: test 30 with two controls on the Sound Generator page (the plain page, the kits). EXT SOURCE held + SUB PAD switches the guitar\'s notes there off and on again (a popup, GUITAR NOTES OFF / ON; kept in the file, byte 6 bit 1; the input left as it is: stock ignores EXT SOURCE on that page, DM-404): off, the page plays no guitar note, the tracker stops there and ROUTING is the user\'s again (unless the guitar synth is armed). REMAIN: an FX screen up but not frozen (the 2 s one after an FX button) no longer lets REMAIN\'s press on to the page (on the unit REMAIN + FX on a lit effect stepped the preview bus); a frozen one is closed and REMAIN stays held, so the FX button after it opens it frozen again; any key while REMAIN is held makes it no tap (REMAIN + EXT SOURCE stepped the preview bus too). The guitar synth\'s sound is test 30\'s. '
                     'SY synth test 30: test 29 (combined-test20) with the lead notes and GLITCH\'s pops worked on (the user: lead tones "either missing notes or extra notes sometimes"; GLITCH "fizzy pops"). The tracker: a quick move attacks only when the level held over it (test 27\'s fired on let-gos: the finger sliding on as it lets go), and a pick from quiet softer than the note before is heard (the envelope waived when the 21 ms before were quiet). The voices: a tracker\'s note plays its band\'s centre while the band still reads the note before (its first 40 blocks, 60 cents), and a reading 1-2 blocks after a pluck starts a note only when clean or read twice (the pick\'s noise). GLITCH: the stutter is a 6.7 ms dip, not a cut and a new attack, and no voice drops out at 5%. On the user\'s take, SYNC LEAD: extra short notes 80 -> 59, first notes wrong 3 -> 1; every other note 12 dB softer: picks attacked 197 -> 232 of 241; picked note to note at even strength 103 -> 101 of 233; chords below GLITCH 50 the same, sample for sample; POLY PAD at 100: loud clicks 4.2 -> 1.6 a second. '
                     'SY synth test 29: test 28 on combined-test20 (combined-test19 with FX deep edit test15: the hidden FX settings open on every FX screen: the Sound Generator page, where the kits and this screen are, and REMAIN + FX on an unlit effect, page 34; stock sends VALUE to the FX screen on the main page only). The guitar synth is test 28\'s, value for value. '
@@ -1409,17 +1600,29 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
                          what='SY test 11: its constants, wave helper and output stage (.syvdata)'),
                     dict(kind='copy', address=syv['more'][0], size=len(syv['more'][1]), file_offset=syvm_at,
                          what='SY test 24: the mono notes, test 11\'s (GLITCH), two passes (.syvmore)'),
-                    dict(kind='zero', address=syv_lo, size=syv_hi - syv_lo, what='SY test 11: its state (syv_state)')],
+                    dict(kind='zero', address=syv_lo, size=syv_hi - syv_lo, what='SY test 11: its state (syv_state)')] +
+                   [dict(kind='copy', address=syv[f'tone{k}'][0], size=len(syv[f'tone{k}'][1]), file_offset=tone_at[k],
+                         what=f'MIDI out test 4: the tones\' table, part {k + 1} of 3 (.syvtone{k})') for k in range(3)],
         syv=dict(text=dict(slot=list(SYV_TEXT), size=len(syv['text'][1]), sha256=sha(syv['text'][1])),
                  notes=dict(slot=list(SYV_NOTES), size=len(syv['notes'][1]), sha256=sha(syv['notes'][1])),
                  data=dict(slot=list(SYV_DATA), size=len(syv['data'][1]), sha256=sha(syv['data'][1])),
                  more=dict(slot=list(SYV_MORE), size=len(syv['more'][1]), sha256=sha(syv['more'][1])),
+                 **{f'tone{k}': dict(slot=list((SYV_TONES0, SYV_TONES1, SYV_TONES2)[k]), size=len(syv[f'tone{k}'][1]),
+                                     sha256=sha(syv[f'tone{k}'][1])) for k in range(3)},
                  state=dict(slot=list(SYV_BSS), used=[syv_lo, syv_hi]),
                  tones=[t['name'] for t in sy_voices.VOICES], gains=sy_voices.VOICE_GAINS, vref=sy_voices.VREF),
         sy_bss=dict(slot=[SY_BSS[0], SY_BSS[1]], used=[sy_lo, sy_hi]),
         sytext=dict(slot=[SY_TEXT[0], SY_TEXT[1]], address=sytext[0], size=len(sytext[1]), file_offset=sytext_at,
                     sha256=sha(sytext[1])),
         dt1_hook=dt1_info, nr_hook=nr_info, screen=guards['screen'],
+        midi_out=dict(hook=guards['midi_out'], links={k: hex(v) for k, v in MO_LINKS.items()},
+                      sends='mo_raw: [0x90 | code, status, note, velocity] through the link writer 0x800d93f0 (cable 9; '
+                            'code 9 note on, 8 note off at velocity 64), UI task only',
+                      notes='SG pads: pitch + 36; kit pads: 36 + pad; the guitar on the SG page: its SG MIDI note - 12 '
+                            '(kits: 36..51); ARP on: the arp\'s voices\' notes (pitch + 36, kits 36 + their pad)',
+                      gates='a note-on: PAD Note Out (0x1c5) on, setting 0x5d of 0x82e01144 not 2, [0x82e01144 + 0x64] '
+                            'clear; channel M.CH (0x83fbfcbc), the kits channel 10 (test 2); a note-off for every note '
+                            'on, always'),
         routing=dict(hold='while EXT SOURCE is on and the SY synth is not off (or on the Sound Generator page): '
                           'ROUTING (system 0x5c) goes to the chip as ExtIn, the user\'s value kept and sent back after',
                      recorder='the feed\'s pair 0 (when it takes pair 0): ROUTING Mix -> pair 1 x 2 (the mix before '
