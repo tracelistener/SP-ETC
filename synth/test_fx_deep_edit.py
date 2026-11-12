@@ -71,6 +71,7 @@ DEFAULTS, MINIMA, MAXIMA, RECORDS, NAMES = 0x801ABE64, 0x801AD1FC, 0x801AC830, 0
 FXTYPE_SENT = 0x80246F38
 EV_KEY, EV_KEY_UP, EV_ENCODER, EV_KNOB, EV_PAD, EV_PAD_UP = 5, 6, 7, 9, 0x10, 0x11
 KEY_EXIT, KEY_VALUE, KEY_SHIFT = 0x22, 0x31, 0x2A
+KEY_MFX = 0x30                                           # test16: HOLD + MFX is the switch
 HEADER = bytes([0xF0, 0x41, 0x10, 0x00, 0x00, 0x00, 0x00, 0x08, 0x12])
 PAGE_MS, GONE_MS = 10000, 1
 TAPE_ECHO, REVERB, CRUSHER, EQUALIZER = 9, 10, 4, 19
@@ -295,7 +296,7 @@ class Machine:
         b = bytes(self.uc.mem_read(self.sym['fde'], 48))
         return dict(screen=b[0], input=b[1], ext_held=b[2], value_down=b[3], bus=b[4], effect=b[5], off=b[6],
                     value_taken=b[7], sent=struct.unpack_from('<I', b, 8)[0],
-                    resent=struct.unpack_from('<I', b, 12)[0], loaded=b[16], dirty=b[17], redraw=b[18],
+                    resent=struct.unpack_from('<I', b, 12)[0], loaded=b[16], dirty=b[17], redraw=b[18], mfx_held=b[19],
                     loads=struct.unpack_from('<I', b, 20)[0], bad_files=struct.unpack_from('<I', b, 24)[0],
                     saves=struct.unpack_from('<I', b, 28)[0], save_errors=struct.unpack_from('<I', b, 32)[0],
                     redraw_at=struct.unpack_from('<I', b, 36)[0], redraws=struct.unpack_from('<I', b, 40)[0],
@@ -881,10 +882,13 @@ def passthrough_checks(img, parent, man):
 
 
 GT_AMP_SIM, KEY_EXT = 23, 0x12
+HOLD_VALUE = [(EV_KEY, KEY_HOLD), (EV_KEY, KEY_VALUE), (EV_KEY_UP, KEY_VALUE), (EV_KEY_UP, KEY_HOLD)]     # test16
+VALUE_EXT = [(EV_KEY, KEY_VALUE), (EV_KEY, KEY_EXT), (EV_KEY_UP, KEY_EXT), (EV_KEY_UP, KEY_VALUE)]      # tests 9-15
 
 
 def input_text(st, fx, screen, values=None):
-    """An input FX extra screen opened with VALUE + EXT SOURCE (test9): numbered among the extra screens alone."""
+    """An input FX extra screen (test9; opened with HOLD + VALUE since test16): numbered among the extra screens
+    alone."""
     x = st.by_fx[fx]
     lines = [f'{st.effect_names[fx]} {screen}/{(len(x) + 2) // 3}']
     for k, y in enumerate(x[(screen - 1) * 3:screen * 3]):
@@ -905,16 +909,22 @@ def input_checks(img, parent, man, st):
     e = man['entries']
     gt = st.by_fx[GT_AMP_SIM]
     n = (len(gt) + 2) // 3
-    chord = [(EV_KEY, KEY_VALUE), (EV_KEY, KEY_EXT), (EV_KEY_UP, KEY_EXT), (EV_KEY_UP, KEY_VALUE)]
+    chord = HOLD_VALUE
     m, p = input_machine(img, man), input_machine(parent, None)
     a, b = run_script(p, chord), run_script(m, chord)
     first = input_text(st, GT_AMP_SIM, 1)
     st0 = m.state()
     check(b[0] == a[0] and b[1][2] == ((first, SCREEN_MS),) and not b[1][3] and not b[1][4] and not b[1][1] and
           b[2][1:5] == (b'', (), (), ()) and b[3] == a[3] and a[1][3] and st0['input'] == 1 and st0['bus'] == 0 and
-          st0['effect'] == GT_AMP_SIM and st0['screen'] == 1,
-          f'test9: VALUE held + EXT SOURCE opens the input FX\'s first extra screen ({first!r}); the EXT SOURCE press '
-          f'and release are taken (nothing to DOOM OS\'s filter or the chip; the parent passes the press on)')
+          st0['effect'] == GT_AMP_SIM and st0['screen'] == 1 and st0['value_taken'] == 0,
+          f'test16: HOLD + VALUE opens the input FX\'s first extra screen ({first!r}); the VALUE press and release are '
+          f'taken (nothing to DOOM OS\'s filter or the chip; the parent passes the press on); HOLD as on the parent')
+    m2 = input_machine(img, man)
+    run_script(m2, chord)
+    again = run_script(m2, chord)
+    check(again[1][2] == ((input_text(st, GT_AMP_SIM, 2), SCREEN_MS),) and not again[1][3] and
+          m2.state()['screen'] == 2 and m2.state()['input'] == 1,
+          'test16: HOLD + VALUE again on the input FX\'s screens steps them, as VALUE alone does')
     seq = []
     for k in range(n):
         out = run_script(m, [(EV_KEY, KEY_VALUE), (EV_KEY_UP, KEY_VALUE)])
@@ -943,39 +953,37 @@ def input_checks(img, parent, man, st):
     check(st1['screen'] == 0 and st1['input'] == 0 and len(gone[0][2]) == 1 and gone[0][2][0][1] == GONE_MS and
           gone[0][3] and after[0][3] and not after[0][2],
           'another button (EXIT) leaves: the screen goes, and VALUE is stock\'s again')
-    # An input FX with no extra settings (Crusher), or none: nothing shows, the EXT SOURCE press is still taken.
+    # An input FX with no extra settings (Crusher), or none: nothing shows, the VALUE press is still taken.
     res = []
     for fx_in in (CRUSHER, 0):
         mm = input_machine(img, man, fx_in)
         out = run_script(mm, chord)
         res.append((out[1][2], out[1][3], out[1][1], out[2][3], mm.state()['screen'], mm.state()['input']))
     check(all(r == ((), (), b'', (), 0, 0) for r in res),
-          f'an input FX without extra settings, or none: nothing shown, the input not switched ({res})')
-    # test10: on a page the dispatcher hands nothing to (not TOP), the chord still opens and EXT SOURCE is still taken.
+          f'an input FX without extra settings, or none: nothing shown, the VALUE press still taken ({res})')
+    # test10: on a page the dispatcher hands nothing to (not TOP), the chord still opens and VALUE is still taken.
     mm = input_machine(img, man)
     mm.uc.mem_write(PAGE_LIVE, struct.pack('<H', 7))
     out = run_script(mm, chord)
     check(out[1][2] == ((first, SCREEN_MS),) and not out[1][1] and not out[1][3] and out[2][1:5] == (b'', (), (), ()) and
           mm.state()['input'] == 1,
-          'test10: with no page taking events (another page than TOP), VALUE + EXT SOURCE still opens the input FX\'s '
-          'first screen and the input is not switched')
-    # test10: VALUE's hold as the dispatcher's handlers saw it is enough (its bit in 0x80592448 cleared by hand).
+          'test10: with no page taking events (another page than TOP), HOLD + VALUE still opens the input FX\'s '
+          'first screen')
+    # test16: VALUE + EXT SOURCE is no chord of this module now: as on the parent, the EXT SOURCE press reaching DOOM
+    # OS's filter and stock (the input switches), no screen.
+    x, y = run_script(input_machine(parent, None), VALUE_EXT), run_script(input_machine(img, man), VALUE_EXT)
     mm = input_machine(img, man)
-    run_script(mm, [(EV_KEY, KEY_VALUE)])
-    keys = bytearray(mm.uc.mem_read(KEYS, 16))
-    keys[KEY_VALUE >> 3] &= ~(1 << (KEY_VALUE & 7)) & 0xFF
-    mm.uc.mem_write(KEYS, bytes(keys))
-    out = run_script(mm, [(EV_KEY, KEY_EXT), (EV_KEY_UP, KEY_EXT), (EV_KEY_UP, KEY_VALUE)])
-    check(out[0][2] == ((first, SCREEN_MS),) and not out[0][1] and mm.state()['value_down'] == 0,
-          'test10: VALUE held per the dispatcher\'s own press and release is enough for the chord, and its release '
-          'ends it')
+    run_script(mm, VALUE_EXT)
+    check(x == y and x[1][3] and mm.state()['input'] == 0 and mm.state()['screen'] == 0,
+          'test16: VALUE + EXT SOURCE as on the parent (the EXT SOURCE press goes on to DOOM OS\'s filter and the '
+          'stock handling; no input FX screen)')
     # EXT SOURCE alone (no VALUE): as the parent.
     x, y = run_script(input_machine(parent, None), [(EV_KEY, KEY_EXT), (EV_KEY_UP, KEY_EXT)]), \
         run_script(input_machine(img, man), [(EV_KEY, KEY_EXT), (EV_KEY_UP, KEY_EXT)])
     check(x == y and x[0][3], 'EXT SOURCE alone: as on the parent (it reaches DOOM OS\'s filter and the stock handling)')
 
 
-# ---- test11: HOLD + VALUE, and the edits kept over a restart ----
+# ---- test11: the switch (test16: HOLD + MFX), and the edits kept over a restart ----
 FILE = dict(open=0x800DEC60, read=0x800DEC48, write=0x800DD9B8, close=0x800DEBD8)
 SAVED, TOGGLE_MS = 'B:/_fx_hidden.bin', 1500
 
@@ -1055,17 +1063,23 @@ def read_saved(b):
     return b[5], [struct.unpack_from('<BBH', b, 12 + 4 * k) for k in range(n)]
 
 
-def hold_value(m):
-    """HOLD down, VALUE pressed and let go, HOLD let go; the VALUE press's frames, popups and filter calls."""
+def hold_key(m, key):
+    """HOLD down, KEY pressed and let go, HOLD let go; the press's frames, popups and filter calls, and the release's
+    filter calls."""
     m.dispatch(EV_KEY, KEY_HOLD)
     m.clear()
-    m.dispatch(EV_KEY, KEY_VALUE)
+    m.dispatch(EV_KEY, key)
     got = (m.frames(), list(m.popups), list(m.doom))
     m.clear()
-    m.dispatch(EV_KEY_UP, KEY_VALUE)
+    m.dispatch(EV_KEY_UP, key)
     up = list(m.doom)
     m.dispatch(EV_KEY_UP, KEY_HOLD)
     return got + (up,)
+
+
+def hold_mfx(m):
+    """Test16: HOLD + MFX, the switch (HOLD + VALUE in tests 11-15)."""
+    return hold_key(m, KEY_MFX)
 
 
 def toggle_checks(img, parent, man, st):
@@ -1096,12 +1110,12 @@ def toggle_checks(img, parent, man, st):
     held = [run_script(x, [(EV_KEY, KEY_HOLD)]) for x in (p, m)]
     for x in (p, m):
         x.dispatch(EV_KEY_UP, KEY_HOLD)
-    (got, other, ok), pops, doom, up = hold_value(m)
+    (got, other, ok), pops, doom, up = hold_mfx(m)
     want = sent(lambda bus, name: te[name][1]['default'])
     check(held[0] == held[1] and ok and got == want and pops == [('HIDDEN FX OFF', TOGGLE_MS)] and not doom and
-          not up and m.state()['off'] == 1 and m.state()['value_taken'] == 0,
-          f'test11: HOLD + VALUE: HIDDEN FX OFF, each slot\'s edited Tape Echo settings back to their defaults '
-          f'({len(want)} DT1s, slot by slot in table order); the VALUE press and release taken; HOLD alone as on '
+          not up and m.state()['off'] == 1 and m.state()['mfx_held'] == 0 and m.state()['value_taken'] == 0,
+          f'test16: HOLD + MFX: HIDDEN FX OFF, each slot\'s edited Tape Echo settings back to their defaults '
+          f'({len(want)} DT1s, slot by slot in table order); the MFX press and release taken; HOLD alone as on '
           f'the parent')
     out = []
     for mm in (p, m):
@@ -1110,15 +1124,16 @@ def toggle_checks(img, parent, man, st):
         mm.set_bus(1, TAPE_ECHO)
         out.append(mm.frames())
     check(out[0] == out[1] and out[0][2], 'off: BUS 1 back to Tape Echo sends the parent\'s frames only (no edits)')
-    chord = [(EV_KEY, KEY_VALUE), (EV_KEY, KEY_EXT), (EV_KEY_UP, KEY_EXT), (EV_KEY_UP, KEY_VALUE)]
-    a, b = run_script(p, chord), run_script(m, chord)
-    check(a == b and m.state()['input'] == 0, 'off: VALUE + EXT SOURCE as on the parent (the input FX\'s screens '
-                                              'don\'t open, EXT SOURCE is stock\'s)')
+    a, b = run_script(p, HOLD_VALUE), run_script(m, HOLD_VALUE)
+    c, d = run_script(p, VALUE_EXT), run_script(m, VALUE_EXT)
+    check(a == b and c == d and a[1][3] and m.state()['input'] == 0,
+          'off: HOLD + VALUE goes on as on the parent (the input FX\'s screens don\'t open), and VALUE + EXT SOURCE '
+          'too (EXT SOURCE is stock\'s)')
     seqs = []
     for image, man_ in ((parent, None), (img, man)):
         mm, ss = fx_machine(image, man_)
         if man_:
-            hold_value(mm)
+            hold_mfx(mm)
         ss.open()
         mm.bus_effect(1, TAPE_ECHO)
         seq = []
@@ -1129,10 +1144,10 @@ def toggle_checks(img, parent, man, st):
         seqs.append(seq)
     check(seqs[0] == seqs[1], f'off: on the FX screen (REMAIN + FX) VALUE is stock\'s toggle of screens 1 and 2, no '
                               f'extra screens ({seqs[1]})')
-    (got, other, ok), pops, doom, up = hold_value(m)
+    (got, other, ok), pops, doom, up = hold_mfx(m)
     want = sent(lambda bus, name: edits[(bus, name)])
     check(ok and got == want and pops == [('HIDDEN FX ON', TOGGLE_MS)] and m.state()['off'] == 0,
-          f'HOLD + VALUE again: HIDDEN FX ON and the edits sent again ({len(want)} DT1s)')
+          f'HOLD + MFX again: HIDDEN FX ON and the edits sent again ({len(want)} DT1s)')
     out = []
     for mm in (p, m):
         mm.clear()
@@ -1149,7 +1164,7 @@ def saved_checks(img, man, st):
     x0 = st.by_fx[GT_AMP_SIM][0]                        # the input FX's first extra screen, CTRL 1
     raw, other_raw = (0, 127) if x0['default'] != x0['min'] else (127, 0)
     tv, ov = (x0['min'], x0['max']) if raw == 0 else (x0['max'], x0['min'])     # a turn that changes it, and back
-    chord = [(EV_KEY, KEY_VALUE), (EV_KEY, KEY_EXT), (EV_KEY_UP, KEY_EXT), (EV_KEY_UP, KEY_VALUE)]
+    chord = HOLD_VALUE
     leave = [(EV_KEY, KEY_EXIT), (EV_KEY_UP, KEY_EXIT)]
 
     def fresh(files=None):
@@ -1205,14 +1220,14 @@ def saved_checks(img, man, st):
     check(fx_frame(GT_AMP_SIM, 0, x0['aa'], tv) in m.frames()[0],
           'and an FxType for the input FX re-sends it, as an edit made since boot')
     # switched off: kept too; after a restart nothing is sent
-    hold_value(m)
+    hold_mfx(m)
     off_file = bytes(m.files[SAVED])
     m2 = fresh({SAVED: off_file})
     sent2 = first_event(m2)[0]
     check(read_saved(off_file) == (1, [(0, tv, x0['id'])]) and m2.state()['off'] == 1 and not sent2 and
           m2.state()['loads'] == 1,
-          'HOLD + VALUE writes the switch: switched off, a restart sends nothing and stays off')
-    (got2, _, ok2), pops, _, _ = hold_value(m2)
+          'HOLD + MFX writes the switch: switched off, a restart sends nothing and stays off')
+    (got2, _, ok2), pops, _, _ = hold_mfx(m2)
     check(ok2 and got2 == [fx_frame(GT_AMP_SIM, 0, x0['aa'], tv)] and pops == [('HIDDEN FX ON', TOGGLE_MS)] and
           read_saved(m2.files[SAVED]) == (0, [(0, tv, x0['id'])]),
           'switched on again there: the edit is sent and the file says on')
@@ -1253,19 +1268,23 @@ FX_SHOWN = 0x8059259C                                   # the FX screen, from wh
 
 
 def screen_stay_checks(img, parent, man, st):
-    """Test12: HOLD + VALUE with the FX screen up holds it; the file waits until no FX screen is up."""
+    """Test12: the switch (test16: HOLD + MFX) with the FX screen up holds it; the file waits until no FX screen is
+    up."""
     e = man['entries']
     res = []
     for image, man_ in ((parent, None), (img, man)):
         mm, ss = fx_machine(image, man_)
         ss.open(remain=False)                           # the FX button alone: the screen that goes after 2 s
         mm.bus_effect(1, TAPE_ECHO)
-        hold_value(mm)
+        if man_:
+            hold_mfx(mm)
+        else:
+            hold_key(mm, KEY_VALUE)                     # the parent: HOLD + VALUE, as tests 12-15 compared
         mm.bus_effect(1, TAPE_ECHO)
         res.append((ss.flag(VIEW_REMAIN), mm.uc.mem_read(REMAIN_GLOBAL, 1)[0], bool(ss.run(2500))))
     check(res[0] == (0, 0, True) and res[1] == (1, 1, False),
-          f'test12: with the FX screen up (opened by its button alone), HOLD + VALUE holds it (+0x1b3f, 0x80592320) and '
-          f'it stays past 2 s; on the parent it goes ({res})')
+          f'test12: with the FX screen up (opened by its button alone), HOLD + MFX holds it (+0x1b3f, 0x80592320) and '
+          f'it stays past 2 s; on the parent (HOLD + VALUE) it goes ({res})')
     # the file: nothing written while the FX screen is up; at the first key release after it is gone
     m = FileMachine(img, e)
     m.set_bus(1, TAPE_ECHO)
@@ -1277,7 +1296,7 @@ def screen_stay_checks(img, parent, man, st):
     m.dispatch(EV_KNOB, 1, 127)
     sc.value()
     sc.value()                                          # on past the last extra screens: screen 1 again
-    hold_value(m)
+    hold_mfx(m)
     during = [f for f in m.fs if f[1] == SAVED and f[0] == 'write']
     pending = m.state()['dirty']
     m.call(0x800C4E50, m.r32(TOP_PAGE) + 0x38, 4, 1, count=20_000_000)   # the FX screen closed, as stock closes it
@@ -1287,7 +1306,7 @@ def screen_stay_checks(img, parent, man, st):
     got = read_saved(m.files.get(SAVED))
     te = st.by_fx[TAPE_ECHO][0]
     check(not during and pending == 1 and not on_press and got == (1, [(1, te['max'], te['id'])]),
-          f'an edit on the FX screen and HOLD + VALUE there: nothing written while the FX screen is up (it is still '
+          f'an edit on the FX screen and HOLD + MFX there: nothing written while the FX screen is up (it is still '
           f'pending), nor on the next key press; the next key release after the screen is gone writes both ({got})')
 
 
@@ -1326,7 +1345,7 @@ def chip_redraw_checks(img, parent, man, st):
     check(out[0][0] == 0x80146599 and out[1][0] == e['fde_fx_update'] and out[0][1:] == out[1][1:],
           f'the FX screen\'s vtable +0x28 is fde_fx_update ({out[1][0]:#x}); 3 s of its updates through it leave the '
           f'screen and its globals as the stock update does')
-    # HOLD + VALUE on it: the screen draws again once the popup's time is over and no popup is up
+    # HOLD + MFX on it: the screen draws again once the popup's time is over and no popup is up
     m, sc = fx_machine(img, man)
     sc.open()
     m.bus_effect(1, TAPE_ECHO)
@@ -1335,7 +1354,7 @@ def chip_redraw_checks(img, parent, man, st):
     for _ in range(3):
         m.call(fn, v, count=20_000_000)
     m.w32(CLOCK, 1000)
-    hold_value(m)
+    hold_mfx(m)
     writes = []
     m.uc.hook_add(UC_HOOK_MEM_WRITE, lambda uc, acc, a, size, value, _: writes.append((a, value)), None,
                   begin=DRAWN_SCREEN2, end=DRAWN_SCREEN2)
@@ -1353,7 +1372,7 @@ def chip_redraw_checks(img, parent, man, st):
         seq.append((m.state()['redraws'], len(drawn) == 2 and drawn[0] == 0xFFFFFFFF and drawn[1] in (0, 1),
                     1 in flag))
     check(seq == [(0, False, False)] * 3 + [(1, True, True), (1, False, False)],
-          f'after HOLD + VALUE on the FX screen: no redraw while the popup\'s 1.6 s run or a popup is still up; the '
+          f'after HOLD + MFX on the FX screen: no redraw while the popup\'s 1.6 s run or a popup is still up; the '
           f'first update after both takes its screen as changed (0x8059232c set to -1, then back to what it draws) and '
           f'asks to draw it (+0x1b15 = 1), once ({seq})')
 
@@ -1392,6 +1411,98 @@ def pointer_checks(img, parent, man, st):
           'with no FX screen up, TOP\'s filter leaves stock\'s pointer alone')
 
 
+KEY_PRESS, KEY_RELEASE, KNOB_HANDLER = 0x8003ABD0, 0x8003ADA0, 0x8003A8D8   # the dispatcher's type 5, 6, 9 handlers
+
+
+def anypage_checks(img, parent, man, st):
+    """Test15: an FX screen up where TOP's object is gone (on the unit: page 34 after REMAIN + FX on an unlit effect,
+    the Sound Generator page 30 with the kits and the guitar synth screen), stock's pointer to it the only way there:
+    VALUE through the dispatcher's key press handler steps it (screen 2, then the hidden settings) and is taken, its
+    release too; CTRL 1 edits the setting shown; a key but VALUE and SHIFT leaves; with the hidden settings off, or no
+    FX screen up, VALUE goes on as before."""
+    rt = Runtime(parent)
+    e = man['entries']
+    m, sc = fx_machine(img, man)
+    v = sc.open()
+    m.bus_effect(1, TAPE_ECHO)
+    m.w32(TOP_PAGE, 0)                                  # TOP's object gone, as on those pages; stock's pointer kept
+
+    def ev(kind, a1=0, a2=0):
+        m.uc.mem_write(EVENT, struct.pack('<6h', kind, a1, a2, 0, 0, 0))
+        return EVENT
+
+    seq = []
+    for _ in range(2):
+        m.clear()
+        m.call(KEY_PRESS, ev(EV_KEY, KEY_VALUE), count=20_000_000)
+        taken, held = m.state()['value_taken'], (m.uc.mem_read(KEYS + (KEY_VALUE >> 3), 1)[0] >> (KEY_VALUE & 7)) & 1
+        m.call(KEY_RELEASE, ev(EV_KEY_UP, KEY_VALUE), count=20_000_000)
+        seq.append((sc.flag(VIEW_SCREEN2), m.popups, taken, held, m.state()['value_taken'],
+                    (m.uc.mem_read(KEYS + (KEY_VALUE >> 3), 1)[0] >> (KEY_VALUE & 7)) & 1, m.state()['value_down']))
+    want = [(1, [], 2, 1, 0, 0, 0), (1, [(screen_text(rt, st, 1, TAPE_ECHO, 1), SCREEN_MS)], 2, 1, 0, 0, 0)]
+    check(m.r32(FX_SHOWN) == v and m.r32(TOP_PAGE) == 0 and seq == want,
+          f'test15: with TOP\'s object gone and only stock\'s pointer to the FX screen (page 34, the Sound Generator '
+          f'page), VALUE through the dispatcher\'s key press handler steps to screen 2, then the hidden settings, '
+          f'press and release taken, VALUE\'s held bit set from one to the other as stock\'s own press sets it ({seq})')
+    x0 = st.by_fx[TAPE_ECHO][0]
+    m.clear()
+    sent = m.state()['sent']
+    m.call(KNOB_HANDLER, ev(EV_KNOB, 1, 127), count=20_000_000)
+    got = m.frames()[0]
+    text = screen_text(rt, st, 1, TAPE_ECHO, 1, {x0['name']: x0['max']})
+    check(got == [fx_frame(TAPE_ECHO, 1, x0['aa'], x0['max'])] and m.state()['sent'] == sent + 1 and
+          m.popups == [(text, SCREEN_MS)],
+          f'test15: there CTRL 1 edits the first hidden setting shown ({x0["name"]} to {x0["max"]}: {len(got)} DT1, '
+          f'the screen again)')
+    m.clear()
+    left = m.call(e['fde_key_down'], ev(EV_KEY, KEY_EXIT))
+    check(left == 0 and m.state()['screen'] == 0 and m.popups and m.popups[-1][1] == GONE_MS,
+          'test15: there a key but VALUE and SHIFT leaves the hidden settings and goes on (not taken)')
+    m.uc.mem_write(e['fde'] + 6, b'\x01')               # the hidden settings off
+    off = m.call(e['fde_key_down'], ev(EV_KEY, KEY_VALUE))
+    m.call(e['fde_key_up'], ev(EV_KEY_UP, KEY_VALUE))
+    m.uc.mem_write(e['fde'] + 6, b'\x00')
+    m.w32(FX_SHOWN, 0)                                  # no FX screen up
+    none = m.call(e['fde_key_down'], ev(EV_KEY, KEY_VALUE))
+    held = m.state()['value_down']
+    m.call(e['fde_key_up'], ev(EV_KEY_UP, KEY_VALUE))
+    check(off == 0 and none == 0 and held == 1 and m.state()['value_down'] == 0,
+          'test15: with the hidden settings off, or no FX screen up, VALUE is not taken (held until its release)')
+
+
+def gone_checks(img, parent, man, st):
+    """Test15: on the unit page 34 (REMAIN + FX on an unlit effect) closes when the hidden settings' popup opens, its
+    FX screen with it (DM-404): VALUE then steps the extra screens without an FX screen, and leaves after the last."""
+    rt = Runtime(parent)
+    e = man['entries']
+    m, sc = fx_machine(img, man)
+    sc.open()
+    m.bus_effect(1, TAPE_ECHO)
+    m.w32(TOP_PAGE, 0)
+
+    def ev(kind, a1=0, a2=0):
+        m.uc.mem_write(EVENT, struct.pack('<6h', kind, a1, a2, 0, 0, 0))
+        return EVENT
+
+    for _ in range(2):                                  # screen 2, then the first extra screen
+        m.call(e['fde_key_down'], ev(EV_KEY, KEY_VALUE))
+        m.call(e['fde_key_up'], ev(EV_KEY_UP, KEY_VALUE))
+    first = m.state()['screen']
+    m.w32(FX_SHOWN, 0)                                  # the FX screen gone with page 34
+    screens = (len(st.by_fx[TAPE_ECHO]) + 2) // 3
+    seq = []
+    for _ in range(screens):
+        m.clear()
+        took = m.call(e['fde_key_down'], ev(EV_KEY, KEY_VALUE))
+        m.call(e['fde_key_up'], ev(EV_KEY_UP, KEY_VALUE))
+        seq.append((took, m.state()['screen'], m.popups))
+    want = [(1, k, [(screen_text(rt, st, 1, TAPE_ECHO, k), SCREEN_MS)]) for k in range(2, screens + 1)] + \
+        [(1, 0, [(screen_text(rt, st, 1, TAPE_ECHO, screens), GONE_MS)])]
+    check(first == 1 and seq == want,
+          f'test15: an extra screen whose FX screen is gone (page 34 closes when the popup opens): VALUE steps it and '
+          f'leaves after the last, taken ({[(t, s) for t, s, _ in seq]})')
+
+
 def main():
     out = Path(sys.argv[1])
     man = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
@@ -1416,6 +1527,8 @@ def main():
     screen_stay_checks(img, parent, man, st)
     chip_redraw_checks(img, parent, man, st)
     pointer_checks(img, parent, man, st)
+    anypage_checks(img, parent, man, st)
+    gone_checks(img, parent, man, st)
     print(json.dumps(dict(cases=cases[0])))
     print('ALL PASS' if not fails else f'{len(fails)} FAILED')
     sys.exit(1 if fails else 0)

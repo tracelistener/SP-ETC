@@ -16,6 +16,9 @@ holds an FX screen that is up. Test13: the FX screen's update (its vtable +0x28)
 the screen draw itself again once HOLD + VALUE's popup is gone; the edits go to the effect the chip has (its FxTypes).
 Test14: every page's constructor clears stock's pointer to the FX screen (0x8059259c) while TOP keeps it up, and VALUE
 then went nowhere; the module finds the FX screen by its vtable and puts the pointer back at TOP's next event.
+Test16 (the user's layout for the fork's chords: HOLD for switches, VALUE for screens): HOLD + MFX is the switch (was
+HOLD + VALUE; the MFX press and release taken), HOLD + VALUE opens the input FX's extra screens (was VALUE + EXT
+SOURCE), and EXT SOURCE is never taken (VALUE + EXT SOURCE switches the input as on stock).
 
 The settings of an effect are the parameters that are not in its six-ID knob record (0x802e5b40) and that
 DM-404's fxmap.json (MIT, bases from a boot capture) gives no boot value. IDs come from the firmware's name
@@ -58,7 +61,7 @@ from build_start_fix import refs_into
 HERE = Path(__file__).resolve().parent
 FLASH, COPY, DECOMPRESS = 0x60080000, 0x600800E4, 0x60080088
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = 'fx-deep-edit-test14'
+REVISION = 'fx-deep-edit-test16'
 SLOT = 0x4000                       # reserved: [base, base + SLOT)
 # Settings left out on purpose: (effect, fxmap name) -> why. test6 and test8: users' reports on v9.47 and v9.48.
 SUPER_FILTER_OUT = ('FLT SLOPE', 'FLT GAIN', 'MOD SW', 'MOD WAVE', 'ATTACK', 'LEVEL')
@@ -579,32 +582,40 @@ def build(inp: Path, out: Path, zig: Path, fxmap_path: Path, base: int, build_di
                      input='test9/test10: the input FX is edited on its own screen (RECORD SETTING, then VALUE: '
                            'INPUT FX Setting), never the FX screen, so the knob bus is never 0 there on the unit. On '
                            'any page (test10: caught in the UI dispatcher\'s key and knob handlers, VALUE\'s hold '
-                           'tracked there) VALUE held and EXT SOURCE pressed opens the input FX\'s extra screens (slot 0), '
-                           'numbered among themselves ("GT AMP SIM 1/4"); VALUE steps them and closes after the last; '
-                           'CTRL 1-3 edit them; any other button leaves; the EXT SOURCE press and release are taken '
-                           '(the input is not switched); an input FX without extra settings shows nothing'),
+                           'tracked there) HOLD held and VALUE pressed (test16; VALUE + EXT SOURCE in tests 9-15) '
+                           'opens the input FX\'s extra screens (slot 0), numbered among themselves ("GT AMP SIM '
+                           '1/4"); VALUE (or HOLD + VALUE again) steps them and closes after the last; CTRL 1-3 edit '
+                           'them; any other button leaves; the VALUE press and release are taken; EXT SOURCE is never '
+                           'taken; an input FX without extra settings shows nothing; with the hidden settings off '
+                           'HOLD + VALUE goes on as VALUE does'),
         resend='after the firmware sends FxType 0x7e..0x82 (the input FX, BUS 1-4) = fx, the edited values of '
                'that slot for fx go out again, in table order (test11: not while switched off); nothing else adds '
                'a frame',
-        switch='test11: HOLD + VALUE (press; the VALUE press and release taken), on any page: HIDDEN FX OFF, each '
+        switch='test16: HOLD + MFX (press; the MFX press and release taken, MFX\'s own effect unchanged; HOLD + '
+               'VALUE in tests 11-15), on any page: HIDDEN FX OFF, each '
                'slot\'s edited settings of the effect it has get the firmware\'s default (one DT1 each), the FX '
-               'screen\'s VALUE is stock\'s toggle (+0x1b40 ^= 1 with +0x1b3f set), VALUE + EXT SOURCE is stock\'s, '
+               'screen\'s VALUE is stock\'s toggle (+0x1b40 ^= 1 with +0x1b3f set), HOLD + VALUE goes on as VALUE, '
                'an FxType re-sends nothing; again: HIDDEN FX ON and the edits sent again. The edits are kept. '
                'test12: an FX screen up (0x8059259c, on TOP\'s view list) is held (+0x1b3f, 0x80592320) so it stays; '
                'test13: and once the popup\'s 1.5 s (+ 0.1 s, on the audio clock 0x8059226c) are over and no popup '
                'is up ([0x805922b4] < 1), its next update finds 0x8059232c (screen 2 as last drawn) at -1 and draws '
                'the whole screen again. The DT1s go to the effect the chip has on each slot: what its last FxType '
                '(through fde_dt1) selected',
-        fx_screen='test14: the FX screen is the view on TOP\'s list (TOP + 0x38, 0x800a01c0) whose vtable is 0x802269c0; '
+        fx_screen='test15: the FX screen up on any page: stock\'s pointer 0x8059259c when it holds a view whose vtable '
+                  'is 0x802269c0, else TOP\'s; the dispatcher\'s key press handler sends VALUE there and takes it (stock '
+                  'sends it to the FX screen on the main page only: REMAIN + FX on an unlit effect opens page 34, and the '
+                  'Sound Generator page 30, where the kits and the guitar synth screen are, keeps it), the knob handler '
+                  'works any extra screen, and any key but VALUE and SHIFT leaves one, on any page. '
+                  'test14: the FX screen is the view on TOP\'s list (TOP + 0x38, 0x800a01c0) whose vtable is 0x802269c0; '
                   'at each event TOP\'s filter sees, stock\'s pointer 0x8059259c is put back on it if it isn\'t '
                   '(every page constructor clears it while TOP keeps the FX screen up, and the generic key handler '
                   'routes VALUE through it)',
         saved='test11: B:/_fx_hidden.bin (beside stock\'s B:/_emphasis.bin): "FXHS", version 1, the switch, the '
               'record count (u16), FNV-1a 32 of the header\'s first 8 bytes and the records; a record per edited '
               'setting: slot, value, parameter ID (u16). Read once, at TOP\'s first event after the boot (or the '
-              'first VALUE + EXT SOURCE or HOLD + VALUE): records for IDs this build lacks are dropped, values '
+              'first HOLD + VALUE or HOLD + MFX): records for IDs this build lacks are dropped, values '
               'kept inside the firmware\'s range, then (switched on) each slot\'s edits for its effect sent. '
-              'Written whole (open 0x601) after an edit or a HOLD + VALUE, at the next key release with no FX '
+              'Written whole (open 0x601) after an edit or a HOLD + MFX, at the next key release with no FX '
               'screen and no extra screen up (test12; test11 wrote on leaving and on the switch, and on the unit '
               'the FX screen went to the main screen then); never on a pad; a missing, short or bad file changes '
               'nothing, a failed write leaves the edits pending',

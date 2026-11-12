@@ -423,3 +423,140 @@ combined-test16, then the fast boot and the kit footer.
 **Checked** (Unicorn, `analysis/kit_pr1_audit/dev_combined17/run_suites.py`): on the final APP1,
 `test_fx_deep_edit.py` 99 of 102 (the same 2 layout checks and ROLL's key), `test_note_repeat.py` 109 of 113 (the 4
 layout checks) and the kit suites pass. fx-deep-edit-test14 on its own parent passes all 102.
+
+## 19. combined-test18
+
+A fork user's MIDI keyboard has no velocity: every note comes at 127, and the Sound Generator played it at full volume
+with no way to turn it down. Stock's LEVEL is no value of its own: its getter reads voice 0's level, so it shows the
+last note's velocity, and only the page's pads use it (as their velocity, with FIXED VELOCITY on). The SG LEVEL step
+(`build_sg_level.py`, module `sg-level-test1`, SG_LEVEL.md) goes on top of combined-test17, after the fast boot and the
+kit footer:
+- LEVEL (CTRL 3, CC 72) is kept by SetParam's Sound Generator call and read back by its getter.
+- The Sound Generator's melodic MIDI note-ons play at velocity x LEVEL / 127 (at least 1), ARP on or off, on either M.CH
+  route.
+- A LEVEL change scales the MIDI keys the arp holds again.
+- Drum mode and the pads are as before.
+
+```
+python synth/build_sg_level.py release/combined-test17/SP404MKII_APP1.bin OUT_DIR --zig ZIG \
+    --kits release/bounce-3-test7/kits-manifest.json --revision combined-test18
+```
+
+- **APP1:** `e5788fca...170f`, 3,158,224 bytes, in `analysis/kit_pr1_audit/release/combined-test18`. Every module and
+  patch of combined-test17 is as it was. The step adds three patches (`0x1ff20`, `0x80020480`, `0x83fa3448`) and one
+  copy row (35 rows): the 552-byte module in a 2 KB slot at `0x83FA1800`. That slot is between v9.6's scale module and
+  the kit stage, RAM no fork branch uses.
+- **One patch inside another feature's guard:** `arp_midi_event`'s entry (`0x83fa3448`) is inside kits save's guard over
+  the whole kit stage, as the kit footer's byte is. Kits save uses the kit stage's addresses and never calls
+  `arp_midi_event`; the step's manifest says so (`inside_guards`).
+
+**Checked** (Unicorn, `analysis/kit_pr1_audit/dev_combined18/run_suites.py`, every suite). It is combined-test17's runner,
+with the kit manifest's module hashes re-pointed for the kit footer's byte and the entry patch. The suites not rerun on
+combined-test17 got a baseline run there (`dev_combined18/baseline17`).
+
+| Suite | Result | Against combined-test17 |
+| --- | --- | --- |
+| `test_sg_level.py` (new) | 26 of 26 | |
+| `test_bounce.py` | 543 cases; 16 checks pass, 7 layout checks fail | the same |
+| `test_fx_deep_edit.py` | 99 of 102 | the same (2 layout checks, ROLL's key) |
+| `test_pad_env.py` (stage 1) | 29, then the UI section stops at page 5 | the same lines |
+| the same, on step 3's output | 64 of 64 | |
+| `test_pad_pitch_filter.py` | 42 of 44 | the same |
+| `test_kits_save.py` | 166 of 169 | the same 3 (2 layout checks; its kit-stage guard: the footer's byte, now the entry too) |
+| `test_note_repeat.py` | 109 of 113 | the same (4 layout checks) |
+| `test_chroma.py` | 35 of 38 | the same |
+| `test_sg_subpad.py` | 23 of 25 | one more layout check: the rows are SUB PAD's parent's plus one more (this step's) |
+| `test_start_fix.py` (v3) | 13; 4 layout checks fail | the same |
+| kit suites: kits, capture, chord, shortcut, midi (CC 72 included), restart, hot resample | pass | |
+| kit bounce: 13 kits, 4 tweaked, flow | 18 of 18 | |
+
+**DM-404** (SG_LEVEL.md section 6). MIDI notes on the real firmware, CTRL 3 at three positions:
+- combined-test18: a note at velocity v and LEVEL l peaks as combined-test17's note at v x l / 127 does (565 and 275 at
+  LEVEL 35, 1081 and 533 at 67), and at LEVEL 127 as before. The screen keeps the LEVEL set.
+- combined-test17: CTRL 3 changes nothing for MIDI.
+
+**Not run:** the unit.
+
+## 20. combined-test19
+
+The user said: "at 127, sound genrator is way too louf esp[ecially with 4 notes at a time. it should be similar to
+loudness of a sample. same with kits". The same step, with the module at `sg-level-test2` (SG_LEVEL.md section 7),
+replaces the kit stage's output stage. That stage (x2 and a knee, since v9.39) applied to melodic notes too.
+
+- **Before (combined-test18):** one note -1.2 dBFS (in the knee), four notes -0.3 dBFS, kit hits -1.3 dBFS.
+- **The reference:** samples reach the bus at their own level (DM-404: a sampled -6 dBFS sine plays back at -6 dBFS).
+- **Now:** the same capture and knee, with x0.5 in melodic mode and x1 in drum mode. REC and BOUNC get twice that
+  (BOUNC unchanged).
+
+```
+python synth/build_sg_level.py release/combined-test17/SP404MKII_APP1.bin OUT_DIR --zig ZIG \
+    --kits release/bounce-3-test7/kits-manifest.json --revision combined-test19
+```
+
+- **APP1:** `95f6ce80...77a3`, 3,158,576 bytes, in `analysis/kit_pr1_audit/release/combined-test19`. It rebuilds byte
+  for byte.
+- **Two more patches** (8 bytes each): the SG render stub's exit `0x1fdd4` goes to `sgl_mix_gate`, which has
+  `kit_mix_gate`'s shape (the SY builders check it); the REC exporter bridge `0x8353ba06` goes to `sgl_export_mix`.
+  No step guards either.
+- **The module** (912 bytes) stays in its slot at `0x83FA1800`.
+
+| | combined-test18 | combined-test19 |
+| --- | --- | --- |
+| one note, LEVEL 127 (full-scale TYPEs) | -1.2 dBFS (knee), RMS -3.6 (sine) | -12.0 dBFS, RMS -15.1, no knee |
+| four notes (C E G B) | -0.3 dBFS, RMS -2.5 | -1.2 to -2.0 dBFS, RMS -8.8; the knee on in-phase peaks only |
+| kit pads alone | -1.3 dBFS (8 to 16 pads per kit in the knee) | at most -6.4 dBFS, none in the knee |
+
+**Checked** (Unicorn, `analysis/kit_pr1_audit/dev_combined19/run_suites.py`, every suite):
+- `test_sg_level.py` passes 36 of 36. It checks the stage sample for sample against a float32 model of the kit stage's
+  knee (melodic, drum mode, other audio in the bus, the REC mix), and that the SG's raw mix is the parent's.
+- Every other suite gives combined-test18's results (the layout checks' changed-byte counts aside).
+- The kit suites (kits, capture, chord, shortcut, midi, restart, hot resample) pass. All 18 kit bounce runs pass:
+  BOUNC goes through the stage at x2, as before.
+- DM-404: one note -12.0 dBFS peak (RMS -15.1) and four notes -1.3 dBFS (RMS -9.1), against -1.2 and -0.3 on
+  combined-test18, with the sampled reference unchanged.
+
+**Not run:** the unit.
+
+## 21. combined-test20
+
+The user on v9.52: the hidden FX settings never came on the Sound Generator page, a kit or the guitar synth screen, nor
+after REMAIN + FX on an unlit effect (until the effect went off and on). Stock sends VALUE to the FX screen on the
+main page only; REMAIN + FX on an unlit effect opens page 34, and the Sound Generator page is page 30, both without
+TOP's object (DM-404). FX deep edit at `fx-deep-edit-test15` (FX_DEEP_EDIT.md, "Test15") sends VALUE to the FX screen
+up on any page from the dispatcher's key press handler, keeps VALUE's held bit until the release as stock's press
+does, works the knobs and leaving there, and steps the hidden pages on after page 34 closes on the popup. Its blob is
+9,984 bytes (test14: 10,112), ending below the tune-test builds' voice state at `0x83FE4800`.
+
+The chain as combined-test19's: `build_combined.py` (step 2 at fx-deep-edit-test15, refs in
+`analysis/kit_pr1_audit/dev_combined20/refs`), `build_fast_boot.py`, `build_kit_footer.py`, then
+`build_sg_level.py ... --revision combined-test20`.
+
+- **APP1:** `f0fac6e4...45ee`, 3,156,976 bytes, in `analysis/kit_pr1_audit/release/combined-test20`. Every module byte
+  for byte its own test build's; the same 7 reviewed overlaps. Only the FX deep edit module differs from combined-test19.
+
+**Checked** (Unicorn, `analysis/kit_pr1_audit/dev_combined20/run_suites.py`, every suite): each gives combined-test19's
+result. `test_fx_deep_edit.py` 104 of 107 (the same 3: the 2 layout checks and ROLL's key; test15's 5 new checks
+pass); the other feature suites fail the same layout checks as before (bounce's planning-boundary check by 128 bytes
+less); the kit suites, the 18 kit bounce runs, `test_sg_level.py` (36) and pad env step 3 (64) pass.
+fx-deep-edit-test15 on its own parent passes all 107. DM-404 on sy-synth-test29 (this image plus the guitar synth):
+the hidden page from the main page, page 34 (unlit, and lit there), the Sound Generator page and the guitar synth
+screen, CTRL 1 editing it.
+
+**Not run:** the unit.
+
+## 22. combined-test21
+
+The user, laying out the fork's buttons (2026-11-11): HOLD for switches, VALUE for screens. The hidden settings'
+switch moves to HOLD + MFX and the input FX's extra screens to HOLD + VALUE; VALUE + EXT SOURCE is stock's again (the
+input switches), since HOLD + EXT SOURCE now switches the guitar synth (MIDI out test 5). FX deep edit at
+`fx-deep-edit-test16` (FX_DEEP_EDIT.md, "Test16"): 108 of 108 on its own parent.
+
+The chain as combined-test20's: `build_combined.py` (step 2 at fx-deep-edit-test16, refs in
+`analysis/kit_pr1_audit/dev_combined21/refs`), `build_fast_boot.py`, `build_kit_footer.py`, then
+`build_sg_level.py ... --revision combined-test21` (log `dev_combined21/build.log`).
+
+- **APP1:** `1d314649...4406`, 3,158,448 bytes, in `analysis/kit_pr1_audit/release/combined-test21` (the base before the
+  fast boot `8618c5c6...9907`). Every module byte for byte its own test build's; the same 7 reviewed overlaps. Only the
+  FX deep edit module differs from combined-test20 (same size, 9,984 bytes at `0x83FE2000`).
+
+**Not run:** the other feature suites on this image (their modules are combined-test20's byte for byte); the unit.

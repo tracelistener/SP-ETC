@@ -446,6 +446,59 @@ The kit suites (test_kits, capture, chord, shortcut, midi, restart, hot resample
 trim and threshold checks pass and its 4 structural checks fail by design (they assert the start fix is
 the top stage). Two builds from different build folders are byte-identical.
 
+## Test15: the hidden settings on every page
+
+The user on v9.52: in pad mode HOLD + VALUE, FX and VALUE reach the hidden settings, and REMAIN + FX keeps them while
+the effect is lit; with the effect unlit, REMAIN + FX holds the FX screen but VALUE never reaches them (nor after the
+FX button lights the effect there, until it goes off and on again); and on the Sound Generator page, the kits and the
+guitar synth screen they never come.
+
+- **Cause** (DM-404, the real firmware): stock's generic key handler sends VALUE to the FX screen (`0x800cba46` ->
+  `0x801479a0`, the toggle this module hooks) on the main page (1) only. REMAIN + FX on an unlit effect opens page 34
+  (TOP's object gone, `0x80cfd350` = 0), whose own handler toggles screen 2 itself while the screen is held and does
+  nothing once the FX button has lit the effect there; the Sound Generator page (30: the kits and the guitar synth
+  screen are on it) keeps VALUE. Stock's pointer `0x8059259c` holds the FX screen on both, and is cleared when it
+  closes (EXIT, or after its 2 s), as on the main page.
+- **Now** the dispatcher's key press handler (`fde_key_down`, every page, before the page) sends VALUE to the FX
+  screen that is up and takes it (press and release): TOP's list while TOP's object is there (the pointer put back,
+  as TOP's filter does), else stock's pointer if it holds a view with the FX screen's vtable (`fx_up`). The knob
+  handler works the BUS extra screens too, and any key but VALUE and SHIFT leaves one, on any page (TOP's filter did
+  both on TOP only). With the hidden settings off, or no FX screen up, VALUE goes on as before. The file is held while
+  an FX screen is up on any page; HOLD + VALUE holds an FX screen on any page.
+- **Page 34 closes when a popup opens** (DM-404: the hidden settings' popup came up over the main page, page 34 and
+  its FX screen gone; test14's "HOLD + VALUE on a locked FX screen sent the display to the main screen" on the unit
+  looks the same). So VALUE steps an extra screen whose FX screen is gone, and leaves after the last; the knobs
+  still edit it. Keeping page 34 up would take a change to stock's page 34.
+- **Checked:** `test_fx_deep_edit.py` 107 of 107 (5 new: VALUE, CTRL 1 and leaving with TOP's object gone and only
+  stock's pointer to the screen; VALUE not taken with the settings off or no screen up; VALUE stepping and leaving
+  with the FX screen gone). A VALUE press taken this way keeps VALUE's held bit (`0x80592448`) until its release, as
+  the dispatcher's own press sets it: stock asks whether VALUE is held in 28 places (the FX screen's update and show
+  among them; hold VALUE + turn CTRL is stock's way to screen 2's settings). The blob is 9,984 bytes (test14: 10,112):
+  TOP's filter no longer works the extra
+  screens (the dispatcher's handlers do, on every page), and one function steps them for every caller, so the module
+  stays below the guitar synth's voice state at `0x83FE4800` in the tune-test builds.
+
+## Test16: HOLD for switches, VALUE for screens
+
+The user, laying out the fork's chords with the guitar synth's MIDI out test 5 ("HOLD = switches, VALUE = screens"):
+"what if hold+MFX turned on/off hidden fx parameters and on input fx hold + value shows the hidden fx", then "hold+ext
+source turns guitar synth on/off".
+
+- **HOLD + MFX** (press, on any page) is the switch: HIDDEN FX OFF / ON as test11's HOLD + VALUE was. The MFX press
+  and its release are taken (`mfx_held`, the state's spare byte), so MFX's own effect stays as it is. An FX screen up
+  is held as before, and draws again after the popup (test13).
+- **HOLD + VALUE** opens the input FX's extra screens (slot 0), as VALUE + EXT SOURCE did in tests 9-15. On them
+  VALUE, or HOLD + VALUE again, steps (HOLD passes there, as SHIFT does). With the hidden settings off, HOLD + VALUE
+  goes on as VALUE does.
+- **EXT SOURCE is never taken now:** VALUE + EXT SOURCE switches the input as on stock. In the tune-test builds HOLD
+  + EXT SOURCE is the guitar synth's switch, taken before this module sees it.
+- The blob stays 9,984 bytes at `0x83FE2000` (`value_held` went with the EXT SOURCE chord).
+
+**Checked:** `test_fx_deep_edit.py` on fx-deep-edit-test16 (its own parent, kits-v9.46-test3): the switch checks on
+HOLD + MFX (the MFX press and release taken, MFX alone as on the parent), the input FX checks on HOLD + VALUE (HOLD
++ VALUE again steps; off: as on the parent), and VALUE + EXT SOURCE as on the parent. The parent in test12's check
+still gets HOLD + VALUE (nothing holds its screen).
+
 ## Not known (the hardware test, or later)
 
 - What the numbers mean, and whether the chip uses the firmware's ranges.
