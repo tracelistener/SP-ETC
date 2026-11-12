@@ -101,7 +101,7 @@ FLASH, COPY, ZERO = 0x60080000, 0x600800E4, 0x60080100
 FLASH_END = 0x603FF000              # settings sector: the image must end below it
 FLASH_RO = (0x60300000, 0x60700000)  # MPU region 2: flash, cacheable, read-only
 APP0_SHA = '3e35ff30137f741a715566e205384f9b434ca7ac3847e247bad3f0c9c8a2bd23'
-REVISION = os.environ.get('SY_REVISION', 'midi-out-test14')   # (an audition build names itself)
+REVISION = os.environ.get('SY_REVISION', 'midi-out-test15')   # (an audition build names itself)
 #                                     MIDI out test 1: SY synth test 34 + the SG's and the kits' notes out over MIDI;
                                      # test 2: kits on channel 10, EXT SOURCE + VALUE, EXT SOURCE tap, ACID BASS retrig;
                                      # test 3: a murky low reading no longer attacks the note sounding (held chords);
@@ -197,6 +197,11 @@ SHA_GUARDS = [
 # the builder points it at mo_pad, which sends the pad's note and goes on to arp_note_event. The arp's notes are read
 # after every audio block (mo_arp_scan, from meter_sg_end), the guitar's in syn_ui; the UI tick (mo_ui) sends.
 MO_NOTE_EVENT, MO_NOTE_VENEER = 0x8353B000, 0x0001FC00
+# MIDI out test 15: FX deep edit's state (fx-deep-edit-test16's `fde`, from its linked build's symbols), which the guitar
+# synth screen reads (byte 0: an extra screen shown, the input FX's after HOLD + VALUE; byte 6: the hidden settings
+# switched off). The parent's blob at FDE_BLOB must hash as that build's (combined-test21's FX deep edit step).
+FDE_STATE = 0x83FE36C8
+FDE_BLOB = (0x83FE2000, 9984, 'e0a859c885a17edf5bfc30db09d96b5d58bdc8ff18802a3ee3a29a6d6e650f34')
 MO_LINKS = dict(                     # tune_test_links.h: the kit stage's (kits-v9.46-test3's symbols) and stock's
     MO_ARP_NOTE_EVENT=0x83FA3399,    # arp_note_event (the kits' wrapper: kit_note_seen, then the arp's)
     MO_ARP_MODE=0x83FC7B70,          # arp_mode (int, 0 OFF)
@@ -796,6 +801,10 @@ def check_guards(img):
     fde = fde_bridges(img)
     found['fde'] = {k: dict(bridge=hex(v['bridge']), call=hex(v['call']), handler=hex(v['handler']),
                             listing=v['listing']) for k, v in fde.items()}
+    blob = read(img, FDE_BLOB[0], FDE_BLOB[1])         # MIDI out test 15: FDE_STATE is this exact blob's `fde`
+    if sha(blob) != FDE_BLOB[2]:
+        raise ValueError(f'FX deep edit at {FDE_BLOB[0]:#x} is not fx-deep-edit-test16 (the blob FDE_STATE comes from)')
+    found['fde_state'] = dict(address=hex(FDE_STATE), blob=hex(FDE_BLOB[0]), blob_sha256=FDE_BLOB[2])
     found['screen'] = screen_hooks(img)
     found['midi_out'] = mo_hook(img)                   # MIDI out test 1
     for lo, hi, digest, why in SHA_GUARDS:
@@ -916,7 +925,7 @@ def compile_module(zig, folder, base, pre_target, bridges, sg_midi, kit_mode, fd
         f'#define BNC_RX {bridges["bnc_rx"]:#010x}u\n#define SG_MIDI {sg_midi:#010x}u\n'
         f'#define KIT_MODE {kit_mode:#010x}u\n'
         f'#define FDE_DT1_LO {fde_dt1 & 0xFFFF:#x}\n#define FDE_DT1_HI {fde_dt1 >> 16:#x}\n'
-        f'#define NR_EVENT_C {nr_event_c:#010x}u\n' +
+        f'#define NR_EVENT_C {nr_event_c:#010x}u\n#define FDE_STATE {FDE_STATE:#010x}u\n' +
         ''.join(f'#define {name} {value | 1:#010x}u\n' for _, value, _, name, _ in SG_POINTERS) +
         ''.join(f'#define {name}_LO {value & 0xFFFF:#x}\n#define {name}_HI {value >> 16:#x}\n'
                 for _, value, _, name, _ in BAR_SITES) +
@@ -1228,7 +1237,14 @@ def build(inp: Path, out: Path, zig: Path, base: int, build_dir: Path = None):
     parent = json.loads(parent_manifest.read_text(encoding='utf-8')) if parent_manifest.exists() else {}
     manifest = dict(
         revision=REVISION, status='hardware-unverified', published=False, test_only=True,
-        description='MIDI out test 14: test 13 with the user\'s final 32 sounds (tunetest/sy_final.py, written by '
+        description='MIDI out test 15: test 14 where only VALUE alone steps OUT on the guitar synth screen (the user: '
+                    '"only value is supposed to change the out setting"): SHIFT + VALUE goes on to stock (MARK Function) '
+                    'and turns no page, HOLD + VALUE to FX deep edit (the input FX\'s hidden settings; nothing with them '
+                    'switched off), and while FX deep edit shows an extra screen (FDE_STATE, fx-deep-edit-test16\'s '
+                    '`fde`) the knobs, VALUE and SHIFT are its; while a stock dialog is up (its objects at 0x80591a10/14 '
+                    'and 0x805922ac: SHIFT + VALUE\'s "Enable Skipback?") every event is the dialog\'s; no EXT IN ON / '
+                    'OFF popup on an EXT SOURCE tap (the user: the light tells). '
+                    'MIDI out test 14: test 13 with the user\'s final 32 sounds (tunetest/sy_final.py, written by '
                     'analysis/midi-out/candidates/make_final.py): bank 1 pads 1-8 SYNC LEAD, LADDER LEAD, SH-101 LEAD, '
                     'MARS LEAD, ODYSSEY LEAD, CHIP LEAD, HOOVER, SPOOKY 8-BIT, pads 9-16 POLY PAD, STRINGS, VECTOR PAD, '
                     'OB PAD, JP WARM PAD, AM STRINGS, AAH CHOIR, HEAVENS GATE; bank 2 pads 1-8 BREATH HORNS, SG SYNTH, '

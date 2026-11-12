@@ -1975,6 +1975,7 @@ def sy_tone_checks(img, man):
     value_hold_checks(img, man)                                      # MIDI out test 8
     filter_page_checks(img, man)                                     # MIDI out test 11
     bank_checks(img, man)                                            # MIDI out test 12
+    value_mod_checks(img, man)                                       # MIDI out test 15
     sy32_checks(img, man)                                            # SY test 32
 
 
@@ -2036,7 +2037,7 @@ def gnotes_checks(img, man):
         [tuple(x[1]) for x in steps] == [((0x25, 0, 0),), ((0x25, 1, 0),)] and \
         [x[2] for x in steps] == [[(KEY_EXT, 1, 0)], [(KEY_EXT, 1, 0xFF00)]] and \
         [x[3] for x in steps] == [(0, 0x1F1F00), (1, 0xFF00)] and \
-        [x[4] for x in steps] == ['EXT IN\nOFF', 'EXT IN\nON'] and [x[5] for x in steps] == [0, 0] and \
+        [x[4] for x in steps] == [None, None] and [x[5] for x in steps] == [0, 0] and \
         [x[6] for x in steps] == [0, 1] and gn_ext(g) == (0, 2)
     g.hold(KEY_EXT, True)                                             # EXT SOURCE + VALUE, + SUB PAD: no switch
     chord0 = [g.ev(EV_KEY, KEY_EXT), g.ev(EV_KEY, KEY_VALUE), g.ev(EV_KEY_UP, KEY_VALUE),
@@ -2046,8 +2047,8 @@ def gnotes_checks(img, man):
     check(ok1 and chord0 == [(0, True)] * 6 and gn(g)[0] == 0 and gn_ext(g) == (0, 2) and g.ext == 1,
           f'MIDI out test 5: EXT SOURCE tapped on the Sound Generator page switches the input: off (setter '
           f'{steps[0][1]}, light {steps[0][2]} {steps[0][3]}), on (setter {steps[1][1]}, green {steps[1][3]}: the notes '
-          f'on), popups {[x[4] for x in steps]}; the notes untouched; press and release go on; EXT SOURCE + VALUE and + '
-          f'SUB PAD switch nothing')
+          f'on), no popup (MIDI out test 15, the user: the light tells: {[x[4] for x in steps]}); the notes untouched; '
+          f'press and release go on; EXT SOURCE + VALUE and + SUB PAD switch nothing')
     # 2. The guitar synth screen: the tap switches the input only, SOUND kept (green with SOUND on); VALUE's push is
     #    still the screen's (the synth's bus).
     sc = ScreenMachine(img, man, page=SG_PAGE)
@@ -2853,6 +2854,73 @@ def filter_page_checks(img, man):
           f'MIDI out test 11: {P.VOICES[sg]["name"]}\'s FILTER page shows its ENV preset ({before} -> {after}), CTRL 1 '
           f'there sets the main page\'s CTRL 1 ({main}); {P.VOICES[nf]["name"]} (no filter): SHIFT steps {pages_nf}, no '
           f'FILTER page; picked on the FILTER page of {P.VOICES[wf]["name"]}: the main page ({picked})')
+
+
+def value_mod_checks(img, man):
+    """MIDI out test 15 (the user: "only value is supposed to change the out setting"): on the guitar synth screen VALUE
+    alone steps OUT; SHIFT + VALUE goes on (stock's MARK Function) and SHIFT's release turns no page; HOLD + VALUE goes
+    on (FX deep edit: the input FX's hidden settings), or with the hidden settings switched off is taken and does
+    nothing; while FX deep edit shows an extra screen (its state's byte 0) the knobs, VALUE and SHIFT go on to it."""
+    fde = int(man['guards']['fde_state']['address'], 16)
+    m = ScreenMachine(img, man, page=SG_PAGE)
+    m.start()
+    m.open_screen()
+    out0 = m.sy()['out_bus']
+    alone = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE)]
+    out1 = m.sy()['out_bus']
+    m.ev(EV_KEY, KEY_SHIFT)                                            # SHIFT + VALUE
+    m.hold(KEY_SHIFT, True)
+    page0 = m.sy()['shift_page']
+    sv = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE)]
+    m.hold(KEY_SHIFT, False)
+    m.ev(EV_KEY_UP, KEY_SHIFT)
+    st_s = m.sy()
+    m.hold(KEY_HOLD, True)                                             # HOLD + VALUE, the hidden settings on
+    hv = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE)]
+    out_h = m.sy()['out_bus']
+    m.put(fde + 6, 1, '<B')                                            # switched off (HOLD + MFX)
+    hv_off = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE)]
+    m.put(fde + 6, 0, '<B')
+    m.hold(KEY_HOLD, False)
+    out_off = m.sy()['out_bus']
+    m.put(fde, 1, '<B')                                                # an extra screen up (the input FX's)
+    knobs = m.sy()['knob']
+    extra = [m.ev(EV_KNOB, 1, 100), m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE), m.ev(EV_KEY, KEY_SHIFT),
+             m.ev(EV_KEY_UP, KEY_SHIFT)]
+    st_x = m.sy()
+    m.put(fde, 0, '<B')
+    back = m.ev(EV_KNOB, 1, 100)
+    m.put(0x805922AC, 1, '<B')                                         # a popup posted, not built yet: the byte alone
+    st_p0 = m.sy()
+    posted = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE)]
+    st_p = m.sy()
+    m.put(0x80591A10, 0x835B01A8, '<I')                                # a stock dialog up (SHIFT + VALUE's): its objects
+    m.put(0x80591A14, 0x835B0270, '<I')
+    st_d0 = m.sy()
+    dialog = [m.ev(EV_ENC, 0, 1), m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE), m.ev(EV_KNOB, 2, 30),
+              m.ev(EV_PAD, 3, 90), m.ev(EV_PAD_UP, 3)]
+    st_d = m.sy()
+    for a in (0x80591A10, 0x80591A14):
+        m.put(a, 0, '<I')
+    m.put(0x805922AC, 0, '<B')
+    after_d = [m.ev(EV_KEY, KEY_VALUE), m.ev(EV_KEY_UP, KEY_VALUE)]
+    check(posted == [(1, False), (1, False)] and st_p['out_bus'] == (st_p0['out_bus'] + 1) & 3 and
+          all(r == (0, True) for r in dialog) and st_d['tone_req'] == st_d0['tone_req'] and
+          st_d['out_bus'] == st_d0['out_bus'] and st_d['knob'] == st_d0['knob'] and
+          after_d == [(1, False), (1, False)] and m.sy()['out_bus'] == (st_d0['out_bus'] + 1) & 3,
+          f'MIDI out test 15: a popup just posted (0x805922ac set, no dialog objects) is no dialog: VALUE steps OUT '
+          f'({posted}); with a stock dialog up on the guitar synth screen (its objects at 0x80591a10/14 and 0x805922ac: '
+          f'SHIFT + VALUE\'s "Enable Skipback?", DM-404) VALUE (turned, pressed), the knobs and the pads go on to it '
+          f'({dialog}), the sound, OUT and the settings as they were; once it is gone VALUE steps OUT again')
+    check(alone == [(1, False), (1, False)] and out1 == (out0 + 1) & 3 and
+          sv == [(0, True), (0, True)] and st_s['out_bus'] == out1 and st_s['shift_page'] == page0 and
+          hv == [(0, True), (0, True)] and out_h == out1 and hv_off == [(1, False), (1, False)] and out_off == out1 and
+          all(r == (0, True) for r in extra) and st_x['knob'] == knobs and st_x['out_bus'] == out1 and
+          st_x['shift_page'] == page0 and back == (1, False),
+          f'MIDI out test 15: on the guitar synth screen VALUE alone steps OUT ({out0} -> {out1}); SHIFT + VALUE goes on '
+          f'({sv}) and SHIFT\'s release turns no page; HOLD + VALUE goes on ({hv}), or with the hidden settings off is '
+          f'taken ({hv_off}); OUT stays; with FX deep edit\'s extra screen up (its state at {fde:#x}) a knob, VALUE and '
+          f'SHIFT go on to it ({extra}), the synth\'s settings untouched; once it is gone the knob is the screen\'s again')
 
 
 def bank_checks(img, man):
