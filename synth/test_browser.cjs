@@ -11,8 +11,8 @@ const input = process.argv[2];
 if (!input) throw new Error('Usage: node synth/test_browser.cjs /path/to/stock/SP404MKII_APP1.bin');
 const stock = new Uint8Array(fs.readFileSync(input));
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-const KITS_SHA = 'e7b754211f58ed0a46a5dc517ba777118943460998d11479c648726df117be79';
-const KITS_SIZE = 3157104;
+const KITS_SHA = 'eadf65ace857e0dc9e6847cc207441c2f80caa5fa42a3c38ea99e0c16b477126';
+const KITS_SIZE = 3239776;
 
 function load(includeKits = true) {
   const elements = new Map();
@@ -63,7 +63,8 @@ async function download(page) {
   }
   assert.equal(api.hex(api.sha256(stock)), digest(stock), 'browser SHA matches Node');
 
-  // The overlays: DOOM OS base from stock 5.52, then v9.52 (combined-test17: the combined feature build + fast boot + kit footer).
+  // The overlays: DOOM OS base from stock 5.52, then v9.53 (midi-out-test14: the combined feature build + fast boot + kit
+  // footer + the SG level step (combined-test21), then the guitar synth).
   const kits = page.context.window.DOOMOS_KITS;
   const doom = api.applyPatch(api.fromBase64(page.context.window.DOOMOS_PATCH), stock);
   assert.equal(doom.digest, kits.base_sha256);
@@ -73,12 +74,12 @@ async function download(page) {
   assert.equal(kitResult.bytes.length, KITS_SIZE);
   assert.equal(kits.sha256, KITS_SHA);
   assert.equal(kits.size, KITS_SIZE);
-  assert.equal(kits.release, 'v9.52');
-  assert.equal(kits.revision, 'combined-test17');
+  assert.equal(kits.release, 'v9.53');
+  assert.equal(kits.revision, 'midi-out-test14');
   assert.equal(kits.start_fix, 'resample-startfix-3');
-  assert.equal(kits.combined_sha256, '2550ada6c6391e9bc839ad4480adfed07a17f3209050ac65883bf2003f5d2eb1');
+  assert.equal(kits.combined_sha256, '8618c5c61c339d8e70d33d8141b15bd00a12ade7177628d09753fe273a0b9907');
   assert.equal(kits.kit_stage_sha256, '88384c3c9760559e721c1a14973ef3a2ced6abf016572b0a73c5dfb0cef492ba');
-  assert.equal(kits.features.length, 11);
+  assert.equal(kits.features.length, 15);
   assert.equal(kits.hardware_verified, false);
   assert.equal(JSON.stringify(kits.kit_selector_range), '[1,13]');
   assert.equal(kits.kits.length, 13);
@@ -87,16 +88,16 @@ async function download(page) {
   const badKit = kitOverlay.slice(); badKit[badKit.length - 1] ^= 1;
   assert.throws(() => api.applyPatch(badKit, doom.bytes), /came out wrong/);
 
-  // One build, no selector: drop in stock, press Patch, get v9.52.
+  // One build, no selector: drop in stock, press Patch, get v9.53.
   const panel = page.get('doomos-patcher').innerHTML;
   assert.equal((panel.match(/type="checkbox"/g) || []).length, 0, 'no build selector');
-  assert.match(panel, /Builds Sound Generator \+ Kits v9\.52 on DOOM OS 0\.6\.1 \(ED5E\)/);
+  assert.match(panel, /Builds Sound Generator \+ Kits v9\.53 on DOOM OS 0\.6\.1 \(ED5E\)/);
   await choose(page, stock);
   assert.equal(page.get('patch').disabled, false);
   await page.get('patch').listeners.click();
   assert.equal(page.get('download').hidden, false);
   assert.equal(await download(page), KITS_SHA);
-  assert.match(page.get('status').textContent, /Sound Generator \+ Kits v9\.52 with DOOM OS 0\.6\.1 has been patched into firmware 5\.52\+kits-v9\.52/);
+  assert.match(page.get('status').textContent, /Sound Generator \+ Kits v9\.53 with DOOM OS 0\.6\.1 has been patched into firmware 5\.52\+kits-v9\.53/);
 
   page.get('reset').listeners.click();
   assert.equal(page.get('download').hidden, true);
@@ -132,8 +133,8 @@ async function download(page) {
   // The page and README.
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-  assert.match(html, /kits-data\.js\?v=kits-v9-52-e7b75421/);
-  assert.match(html, /doomos-patcher\.js\?v=kits-v9-52-doom-os/);
+  assert.match(html, /kits-data\.js\?v=kits-v9-53-eadf65ac/);
+  assert.match(html, /doomos-patcher\.js\?v=kits-v9-53-doom-os/);
   assert.doesNotMatch(html, /synth-data\.js|waves-data\.js|kits-midi-data|MIDI test guide|v9\.43|v9\.44/);
   assert.doesNotMatch(html, /[Tt]ick one|unticked|Pick one of/);
   // The page is the patcher and what it gives: no version header and no version history (that is on GitHub).
@@ -146,10 +147,11 @@ async function download(page) {
   assert.ok(/Compressor's MODE and the Super Filter's settings\. Both are removed\. Still, keep your volume low/.test(html),
             'the volume note: the Compressor and the Super Filter, removed; keep the volume low');
   assert.ok(readme.includes('Keep your volume low when you try the hidden effect settings'), 'the README warning');
-  assert.ok(readme.includes('If you installed v9.47 or v9.48, patch again with v9.52'), 'patch again after v9.47 or v9.48');
+  assert.ok(readme.includes('If you installed v9.47 or v9.48, patch again with v9.53'), 'patch again after v9.47 or v9.48');
   for (const text of [html, readme]) {
     assert.ok(!text.includes('patch again with v9.48') && !text.includes('patch again with v9.49') &&
-              !text.includes('patch again with v9.50') && !text.includes('patch again with v9.51'),
+              !text.includes('patch again with v9.50') && !text.includes('patch again with v9.51') &&
+              !text.includes('patch again with v9.52'),
               'no older patch-again line');
     assert.doesNotMatch(text, /says NO EXTRA SETTINGS|some can get loud/);
   }
@@ -159,16 +161,21 @@ async function download(page) {
             readme.includes('**Hidden settings on and off:** hold HOLD and press VALUE') &&
             readme.includes('**Edits kept:**') && readme.includes('**Always there:**'),
             'the README keeps the history');
-  // v9.52: HOLD + VALUE switches the hidden settings off and on, and the edits are kept over a restart.
-  assert.ok(html.includes('Your edits are kept when you turn the SP off. Hold HOLD and press VALUE') &&
-            readme.includes('Your edits are kept when you turn the\n  SP off. Hold HOLD and press VALUE'),
+  // v9.52: the edits are kept over a restart; v9.53: HOLD + MFX switches the hidden settings off and on, HOLD + VALUE
+  // opens the input FX's, VALUE + EXT SOURCE is stock's again.
+  assert.ok(html.includes('Your edits are kept when you turn the SP off. Hold HOLD and press MFX') &&
+            readme.includes('Your edits are kept when you turn the\n  SP off. Hold HOLD and press MFX'),
             'the guide and the README: edits kept, and the switch');
+  assert.ok(html.includes('For the input FX: hold HOLD and press VALUE') &&
+            html.includes('VALUE + EXT SOURCE switches the input, as on a stock SP') &&
+            readme.includes('**Changed buttons:** the hidden effect settings\' switch is now **HOLD +\n  MFX**'),
+            'v9.53: the moved buttons on the page and in the README');
   assert.doesNotMatch(html + readme, /reset when you turn the/);
   assert.ok(html.includes('<strong>Stop one pad:</strong> hold EXIT and press a rolling pad') &&
             html.includes('<strong>START/END and PITCH/SPEED:</strong> ROLL works as it normally does there'),
             'the page explains EXIT + pad and ROLL on START/END and PITCH/SPEED');
   for (const q of ['I already have DOOM OS, or an older version of this mod', 'Which file do I need?',
-                   'Will I lose my work?']) {
+                   'Will I lose my work?', 'What do I need for the guitar synth?']) {
     assert.ok(html.includes(q) && readme.includes(q), 'the page and README answer: ' + q);
   }
   // Every feature, in the cheat sheet below the patcher, with how to reach it.
@@ -176,15 +183,20 @@ async function download(page) {
   for (const feature of ['Sound Generator', 'Drum kits', 'MIDI', 'Kit to sample bank', 'Bounce in place', 'Pad envelopes',
                          'Note repeat', 'Chromatic scales', 'SUB PAD on the Sound Generator', 'Hidden effect settings',
                          'Input FX hidden settings', 'Hidden settings on and off', 'DOOM OS', 'Saved with the project', 'Faster start-up',
-                         'Cleaner resampling']) {
+                         'Cleaner resampling', 'Guitar synth', 'Guitar synth screen', 'Guitar notes', 'MIDI out']) {
     assert.ok(feats.includes('<h4>' + feature + '</h4>'), 'the page lists ' + feature);
   }
-  assert.ok(feats.includes('Hold <kbd>VALUE</kbd> and press <kbd>EXT SOURCE</kbd>') &&
+  assert.ok(feats.includes('Hold <kbd>HOLD</kbd> and press <kbd>MFX</kbd>') &&
             feats.includes('Hold <kbd>HOLD</kbd> and press <kbd>VALUE</kbd>') &&
+            feats.includes('Hold <kbd>HOLD</kbd> and press <kbd>EXT SOURCE</kbd>') &&
+            feats.includes('Hold <kbd>VALUE</kbd> and press <kbd>RECORD SETTING</kbd>') &&
             feats.includes('Hold <kbd>REMAIN</kbd> and press <kbd>SUB PAD</kbd>'), 'the cheat sheet gives the buttons');
+  assert.ok(!feats.includes('Hold <kbd>VALUE</kbd> and press <kbd>EXT SOURCE</kbd>'), 'VALUE + EXT SOURCE is stock again');
   for (const feature of ['DOOM OS included', 'Bounce in place', 'Pad envelopes', 'Note repeat', 'Chromatic scales',
                          'Saved with the project', 'SUB PAD on the Sound Generator', 'Hidden effect settings',
-                         'Faster start-up', 'Cleaner resampling']) {
+                         'Faster start-up', 'Cleaner resampling', 'Guitar synth', 'Guitar notes', 'MIDI out',
+                         'A MIDI channel for each mode', 'LEVEL for MIDI notes', 'Quieter Sound Generator and kits',
+                         'Hidden effect settings on every screen', 'Changed buttons']) {
     assert.ok(readme.includes('**' + feature + ':**'), 'README lists ' + feature);
   }
   assert.doesNotMatch(html + readme, /reset at power-on|are not saved|returns to 16 at power-on/);
@@ -195,7 +207,8 @@ async function download(page) {
   assert.ok(more > html.indexOf('id="install"') && more > html.indexOf('id="features"'), 'the details are lower down');
   for (const guide of ['Drum kits', 'MIDI', 'Envelope presets (ENV)', 'Scales and MIDI IN', 'Arpeggiator',
                        'Bounce in place', 'Pad envelopes', 'Note repeat (rolls)', 'Chromatic mode',
-                       'Hidden effect settings: the full list']) {
+                       'Hidden effect settings: the full list', 'Guitar synth: setting up', 'Guitar synth: buttons',
+                       'Guitar synth: the screen\'s pages', 'Guitar synth: the 32 sounds', 'Guitar notes and MIDI out']) {
     assert.ok(html.includes('<summary>' + guide + '</summary>'), 'the page has the guide ' + guide);
   }
   for (const fx of ['<strong>Tape Echo:</strong> SYNC, BASS, TREBLE', '<strong>Gt Amp Sim (input FX only):</strong> AMP SW',
@@ -204,6 +217,9 @@ async function download(page) {
   }
   assert.ok(!/<strong>(Compressor|Super Filter)[^<]*:<\/strong>/.test(html), 'no Compressor or Super Filter settings listed');
   assert.ok(html.includes('How do I go back to the original firmware?'), 'the page says how to go back');
+  // v9.53: the guitar synth's full guide is in the repository and linked from the page and the README.
+  assert.ok(fs.existsSync(path.join(root, 'synth', 'GUITAR_SYNTH.md')), 'the guitar synth guide is in the repository');
+  assert.ok(html.includes('synth/GUITAR_SYNTH.md') && readme.includes('(synth/GUITAR_SYNTH.md)'), 'the guide is linked');
   assert.match(readme, /Sound Generator envelopes \(v9\.9\.3\)/);
   assert.match(readme, /## Scale pads \(v9\.9\.3\)/);
   assert.match(readme, /## Arpeggiator \(v9\.9\.3\)/);
@@ -223,5 +239,5 @@ async function download(page) {
   assert.doesNotMatch(html, /For V8, start at modest LEVEL|Uncheck Wave Lab|Expected Wave Lab V8 APP1/);
   assert.doesNotMatch(readme, /<img[^>]*doom-os-512/);
   assert.doesNotMatch(html, /<img[^>]*doom-os/);
-  console.log('PASS: one build, no selector: stock 5.52 gives exactly Sound Generator + Kits v9.52 (combined-test17), repeatably; overlay metadata, wrong-input and corruption rejection, no corrupt download, DOOM OS base without kit data; page (patcher first, no version history) and README text.');
+  console.log('PASS: one build, no selector: stock 5.52 gives exactly Sound Generator + Kits v9.53 (midi-out-test14), repeatably; overlay metadata, wrong-input and corruption rejection, no corrupt download, DOOM OS base without kit data; page (patcher first, no version history) and README text.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

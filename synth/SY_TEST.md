@@ -1149,7 +1149,7 @@ output recorded back (the dry passes at unity, so the synth is the recording min
 - **The chord clicks are the voices turning over.** On a held low G major 7 (G2 F#3 B3 D4) the twin's 6 voices
   change about 200 times in 2.6 s: partials a semitone apart beat (G3 against F#3, F#4 against G4, C#5 against D5),
   each band dip ends a young voice with a 10 ms cut and each flicker starts one; the top band's partials blip on and
-  off. On the user's second recording (`Documents/SP404/testttt.wav`: bridge then neck pickup, notes then chords)
+  off. On the user's second recording (`testttt.wav`: bridge then neck pickup, notes then chords)
   the voices change 64-70 times a second in the chords. LAW 1:1 changes none of it (it scales levels, 47 clicks
   against 46 on the model chords).
 - **GUARD PICK on a chord tone** (it was ON's twin there): a voice rides its band's gaps `P_RIDE` (60) blocks unless

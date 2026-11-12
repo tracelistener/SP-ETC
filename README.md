@@ -2,12 +2,14 @@
 
 **[Open the patcher](https://tracelistener.github.io/SP-ETC/)**
 
-The patcher builds **Sound Generator + Kits v9.52** for the SP-404MKII:
+The patcher builds **Sound Generator + Kits v9.53** for the SP-404MKII:
 Sound Generator **v9.9.3** (four live voices, 17 new waveforms, nine
 volume/filter-envelope presets, 34 scale choices and an arpeggiator) plus
-thirteen synthesized machine kits. It also adds bounce in place, pad
-envelopes, note repeat, chromatic scales, settings saved with the project,
-SUB PAD on the Sound Generator, hidden effect settings and a faster start-up.
+thirteen synthesized machine kits. It also adds a **guitar synth** (your guitar
+plays 32 synth sounds, the Sound Generator or a drum kit, and its notes can go
+out over MIDI), bounce in place, pad envelopes, note repeat, chromatic scales,
+settings saved with the project, SUB PAD on the Sound Generator, hidden effect
+settings and a faster start-up.
 It is built on, and includes, **DOOM OS 0.6.1**
 (build ED5E), Klangfeld Labs' pattern sequencer for the SP: hold REMAIN and
 press SUB PAD to open it ([DOOM OS quickstart](https://tracelistener.github.io/SP-ETC/manual/)).
@@ -21,12 +23,66 @@ reproduction and validation](synth/KITS.md).
 > your speakers. Turn the volume down first, especially on headphones. The
 > Compressor and Super Filter settings that did this in v9.47 and v9.48 are
 > removed.
-> If you installed v9.47 or v9.48, patch again with v9.52.
+> If you installed v9.47 or v9.48, patch again with v9.53.
+
+## New in v9.53
+
+- **Guitar synth:** plug a guitar into INPUT (MIC/GUITAR switch on GUITAR,
+  EXT SOURCE on) and it plays 32 synth sounds: single-note leads and basses on
+  pads 1-8, chord sounds on pads 9-16, in two banks. Chord sounds give each
+  string a voice of its own, the way BOSS's SY pedals do; single notes come from
+  a note tracker, every pick attacking.
+  - Hold HOLD and press EXT SOURCE, on any screen, to switch it on and off.
+    EXT SOURCE lights green while it plays.
+  - Hold VALUE and press RECORD SETTING to open its screen. Pads 1-16 pick a
+    sound, SHIFT + pad 1 or 2 picks the bank (the current sound's pad is lit),
+    VALUE turns through all 32 and VALUE's press sends the synth to DRY, BUS 1,
+    BUS 2 or BOTH. Tap SHIFT for five pages of settings: the sound's own
+    setting, TONE and LEVEL; OCTAVE, SUSTAIN and DYNAMICS; GLITCH, SENS and
+    VOICES; ATTACK, RELEASE and GLIDE; the filter's ENV and RESO. Everything
+    is saved on the SP.
+  - Set GAIN just below the point where EXT SOURCE blinks red, and keep the
+    input clean (Bypass as the input FX): a hot or distorted input makes the
+    chord sounds play extra notes.
+  - The full guide, with every sound and setting:
+    [GUITAR_SYNTH.md](synth/GUITAR_SYNTH.md).
+- **Guitar notes:** with EXT SOURCE on, your guitar plays the Sound Generator
+  (one note at a time, like a MIDI keyboard; set OCT to +1 for the guitar's own
+  pitch) or a drum kit (each pick strikes the pad of its note name: E = pad 1
+  up to D# = pad 12). Hold HOLD and press RECORD SETTING (Sound Generator) or
+  PATTERN EDIT (kits) to switch them off and on.
+- **MIDI out:** with PAD Note Out on (SHIFT + pad 13 > SYSTEM > MIDI), the
+  Sound Generator's and the kits' pads, the arpeggiator and the guitar's notes
+  go out over MIDI. The guitar's notes go out on both modes' channels, so a
+  synth and a drum module can follow it together.
+- **A MIDI channel for each mode:** M.CH is now kept for the Sound Generator
+  and the kits separately. The kits start on channel 10 after every power-on;
+  set M.CH in drum mode again if you sequence the kits on another channel.
+- **LEVEL for MIDI notes:** the Sound Generator's LEVEL (CTRL 3) now also turns
+  MIDI notes down (each plays at its velocity x LEVEL / 127), so a keyboard
+  without velocity isn't stuck at full volume.
+- **Quieter Sound Generator and kits:** they now play at about a sample's
+  loudness instead of at full scale. REC from the Sound Generator records what
+  you hear (about 6 dB lower than v9.52's); kit REC and BOUNC are unchanged.
+- **Hidden effect settings on every screen:** an FX button, then VALUE, now
+  reaches the hidden settings on the Sound Generator, the kits and the guitar
+  synth screen too, and after REMAIN + an FX button.
+- **Changed buttons:** the hidden effect settings' switch is now **HOLD +
+  MFX** (it was HOLD + VALUE), and the input FX's hidden settings are now
+  **HOLD + VALUE** (it was VALUE + EXT SOURCE, which switches the input again,
+  as on a stock SP).
+- **Smaller things:** EXT SOURCE now switches the input on the Sound
+  Generator page too; REMAIN + an FX button keeps the effect screen up there;
+  VALUE's own job on the Sound Generator page and the kits happens when you let
+  go of it; REC keeps flashing while the looper waits, and MARK back from the
+  looper keeps looper mode; holding SHIFT on the main screen makes PATTERN EDIT
+  pulse (SHIFT + PATTERN EDIT opens the kits); hold EXIT for a second on the
+  main screen for a CPU readout.
 
 ## New in v9.52
 
-- **Hidden settings on and off:** hold HOLD and press VALUE, on any screen, to
-  switch all hidden effect settings off (the effects sound as they do on a
+- **Hidden settings on and off:** hold HOLD and press VALUE (HOLD + MFX since
+  v9.53), on any screen, to switch all hidden effect settings off (the effects sound as they do on a
   stock SP) and on again (your edits come back). The SP shows HIDDEN FX OFF or
   HIDDEN FX ON. While they are off, VALUE on the effect screen does its usual
   job.
@@ -47,8 +103,8 @@ reproduction and validation](synth/KITS.md).
 
 ## New in v9.50
 
-- **Input FX hidden settings:** hold VALUE and press EXT SOURCE, on any screen,
-  to open the hidden settings of the input FX. For the Gt Amp Sim that includes
+- **Input FX hidden settings:** hold VALUE and press EXT SOURCE (HOLD + VALUE
+  since v9.53), on any screen, to open the hidden settings of the input FX. For the Gt Amp Sim that includes
   AMP TYPE (14 steps; its standard screen has 6 amps), SP TYPE (16 cabinets) and
   the mic position. Each VALUE press shows the next page, CTRL 1-3 change the
   settings, and any other button closes them. This doesn't switch EXT SOURCE on
@@ -110,8 +166,8 @@ reproduction and validation](synth/KITS.md).
   the SP normally keeps hidden (for example Tape Echo's tape distortion). Turn
   CTRL 1-3 to change them. **Turn your volume down before you try them:** some
   can make the sound suddenly very loud. Your edits are kept when you turn the
-  SP off. Hold HOLD and press VALUE to switch them all off (the stock sound) and
-  on again.
+  SP off. Hold HOLD and press MFX to switch them all off (the stock sound) and
+  on again. For the input FX's, hold HOLD and press VALUE.
   [FX_DEEP_EDIT.md](synth/FX_DEEP_EDIT.md)
 - **Faster start-up:** once the project has loaded, the SP goes straight to the
   main screen and skips DOOM OS's start-up animation (about 4 seconds faster).
@@ -306,7 +362,7 @@ You can also download this repository as a ZIP file (under the Code button), unz
 ### Manual installation
 
 1. Download the 5.52 system update from [Roland's support page](https://www.roland.com/global/support/by_product/sp-404mk2/updates_drivers/) and unzip it.
-2. Open [our patcher](https://tracelistener.github.io/SP-ETC/), load the stock `SP404MKII_APP1.bin` and press Patch firmware. It builds Sound Generator + Kits v9.52. The patcher only accepts official 5.52 and checks the result against [the fork's checksums](synth/checksums.txt).
+2. Open [our patcher](https://tracelistener.github.io/SP-ETC/), load the stock `SP404MKII_APP1.bin` and press Patch firmware. It builds Sound Generator + Kits v9.53. The patcher only accepts official 5.52 and checks the result against [the fork's checksums](synth/checksums.txt).
 3. Download the patched `SP404MKII_APP1.bin` and use it with the unchanged official 5.52 `SP404MKII_APP0.bin` for your test update. Back up first and keep your known-good update for rollback.
 4. Insert the card, hold **SHIFT** while you turn the SP on, and press the **VALUE** knob when the update menu appears.
 5. When the update is done, turn the SP off and on again.
@@ -325,6 +381,13 @@ computer: `SP404MKII_APP1.bin` and `SP404MKII_APP0.bin`. Load the APP1 file into
 the patcher. It won't take a file that is already patched, or another firmware
 version. Your SP doesn't need the original firmware installed first.
 
+**What do I need for the guitar synth?** A guitar (or bass) in the front INPUT
+jack, with the MIC/GUITAR switch on GUITAR and EXT SOURCE on. Strum hard and set
+GAIN just below the point where EXT SOURCE blinks red, and keep the input clean
+(Bypass as the input FX, no distortion before the SP): a hot or distorted input
+makes the chord sounds play extra notes. ROUTING doesn't need changing. The full
+guide: [GUITAR_SYNTH.md](synth/GUITAR_SYNTH.md).
+
 **Will I lose my work?** No. Updating the firmware doesn't erase your projects
 or samples, but back up before any update anyway. Projects you make with this
 firmware still open on the original firmware or DOOM OS; the extra settings are
@@ -333,6 +396,18 @@ to DOOM OS 0.6.1: your projects and samples stay, but settings or patterns from
 the newer DOOM OS might not carry over.
 
 ## Status
+
+**v9.53** (2026-11-12) is MIDI out test 14 on combined-test21: v9.52 with the
+guitar synth, guitar notes on the Sound Generator and kits, MIDI out, a MIDI
+channel for each mode, LEVEL for MIDI notes, a quieter Sound Generator and
+kits, the hidden effect settings on every screen and the moved HOLD + MFX /
+HOLD + VALUE buttons. Its APP1 SHA-256 is `eadf65ac…7126`. All 578 emulator
+checks of the guitar synth pass, every sound value for value against its
+Python twin; its test builds were played on an SP-404MKII up to MIDI out test
+13, and this exact firmware is not hardware-tested yet.
+[GUITAR_SYNTH.md](synth/GUITAR_SYNTH.md), [SY_TEST.md](synth/SY_TEST.md),
+[SG_LEVEL.md](synth/SG_LEVEL.md), [COMBINED.md](synth/COMBINED.md),
+[FX_DEEP_EDIT.md](synth/FX_DEEP_EDIT.md).
 
 **v9.52** (2026-10-24) is combined-test17: v9.51 with FX deep edit test14. Hold
 HOLD and press VALUE to switch the hidden effect settings off and on; the edits
@@ -409,7 +484,8 @@ and steps to reproduce. Preserve your backups and known-good firmware pair.
 
 Unofficial; not affiliated with Roland or Klangfeld Labs. Firmware modification
 is at your own risk. Keep your volume low when you try the hidden effect
-settings: some can make the sound suddenly very loud. Synth additions are by tracelistener; the underlying
+settings: some can make the sound suddenly very loud. Synth additions, the
+guitar synth among them, are by tracelistener; the underlying
 DOOM OS 0.6.1 ED5E base is by Quintus Oostendorp / Klangfeld Labs under the
 MIT License ([LICENSE](LICENSE)), retained unchanged. FX deep edit's parameter
 table comes from DM-404's `core/fx/fxmap.json` by Nicholas Petty and the dm-404

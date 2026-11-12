@@ -153,7 +153,7 @@ footer.site .note { font-size: 13px; }
 <div class="wrap">
   <header class="intro">
     <h1>SP-404MKII synth patcher</h1>
-    <p class="lede">Adds a Sound Generator, 13 synthesized drum kits and new pad and effect tools to Roland's SP-404MKII firmware. DOOM OS is included. Your firmware is patched in your browser; nothing is uploaded.</p>
+    <p class="lede">Adds a Sound Generator, 13 synthesized drum kits, a guitar synth and new pad and effect tools to Roland's SP-404MKII firmware. DOOM OS is included. Your firmware is patched in your browser; nothing is uploaded.</p>
     <p class="how-to-patch">Drop in Roland's original <code>SP404MKII_APP1.bin</code> (firmware <strong data-doomos="firmware-list"></strong>) and press Patch firmware. A file that is already patched, or another firmware version, is refused.</p>
     <div id="doomos-patcher"></div>
     <p class="volume-note">Earlier versions had two hidden effect settings that could make the sound suddenly very loud: the Compressor's MODE and the Super Filter's settings. Both are removed. Still, keep your volume low when you try hidden effect settings.</p>
@@ -173,11 +173,29 @@ footer.site .note { font-size: 13px; }
             <p>13 drum machines, synthesized on the SP: TR-808, TR-909, CR-78, TR-707 and more.</p>
             <p class="how"><kbd>SHIFT</kbd> + <kbd>PATTERN EDIT</kbd></p></li>
           <li><h4>MIDI</h4>
-            <p>Play the synth and the kits from a sequencer. Notes 36&ndash;51 play pads 1&ndash;16; CCs reach every knob.</p>
-            <p class="how">Set the channel with M.CH in the <kbd>VALUE</kbd> menu</p></li>
+            <p>Play the synth and the kits from a sequencer. Notes 36&ndash;51 play pads 1&ndash;16; CCs reach every knob. LEVEL turns MIDI notes down.</p>
+            <p class="how">Set each mode's channel with M.CH in the <kbd>VALUE</kbd> menu</p></li>
           <li><h4>Kit to sample bank</h4>
             <p>Write the current kit, with each pad's settings, into the 16 pads of a sample bank.</p>
             <p class="how">BOUNC in the <kbd>VALUE</kbd> menu</p></li>
+        </ul>
+      </div>
+
+      <div class="group">
+        <h3>Guitar synth</h3>
+        <ul class="feats">
+          <li><h4>Guitar synth</h4>
+            <p>Your guitar plays 32 synth sounds: single-note leads and basses on pads 1&ndash;8, chords on pads 9&ndash;16, in two banks. EXT SOURCE lights green while it plays.</p>
+            <p class="how">Hold <kbd>HOLD</kbd> and press <kbd>EXT SOURCE</kbd></p></li>
+          <li><h4>Guitar synth screen</h4>
+            <p>Pick a sound with the pads, shape it on five pages, and send it to DRY or a bus. Everything is saved on the SP.</p>
+            <p class="how">Hold <kbd>VALUE</kbd> and press <kbd>RECORD SETTING</kbd>; <kbd>SHIFT</kbd> + pad 1 or 2 for the bank</p></li>
+          <li><h4>Guitar notes</h4>
+            <p>Your guitar plays the Sound Generator, one note at a time, or a drum kit: each pick strikes the pad of its note, E to D# on pads 1&ndash;12.</p>
+            <p class="how">EXT SOURCE on, open the Sound Generator or kits; hold <kbd>HOLD</kbd> and press <kbd>RECORD SETTING</kbd> or <kbd>PATTERN EDIT</kbd> to switch them</p></li>
+          <li><h4>MIDI out</h4>
+            <p>The Sound Generator's and the kits' pads, the arpeggiator and the guitar's notes go out over MIDI, each mode on its own channel.</p>
+            <p class="how">PAD Note Out on: <kbd>SHIFT</kbd> + pad 13 &gt; SYSTEM &gt; MIDI</p></li>
         </ul>
       </div>
 
@@ -206,14 +224,14 @@ footer.site .note { font-size: 13px; }
         <h3>Effects</h3>
         <ul class="feats">
           <li><h4>Hidden effect settings</h4>
-            <p>Extra settings the SP keeps hidden, such as Tape Echo's tape distortion. Your edits stay after you turn the SP off.</p>
+            <p>Extra settings the SP keeps hidden, such as Tape Echo's tape distortion, on every screen (the Sound Generator, the kits and the guitar synth too). Your edits stay after you turn the SP off.</p>
             <p class="how">An FX button, then <kbd>VALUE</kbd> for each page; <kbd>CTRL 1&ndash;3</kbd> change them</p></li>
           <li><h4>Hidden settings on and off</h4>
             <p>Switch every hidden setting off to hear the effects as on a stock SP, and on again for your edits.</p>
-            <p class="how">Hold <kbd>HOLD</kbd> and press <kbd>VALUE</kbd></p></li>
+            <p class="how">Hold <kbd>HOLD</kbd> and press <kbd>MFX</kbd></p></li>
           <li><h4>Input FX hidden settings</h4>
             <p>The same for the input FX, such as the Gt Amp Sim's cabinets and mic position.</p>
-            <p class="how">Hold <kbd>VALUE</kbd> and press <kbd>EXT SOURCE</kbd></p></li>
+            <p class="how">Hold <kbd>HOLD</kbd> and press <kbd>VALUE</kbd></p></li>
         </ul>
       </div>
 
@@ -248,6 +266,8 @@ footer.site .note { font-size: 13px; }
         <p>Roland&rsquo;s original firmware 5.52 update, on your computer: <code>SP404MKII_APP1.bin</code> and <code>SP404MKII_APP0.bin</code>. Load the APP1 file into the patcher. It won&rsquo;t take a file that is already patched, or another firmware version. Your SP doesn&rsquo;t need the original firmware installed first.</p>
         <h3>How do I go back to the original firmware?</h3>
         <p>Run the same update with Roland&rsquo;s original 5.52 files (<code>SP404MKII_APP1.bin</code> and <code>SP404MKII_APP0.bin</code>). Your projects and samples stay.</p>
+        <h3>What do I need for the guitar synth?</h3>
+        <p>A guitar (or bass) in the front INPUT jack, with the MIC/GUITAR switch on GUITAR and EXT SOURCE on. Strum hard and set GAIN just below the point where EXT SOURCE blinks red, and keep the input clean (Bypass as the input FX, no distortion before the SP): a hot or distorted input makes the chord sounds play extra notes. ROUTING doesn't need changing.</p>
         <h3>Will I lose my work?</h3>
         <p>No. Updating the firmware doesn&rsquo;t erase your projects or samples, but back up before any update anyway. Projects you make with this firmware still open on the original firmware or DOOM OS; the extra settings are just ignored there. If you have a newer DOOM OS than 0.6.1, this takes you back to DOOM OS 0.6.1: your projects and samples stay, but settings or patterns from the newer DOOM OS might not carry over.</p>
       </div>
@@ -260,6 +280,8 @@ footer.site .note { font-size: 13px; }
           <p>Four live voices, 17 added waves, nine envelope and filter presets, 34 scales and an arpeggiator.</p></div>
         <div><h3>Drum kits</h3>
           <p>TR-808, DR-110, KPR-77, Lel' UDS, TR-909, TR-606, SDS-V, Mini Pops 7, CR-78, CR-8000, TR-707, TR-727 and a DX-style FM kit. Play them over MIDI, bounce them into a bank, resample or loop them.</p></div>
+        <div><h3>Guitar synth</h3>
+          <p>32 sounds from your guitar, chords string by string the BOSS SY way and single notes from a note tracker, plus guitar notes on the Sound Generator and kits, and MIDI out. The full guide: <a href="https://github.com/tracelistener/SP-ETC/blob/main/synth/GUITAR_SYNTH.md">GUITAR_SYNTH.md</a>.</p></div>
         <div><h3>DOOM OS</h3>
           <p>Klangfeld Labs' pattern sequencer: step and piano-roll editing, a mixer and automation. Included unchanged (0.6.1, build ED5E); see the <a href="manual/">DOOM OS quickstart</a>.</p></div>
       </div>
@@ -312,7 +334,8 @@ footer.site .note { font-size: 13px; }
         <summary>MIDI</summary>
         <p>It works while the Sound Generator is open, in drum (kits) or melodic mode, and stops when you leave that screen.</p>
         <ul>
-          <li><strong>Channel:</strong> M.CH, in the VALUE menu of both modes (1&ndash;16, default 16), is the channel the Sound Generator plays. Channel 16 is also the SP's control channel, so for sequencing a free channel such as 11&ndash;15 avoids triggering SP functions when you leave the Sound Generator.</li>
+          <li><strong>Channel:</strong> M.CH, in the VALUE menu, is kept for each mode: the Sound Generator's channel in melodic mode, the kits' in drum mode (1&ndash;16). At power-on the kits are on 10 and the Sound Generator on 16 (or the project's). Channel 16 is also the SP's control channel, so for sequencing a free channel such as 11&ndash;15 avoids triggering SP functions when you leave the Sound Generator.</li>
+          <li><strong>LEVEL:</strong> in melodic mode a MIDI note plays at its velocity &times; LEVEL / 127, so CTRL 3 turns a keyboard without velocity down.</li>
           <li><strong>Drum notes:</strong> 36&ndash;51 play pads 1&ndash;16 (36 = pad 1, the kick in most kits); other notes are ignored.</li>
           <li><strong>Drum CCs:</strong> three per pad, in the order Tune, Decay, Level. Pads 1&ndash;4 use CC 20&ndash;31, pads 5&ndash;12 use 40&ndash;63 and pads 13&ndash;16 use 102&ndash;113. The last pad heard takes Tone 114, Sweep 115, Noise 116 and Attack 117. CC 64 is the knob centre.</li>
           <li><strong>Synth CCs:</strong> TYPE 70, FREQ 71, LEVEL 72, DUTY 73, BALANCE 74, ENV 75, TUNE 76.</li>
@@ -320,6 +343,63 @@ footer.site .note { font-size: 13px; }
           <li><strong>Panic:</strong> CC 123 releases notes held by MIDI and stops the arp. CC 120 also fades out every Sound Generator voice.</li>
         </ul>
         <p>CC changes are saved with the project. Full chart: <a href="https://github.com/tracelistener/SP-ETC/blob/main/synth/KITS_MIDI.md">KITS_MIDI.md</a>.</p>
+      </details>
+
+      <h3 class="guides-head">Guitar synth</h3>
+      <details class="guide">
+        <summary>Guitar synth: setting up</summary>
+        <ul>
+          <li><strong>Plug in:</strong> the guitar into the front INPUT jack, the MIC/GUITAR switch on GUITAR, EXT SOURCE on.</li>
+          <li><strong>GAIN:</strong> strum hard and set it just below the point where EXT SOURCE blinks red. A hot input makes the chord sounds busier; a clipping one makes extra and wrong notes.</li>
+          <li><strong>Keep it clean:</strong> Bypass (or a clean effect) as the input FX, no distortion or chorus before the SP. The synth listens after the input FX, and plays the tones distortion adds.</li>
+          <li><strong>ROUTING:</strong> no need to change it. While the synth or the guitar notes listen, the SP keeps its effects chip on ExtIn, so the synth hears only your guitar; your setting comes back when nothing listens. ROUTING still decides what recordings get: on Mix your pads, the guitar and the synth (no BUS 3/4 effects then); on ExtIn the guitar and the synth only.</li>
+          <li><strong>Synth only:</strong> put the input on BUS 1 (REMAIN + EXT SOURCE until it is lit), turn the Isolator's three bands down on BUS 1, and keep the synth on OUT: DRY or BUS 2. The synth still hears the guitar.</li>
+          <li><strong>Everything on the input plays it:</strong> INPUT, LINE IN, and USB audio when USB In is LINE IN.</li>
+        </ul>
+      </details>
+      <details class="guide">
+        <summary>Guitar synth: buttons</summary>
+        <ul>
+          <li><strong>HOLD + EXT SOURCE</strong> (any screen): the guitar synth on and off. EXT SOURCE lights green while the input and the synth are on.</li>
+          <li><strong>VALUE + RECORD SETTING</strong> (main screen, Sound Generator, kits, looper): the guitar synth screen. It also switches the input and the synth on.</li>
+          <li><strong>On the screen:</strong> pads 1&ndash;16 pick a sound (the current one lit); SHIFT + pad 1 or 2 picks the bank; VALUE turns through all 32 (all the way down: SYNTH OFF); VALUE's press steps OUT: DRY, BUS 1, BUS 2, BOTH; CTRL 1&ndash;3 edit the page shown; a SHIFT tap shows the next page; hold SHIFT and turn a knob to edit the OTHERS page.</li>
+          <li><strong>Leaving it:</strong> EXIT (the synth keeps playing), SHIFT + RECORD SETTING (the Sound Generator), SHIFT + PATTERN EDIT (the kits), MARK (the looper; MARK again comes back).</li>
+          <li><strong>Effects:</strong> an FX button brings its effect screen up over the guitar synth screen; then the knobs, VALUE and SHIFT work the effect, and VALUE presses reach its hidden settings. REMAIN + an FX button keeps the screen up. MFX + a pad picks an MFX effect.</li>
+          <li><strong>HOLD + VALUE and SHIFT + VALUE</strong> also step OUT on this screen: for the input FX's hidden settings or MARK Function, leave the screen first.</li>
+          <li><strong>EXT SOURCE's light:</strong> off = input off, white = the guitar dry, green = the guitar synth (or the guitar notes) on, blinking red = the input is too hot.</li>
+          <li><strong>CPU readout:</strong> hold EXIT for a second on the main screen. Its third line, SY, is the synth's share of the audio time; if the synth ever needs too much it stops itself (SY SLOW): switch EXT SOURCE off and on.</li>
+        </ul>
+      </details>
+      <details class="guide">
+        <summary>Guitar synth: the screen's pages</summary>
+        <p>Tap SHIFT for the next page. 0 (or 50 for LEVEL, SUSTAIN and SENS) is the sound as designed.</p>
+        <ul>
+          <li><strong>Main:</strong> the sound's own setting (DRIVE, WIDTH, WOBBLE, FM, DETUNE, WAVE or ENV), TONE (darker or brighter; DUTY on SG SYNTH), LEVEL (the synth's volume, 100 = +6 dB).</li>
+          <li><strong>OTHERS:</strong> OCTAVE (&minus;2 to +2), SUSTAIN (how long notes ring), DYNAMICS (how much picking harder makes it louder).</li>
+          <li><strong>TRACK</strong> (all sounds): GLITCH (0 clean; up to 100, choppier and glitchier), SENS (how soft a pick can be and still start a note; single notes and the guitar notes), VOICES (AUTO, MONO for single notes on any sound, or 2&ndash;6 chord voices).</li>
+          <li><strong>SHAPE:</strong> ATTACK (1 ms to 2 s), RELEASE (10 ms to 8 s), GLIDE (OFF, 5 ms to 1 s; slides and hammer-ons glide, picked notes start on their own pitch).</li>
+          <li><strong>FILTER:</strong> ENV (how far the filter moves at each pick; on SG SYNTH and SG ORGAN, their ENV preset) and RESO. FM PIANO has no filter, so no FILTER page.</li>
+        </ul>
+      </details>
+      <details class="guide">
+        <summary>Guitar synth: the 32 sounds</summary>
+        <p>Pads 1&ndash;8 play single notes; pads 9&ndash;16 play chords.</p>
+        <ul>
+          <li><strong>Bank 1, pads 1&ndash;8:</strong> SYNC LEAD, LADDER LEAD, SH-101 LEAD, MARS LEAD, ODYSSEY LEAD, CHIP LEAD, HOOVER, SPOOKY 8-BIT.</li>
+          <li><strong>Bank 1, pads 9&ndash;16:</strong> POLY PAD, STRINGS, VECTOR PAD, OB PAD, JP WARM PAD, AM STRINGS, AAH CHOIR, HEAVENS GATE.</li>
+          <li><strong>Bank 2, pads 1&ndash;8:</strong> BREATH HORNS, SG SYNTH (any Sound Generator wave on CTRL 1, DUTY on CTRL 2, an ENV preset on the FILTER page), FAT BASS, ACID BASS, PUNCH BASS, SUB BASS, SH-101 BASS, TAL 101 BASS.</li>
+          <li><strong>Bank 2, pads 9&ndash;16:</strong> FM PIANO, M1 PIANO, FM CHORUS EP, SG ORGAN, RAVE ORGAN, POLY BRASS, SQ PROPHET, SUPERSAW.</li>
+        </ul>
+        <p>What each one is, and its own setting: <a href="https://github.com/tracelistener/SP-ETC/blob/main/synth/GUITAR_SYNTH.md">GUITAR_SYNTH.md</a>.</p>
+      </details>
+      <details class="guide">
+        <summary>Guitar notes and MIDI out</summary>
+        <ul>
+          <li><strong>Sound Generator:</strong> with EXT SOURCE on, the guitar plays it one note at a time, like a MIDI keyboard (slides and hammer-ons too). It plays MIDI notes an octave low, so set OCT to +1 for the guitar's own pitch. Your pick sets the velocity, and LEVEL scales it. With ARP on, the arp plays your note.</li>
+          <li><strong>Kits:</strong> each pick strikes the pad of its note name, in every octave: E, F, F#, G, G#, A, A#, B, C, C#, D, D# on pads 1&ndash;12. Pads 13&ndash;16 stay for your hands.</li>
+          <li><strong>Switch:</strong> HOLD + RECORD SETTING (Sound Generator) or HOLD + PATTERN EDIT (kits) switches the guitar notes off and on, remembered. While they play, the guitar synth is quiet on that page.</li>
+          <li><strong>MIDI out:</strong> with PAD Note Out on (SHIFT + pad 13 &gt; SYSTEM &gt; MIDI), the pads, the arpeggiator and the guitar's notes go out from the Sound Generator and the kits (and the looper reached from them by MARK). The guitar sends on both modes' channels, so a synth and a drum module can follow it together. Every note gets its note-off. The guitar synth's own sounds are not sent.</li>
+        </ul>
       </details>
 
       <h3 class="guides-head">Pads</h3>
@@ -374,7 +454,7 @@ footer.site .note { font-size: 13px; }
       <h3 class="guides-head">Effects</h3>
       <details class="guide">
         <summary>Hidden effect settings: the full list</summary>
-        <p>On BUS 1&ndash;4: press an FX button, then VALUE. The effect screen stays up, and each VALUE press shows the next page. For the input FX: hold VALUE and press EXT SOURCE, then press VALUE for each page. CTRL 1&ndash;3 change the three settings on a page; any button except VALUE and SHIFT closes it. Your edits are kept when you turn the SP off. Hold HOLD and press VALUE, on any screen, to switch them all off (the effects sound as on a stock SP) and on again; the SP shows HIDDEN FX OFF or HIDDEN FX ON. Gains, EQ boosts, feedback and resonance can make the sound loud, so keep your volume low.</p>
+        <p>On BUS 1&ndash;4: press an FX button, then VALUE, on any screen. The effect screen stays up, and each VALUE press shows the next page. For the input FX: hold HOLD and press VALUE, then press VALUE (or HOLD + VALUE again) for each page. CTRL 1&ndash;3 change the three settings on a page; any button except VALUE and SHIFT closes it. Your edits are kept when you turn the SP off. Hold HOLD and press MFX, on any screen, to switch them all off (the effects sound as on a stock SP) and on again; the SP shows HIDDEN FX OFF or HIDDEN FX ON, and MFX's own effect is not changed. VALUE + EXT SOURCE switches the input, as on a stock SP. Gains, EQ boosts, feedback and resonance can make the sound loud, so keep your volume low.</p>
         <ul class="fx">
           <li><strong>303 VinylSim:</strong> BALANCE</li>
           <li><strong>404 VinylSim:</strong> DIST, DISC TYPE, BALANCE</li>
@@ -423,7 +503,7 @@ footer.site .note { font-size: 13px; }
     <p class="note">Unofficial; not affiliated with Roland or Klangfeld Labs. Use at your own risk, and keep your volume low when you try the hidden effect settings. Base attribution: DOOM OS 0.6.1 ED5E by Quintus Oostendorp / Klangfeld Labs, MIT License retained in the repository. FX deep edit's parameter table comes from DM-404's fxmap.json by Nicholas Petty and the dm-404 contributors, MIT License (THIRD-PARTY-NOTICES.md). This page cannot flash your SP automatically.</p>
   </footer>
 </div>
-<script src="kits-data.js?v=kits-v9-52-e7b75421"></script>
-<script src="doomos-patcher.js?v=kits-v9-52-doom-os"></script>
+<script src="kits-data.js?v=kits-v9-53-eadf65ac"></script>
+<script src="doomos-patcher.js?v=kits-v9-53-doom-os"></script>
 </body>
 </html>

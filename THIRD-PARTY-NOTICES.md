@@ -35,3 +35,10 @@ SOFTWARE.
 
 The base is DOOM OS 0.6.1 (build ED5E) by Quintus Oostendorp / Klangfeld Labs, under the MIT License in
 [LICENSE](LICENSE).
+
+## TONE3000 embedded NAM: synth/namtest/third_party/tone3000-embedded
+
+The NAM test (`synth/namtest`, a development test build; it is not part of the firmware the patcher makes) uses
+TONE3000's embedded Neural Amp Modeler code, with NeuralAmpModelerCore's A2-Lite test model and a golden input. Both
+are under the MIT License (Copyright (c) 2026 TONE3000; Copyright (c) 2023 Steven Atkinson). The full texts are kept
+beside the code, in that folder's `LICENSE` and `NOTICE`.
