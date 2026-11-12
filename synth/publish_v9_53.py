@@ -1,24 +1,24 @@
-"""Generate the guarded browser overlay for Sound Generator + Kits v9.53 (MIDI out test 14).
+"""Generate the guarded browser overlay for Sound Generator + Kits v9.53 (MIDI out test 15).
 
 v9.53 is v9.52 with:
 - the SG level step (sg-level-test2): LEVEL turns the Sound Generator's MIDI notes down, and the Sound Generator and
   the kits play at about a sample's loudness (COMBINED.md sections 19 and 20; SG_LEVEL.md);
 - FX deep edit at fx-deep-edit-test16: the hidden settings on every page; HOLD + MFX switches them off and on, HOLD +
   VALUE opens the input FX's (VALUE + EXT SOURCE is stock's again) (COMBINED.md sections 21 and 22);
-- the guitar synth (MIDI out test 14, on combined-test21): a guitar into the SP plays 32 synth sounds, the guitar's
+- the guitar synth (MIDI out test 15, on combined-test21): a guitar into the SP plays 32 synth sounds, the guitar's
   notes play the Sound Generator and the kits, and those notes go out over MIDI (SY_TEST.md, TUNE_TEST.md).
-The user has played the guitar synth's test builds on the unit up to MIDI out test 13; hardware_verified stays False
+The user has played the guitar synth's test builds on the unit up to MIDI out test 13 (test 15 = test 14's final 32 sounds, with only VALUE alone stepping OUT on its screen); hardware_verified stays False
 until v9.53 itself is.
 
 v9.53 is built in five steps: build_combined.py (every feature branch's module, byte for byte its own test build's,
 on resample-startfix-3: the published v9.46's kit stage plus the RESAMPLE start fix v3), build_fast_boot.py,
-build_kit_footer.py, build_sg_level.py (combined-test21), then build_tune_test.py (midi-out-test14). The overlay
-turns the DOOM OS base into midi-out-test14. Before writing kits-data.js, this script checks:
+build_kit_footer.py, build_sg_level.py (combined-test21), then build_tune_test.py (midi-out-test15). The overlay
+turns the DOOM OS base into midi-out-test15. Before writing kits-data.js, this script checks:
 - the candidate's hash and the five stages' manifests, back to v9.46's kit stage;
 - every module's source against this tree (the guitar synth's eight, its builder and its sound table too).
 
 usage: python synth/publish_v9_53.py /path/to/stock/SP404MKII_APP1.bin \
-           --combined dev_combined21/combined-test21-base --candidate release/midi-out-test14
+           --combined dev_combined21/combined-test21-base --candidate release/midi-out-test15
 """
 import argparse
 import base64
@@ -27,8 +27,8 @@ from pathlib import Path
 
 import build
 
-RELEASE, REVISION, LABEL = 'v9.53', 'midi-out-test14', '5.52+kits-v9.53'
-EXPECTED_SHA, EXPECTED_SIZE = 'eadf65ace857e0dc9e6847cc207441c2f80caa5fa42a3c38ea99e0c16b477126', 3239776
+RELEASE, REVISION, LABEL = 'v9.53', 'midi-out-test15', '5.52+kits-v9.53'
+EXPECTED_SHA, EXPECTED_SIZE = 'faeea5b004273f2dbcfca00387cfcc59078d3ba42fd832d52d363209d8b3b75e', 3239840
 SG_LEVEL_SHA = '1d31464916aff9bce8b75765718cc9ca0a5f39d40559801fecea78167deb4406'     # combined-test21
 FOOTER_SHA = '973ee28a741fc818e3d6d43ff3336f7057dbe8cf2ef6a8cb7a41c81f24189f53'
 FASTBOOT_SHA = '198791d5c32b4b3743a0329fd5fb06bb96ec4869eda93243e5edbd876fde8e37'
@@ -62,7 +62,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('stock', type=Path)
     p.add_argument('--combined', type=Path, required=True, help='the combined build: APP1, manifest.json, steps/')
-    p.add_argument('--candidate', type=Path, required=True, help='midi-out-test14: APP1 and manifest.json')
+    p.add_argument('--candidate', type=Path, required=True, help='midi-out-test15: APP1 and manifest.json')
     a = p.parse_args()
     stock = a.stock.read_bytes()
     build.require_hash(stock, build.v2.STOCK_SHA256, 'stock APP1')

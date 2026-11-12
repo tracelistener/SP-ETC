@@ -60,8 +60,9 @@ DOOM-SoundGenerator-Kits-v9.51  1ef31cb79a6e7a41328295770304eb155ef763aabb94d3e6
 # settings off and on; the edits are saved; the hidden settings come after any screen). Every other module is
 # v9.51's byte for byte. Replaces v9.51.
 DOOM-SoundGenerator-Kits-v9.52  e7b754211f58ed0a46a5dc517ba777118943460998d11479c648726df117be79  3157104
-# v9.53 (MIDI out test 14 on combined-test21), in the patcher: v9.52 with the SG level step (LEVEL turns the Sound
+# v9.53 (MIDI out test 15 on combined-test21), in the patcher: v9.52 with the SG level step (LEVEL turns the Sound
 # Generator's MIDI notes down; the Sound Generator and kits at about a sample's loudness), FX deep edit test16 (the
 # hidden settings on every page; HOLD + MFX switches them, HOLD + VALUE opens the input FX's) and the guitar synth
-# (32 sounds from a guitar, the guitar's notes on the Sound Generator and kits, MIDI out). Replaces v9.52.
-DOOM-SoundGenerator-Kits-v9.53  eadf65ace857e0dc9e6847cc207441c2f80caa5fa42a3c38ea99e0c16b477126  3239776
+# (32 sounds from a guitar, the guitar's notes on the Sound Generator and kits, MIDI out; on its screen only VALUE
+# alone steps OUT). Replaces v9.52.
+DOOM-SoundGenerator-Kits-v9.53  faeea5b004273f2dbcfca00387cfcc59078d3ba42fd832d52d363209d8b3b75e  3239840

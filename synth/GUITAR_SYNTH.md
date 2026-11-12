@@ -62,7 +62,7 @@ EDIT) with EXT SOURCE on, and play: see [Guitar notes](#guitar-notes-on-the-soun
 | --- | --- |
 | **HOLD + EXT SOURCE** | Switches the guitar synth on or off (popup GUITAR SYNTH ON / OFF). The input itself isn't switched: if EXT SOURCE is off, turn it on too. The synth stays on or off while you switch EXT SOURCE off and on. |
 | **VALUE + RECORD SETTING** | Opens the guitar synth screen, from the main screen, the Sound Generator, the kits or the looper. It also switches the input on, and the synth on. |
-| **EXT SOURCE** (tap) | The input on and off, as on a stock SP; now also on the Sound Generator page and the kits, where stock ignores it (popup EXT IN ON / OFF). With EXT SOURCE's gate on (EXT SOURCE + GATE, as on stock), the input is on only while you hold EXT SOURCE. |
+| **EXT SOURCE** (tap) | The input on and off, as on a stock SP; now also on the Sound Generator page and the kits, where stock ignores it; its light shows whether the input is on. With EXT SOURCE's gate on (EXT SOURCE + GATE, as on stock), the input is on only while you hold EXT SOURCE. |
 | **HOLD + MFX** | Hidden effect settings off and on (it was HOLD + VALUE before v9.53). |
 | **HOLD + VALUE** | The input FX's hidden settings (it was VALUE + EXT SOURCE before v9.53). |
 | **VALUE + EXT SOURCE** | Stock again: switches the input. |
@@ -91,8 +91,9 @@ is too hot, so turn GAIN down.
 | **MFX held + a pad** | Picks an MFX effect, as on stock (the pads show stock's colours while MFX is held). |
 | **REC** | With looper mode on: the looper's REC. |
 
-On this screen VALUE's press is always OUT, also with HOLD or SHIFT held (unless an effect screen is up). For the input
-FX's hidden settings (HOLD + VALUE) or MARK Function (SHIFT + VALUE), leave the screen first.
+Only VALUE pressed on its own steps OUT. HOLD + VALUE opens the input FX's hidden settings and SHIFT + VALUE switches
+MARK Function (stock's "Enable Skipback?" / "Enable Looper?" dialog), as on the other screens. While an effect screen,
+a hidden-settings page or a stock dialog is up, the knobs and VALUE work it, not the synth.
 
 ### Guitar notes, effects and the looper
 

@@ -11,8 +11,8 @@ const input = process.argv[2];
 if (!input) throw new Error('Usage: node synth/test_browser.cjs /path/to/stock/SP404MKII_APP1.bin');
 const stock = new Uint8Array(fs.readFileSync(input));
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-const KITS_SHA = 'eadf65ace857e0dc9e6847cc207441c2f80caa5fa42a3c38ea99e0c16b477126';
-const KITS_SIZE = 3239776;
+const KITS_SHA = 'faeea5b004273f2dbcfca00387cfcc59078d3ba42fd832d52d363209d8b3b75e';
+const KITS_SIZE = 3239840;
 
 function load(includeKits = true) {
   const elements = new Map();
@@ -63,7 +63,7 @@ async function download(page) {
   }
   assert.equal(api.hex(api.sha256(stock)), digest(stock), 'browser SHA matches Node');
 
-  // The overlays: DOOM OS base from stock 5.52, then v9.53 (midi-out-test14: the combined feature build + fast boot + kit
+  // The overlays: DOOM OS base from stock 5.52, then v9.53 (midi-out-test15: the combined feature build + fast boot + kit
   // footer + the SG level step (combined-test21), then the guitar synth).
   const kits = page.context.window.DOOMOS_KITS;
   const doom = api.applyPatch(api.fromBase64(page.context.window.DOOMOS_PATCH), stock);
@@ -75,7 +75,7 @@ async function download(page) {
   assert.equal(kits.sha256, KITS_SHA);
   assert.equal(kits.size, KITS_SIZE);
   assert.equal(kits.release, 'v9.53');
-  assert.equal(kits.revision, 'midi-out-test14');
+  assert.equal(kits.revision, 'midi-out-test15');
   assert.equal(kits.start_fix, 'resample-startfix-3');
   assert.equal(kits.combined_sha256, '8618c5c61c339d8e70d33d8141b15bd00a12ade7177628d09753fe273a0b9907');
   assert.equal(kits.kit_stage_sha256, '88384c3c9760559e721c1a14973ef3a2ced6abf016572b0a73c5dfb0cef492ba');
@@ -133,7 +133,7 @@ async function download(page) {
   // The page and README.
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-  assert.match(html, /kits-data\.js\?v=kits-v9-53-eadf65ac/);
+  assert.match(html, /kits-data\.js\?v=kits-v9-53-faeea5b0/);
   assert.match(html, /doomos-patcher\.js\?v=kits-v9-53-doom-os/);
   assert.doesNotMatch(html, /synth-data\.js|waves-data\.js|kits-midi-data|MIDI test guide|v9\.43|v9\.44/);
   assert.doesNotMatch(html, /[Tt]ick one|unticked|Pick one of/);
@@ -181,8 +181,8 @@ async function download(page) {
   // Every feature, in the cheat sheet below the patcher, with how to reach it.
   const feats = html.slice(html.indexOf('id="features"'), html.indexOf('id="install"'));
   for (const feature of ['Sound Generator', 'Drum kits', 'MIDI', 'Kit to sample bank', 'Bounce in place', 'Pad envelopes',
-                         'Note repeat', 'Chromatic scales', 'SUB PAD on the Sound Generator', 'Hidden effect settings',
-                         'Input FX hidden settings', 'Hidden settings on and off', 'DOOM OS', 'Saved with the project', 'Faster start-up',
+                         'Note repeat', 'Chromatic scales', 'Hidden effect settings',
+                         'Input FX hidden settings', 'Hidden settings on and off', 'DOOM OS 0.6.1', 'Saved with the project', 'Faster start-up',
                          'Cleaner resampling', 'Guitar synth', 'Guitar synth screen', 'Guitar notes', 'MIDI out']) {
     assert.ok(feats.includes('<h4>' + feature + '</h4>'), 'the page lists ' + feature);
   }
@@ -192,6 +192,9 @@ async function download(page) {
             feats.includes('Hold <kbd>VALUE</kbd> and press <kbd>RECORD SETTING</kbd>') &&
             feats.includes('Hold <kbd>REMAIN</kbd> and press <kbd>SUB PAD</kbd>'), 'the cheat sheet gives the buttons');
   assert.ok(!feats.includes('Hold <kbd>VALUE</kbd> and press <kbd>EXT SOURCE</kbd>'), 'VALUE + EXT SOURCE is stock again');
+  // v9.53 (the user): SUB PAD on the Sound Generator is not on the page; Always on names DOOM OS's version.
+  assert.ok(!feats.includes('SUB PAD on the Sound Generator') &&
+            feats.includes("Klangfeld Labs' pattern sequencer (0.6.1, build ED5E)"), 'the cheat sheet: no SUB PAD, DOOM OS 0.6.1');
   for (const feature of ['DOOM OS included', 'Bounce in place', 'Pad envelopes', 'Note repeat', 'Chromatic scales',
                          'Saved with the project', 'SUB PAD on the Sound Generator', 'Hidden effect settings',
                          'Faster start-up', 'Cleaner resampling', 'Guitar synth', 'Guitar notes', 'MIDI out',
@@ -239,5 +242,5 @@ async function download(page) {
   assert.doesNotMatch(html, /For V8, start at modest LEVEL|Uncheck Wave Lab|Expected Wave Lab V8 APP1/);
   assert.doesNotMatch(readme, /<img[^>]*doom-os-512/);
   assert.doesNotMatch(html, /<img[^>]*doom-os/);
-  console.log('PASS: one build, no selector: stock 5.52 gives exactly Sound Generator + Kits v9.53 (midi-out-test14), repeatably; overlay metadata, wrong-input and corruption rejection, no corrupt download, DOOM OS base without kit data; page (patcher first, no version history) and README text.');
+  console.log('PASS: one build, no selector: stock 5.52 gives exactly Sound Generator + Kits v9.53 (midi-out-test15), repeatably; overlay metadata, wrong-input and corruption rejection, no corrupt download, DOOM OS base without kit data; page (patcher first, no version history) and README text.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

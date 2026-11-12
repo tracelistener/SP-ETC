@@ -397,11 +397,11 @@ the newer DOOM OS might not carry over.
 
 ## Status
 
-**v9.53** (2026-11-12) is MIDI out test 14 on combined-test21: v9.52 with the
+**v9.53** (2026-11-12) is MIDI out test 15 on combined-test21: v9.52 with the
 guitar synth, guitar notes on the Sound Generator and kits, MIDI out, a MIDI
 channel for each mode, LEVEL for MIDI notes, a quieter Sound Generator and
 kits, the hidden effect settings on every screen and the moved HOLD + MFX /
-HOLD + VALUE buttons. Its APP1 SHA-256 is `eadf65ac…7126`. All 578 emulator
+HOLD + VALUE buttons. Its APP1 SHA-256 is `faeea5b0…b75e`. All 582 emulator
 checks of the guitar synth pass, every sound value for value against its
 Python twin; its test builds were played on an SP-404MKII up to MIDI out test
 13, and this exact firmware is not hardware-tested yet.

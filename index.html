@@ -214,9 +214,6 @@ footer.site .note { font-size: 13px; }
           <li><h4>Chromatic scales</h4>
             <p>34 scales and a key in chromatic mode, and the pads reach an octave higher.</p>
             <p class="how">Hold and turn <kbd>VALUE</kbd>; add <kbd>SHIFT</kbd> for the key</p></li>
-          <li><h4>SUB PAD on the Sound Generator</h4>
-            <p>Plays the last pad again, in melodic and drum mode.</p>
-            <p class="how"><kbd>SUB PAD</kbd></p></li>
         </ul>
       </div>
 
@@ -238,8 +235,8 @@ footer.site .note { font-size: 13px; }
       <div class="group">
         <h3>Always on</h3>
         <ul class="feats">
-          <li><h4>DOOM OS</h4>
-            <p>The pattern sequencer, included in the firmware this patcher makes.</p>
+          <li><h4>DOOM OS 0.6.1</h4>
+            <p>Klangfeld Labs' pattern sequencer (0.6.1, build ED5E), included in the firmware this patcher makes.</p>
             <p class="how">Hold <kbd>REMAIN</kbd> and press <kbd>SUB PAD</kbd></p></li>
           <li><h4>Saved with the project</h4>
             <p>Kits, the MIDI channel, the arpeggiator, envelopes, the scale and the synth's settings come back after a restart.</p></li>
@@ -365,7 +362,7 @@ footer.site .note { font-size: 13px; }
           <li><strong>On the screen:</strong> pads 1&ndash;16 pick a sound (the current one lit); SHIFT + pad 1 or 2 picks the bank; VALUE turns through all 32 (all the way down: SYNTH OFF); VALUE's press steps OUT: DRY, BUS 1, BUS 2, BOTH; CTRL 1&ndash;3 edit the page shown; a SHIFT tap shows the next page; hold SHIFT and turn a knob to edit the OTHERS page.</li>
           <li><strong>Leaving it:</strong> EXIT (the synth keeps playing), SHIFT + RECORD SETTING (the Sound Generator), SHIFT + PATTERN EDIT (the kits), MARK (the looper; MARK again comes back).</li>
           <li><strong>Effects:</strong> an FX button brings its effect screen up over the guitar synth screen; then the knobs, VALUE and SHIFT work the effect, and VALUE presses reach its hidden settings. REMAIN + an FX button keeps the screen up. MFX + a pad picks an MFX effect.</li>
-          <li><strong>HOLD + VALUE and SHIFT + VALUE</strong> also step OUT on this screen: for the input FX's hidden settings or MARK Function, leave the screen first.</li>
+          <li><strong>Only VALUE alone steps OUT.</strong> HOLD + VALUE opens the input FX's hidden settings and SHIFT + VALUE switches MARK Function, as on the other screens; while a hidden-settings page or stock's dialog is up, the knobs and VALUE work it.</li>
           <li><strong>EXT SOURCE's light:</strong> off = input off, white = the guitar dry, green = the guitar synth (or the guitar notes) on, blinking red = the input is too hot.</li>
           <li><strong>CPU readout:</strong> hold EXIT for a second on the main screen. Its third line, SY, is the synth's share of the audio time; if the synth ever needs too much it stops itself (SY SLOW): switch EXT SOURCE off and on.</li>
         </ul>
@@ -503,7 +500,7 @@ footer.site .note { font-size: 13px; }
     <p class="note">Unofficial; not affiliated with Roland or Klangfeld Labs. Use at your own risk, and keep your volume low when you try the hidden effect settings. Base attribution: DOOM OS 0.6.1 ED5E by Quintus Oostendorp / Klangfeld Labs, MIT License retained in the repository. FX deep edit's parameter table comes from DM-404's fxmap.json by Nicholas Petty and the dm-404 contributors, MIT License (THIRD-PARTY-NOTICES.md). This page cannot flash your SP automatically.</p>
   </footer>
 </div>
-<script src="kits-data.js?v=kits-v9-53-eadf65ac"></script>
+<script src="kits-data.js?v=kits-v9-53-faeea5b0"></script>
 <script src="doomos-patcher.js?v=kits-v9-53-doom-os"></script>
 </body>
 </html>
